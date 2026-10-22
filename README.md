@@ -1,4 +1,4 @@
-# System Monitor
+# SRRVRR
 
 A tiny live CPU / memory / GPU / network dashboard for Windows, in the spirit of
 Task Manager's Performance tab. Run it on one machine and watch it from any
@@ -31,12 +31,12 @@ The page follows your system's light/dark theme and works on phones.
 ## Quick start
 
 1. Copy these files to the machine you want to watch, all in one folder:
-   - `SystemMonitor.ps1`
-   - `Start System Monitor.bat`
-   - `SystemMonitor.config.example.psd1`
-2. Copy `SystemMonitor.config.example.psd1` to `SystemMonitor.config.psd1` and edit it
+   - `SRRVRR.ps1`
+   - `Start SRRVRR.bat`
+   - `SRRVRR.config.example.psd1`
+2. Copy `SRRVRR.config.example.psd1` to `SRRVRR.config.psd1` and edit it
    (see [Settings](#settings)). Without it, the defaults below are used.
-3. Right-click `Start System Monitor.bat` > **Run as administrator**.
+3. Right-click `Start SRRVRR.bat` > **Run as administrator**.
 4. Open the address the window shows, e.g. `http://<that-machine>:8099` or
    `http://<its-IP>:8099`, from any browser on your network.
 
@@ -44,12 +44,12 @@ Leave the window open while you want monitoring. Close it (or press Ctrl+C) to s
 
 ## Settings
 
-All settings live in `SystemMonitor.config.psd1`, next to `SystemMonitor.ps1`. Restart the
+All settings live in `SRRVRR.config.psd1`, next to `SRRVRR.ps1`. Restart the
 monitor after changing it.
 
 That file is listed in `.gitignore`, so it is never committed to the repository and pulling or
 copying a new version of the code never overwrites it. When updating, replace only
-`SystemMonitor.ps1`, `Start System Monitor.bat` and `SystemMonitor.config.example.psd1`.
+`SRRVRR.ps1`, `Start SRRVRR.bat` and `SRRVRR.config.example.psd1`.
 
 | Setting | Default | Values |
 |---------|---------|--------|
@@ -72,11 +72,16 @@ Example:
 }
 ```
 
-`SystemMonitor.config.example.psd1` has the same settings with comments explaining each one.
+`SRRVRR.config.example.psd1` has the same settings with comments explaining each one.
 Unknown settings are ignored with a warning; an invalid `FirewallScope` value stops the monitor
 with a message saying what's allowed.
 
 ### Upgrading from an older version
+
+**Renamed from System Monitor to SRRVRR.** The files are now `SRRVRR.ps1`, `Start SRRVRR.bat` and
+`SRRVRR.config.example.psd1`, and the firewall rules are named "SRRVRR". On first start the old
+"System Monitor" firewall rules are removed automatically, and an existing
+`SystemMonitor.config.psd1` is still read (with a note to rename it to `SRRVRR.config.psd1`).
 
 `ListenAddress`, `OpenFirewall` and `GpuFallback` are no longer used: the monitor always listens
 on this machine's own addresses, always sets up the firewall rule, and falls back to the GPU with
@@ -87,7 +92,7 @@ be deleted. `PreferredGpu` now needs the card's full name (e.g. `'NVIDIA T600'` 
 ### Command-line override
 
 ```powershell
-.\SystemMonitor.ps1 [-Port <number>]
+.\SRRVRR.ps1 [-Port <number>]
 ```
 
 `-Port` overrides the config file for that run.
@@ -96,8 +101,8 @@ be deleted. `PreferredGpu` now needs the card's full name (e.g. `'NVIDIA T600'` 
 
 The rules are rebuilt on every start to match the current settings:
 
-- `LocalSubnet`, `Allowlist`: one Allow rule, "System Monitor".
-- `Blocklist`: an Allow rule for the local network plus a Block rule, "System Monitor (blocked)",
+- `LocalSubnet`, `Allowlist`: one Allow rule, "SRRVRR".
+- `Blocklist`: an Allow rule for the local network plus a Block rule, "SRRVRR (blocked)",
   for `FirewallAddresses` (Windows applies Block rules first).
 
 The page has no password, so it is deliberately limited to local networks: every scope only
@@ -105,7 +110,7 @@ admits local-network addresses, unless you opt in to `AllowPublicAddresses` (bel
 the rules:
 
 ```powershell
-Remove-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)'
+Remove-NetFirewallRule -DisplayName 'SRRVRR', 'SRRVRR (blocked)'
 ```
 
 ## Security warning: public IP addresses
@@ -114,7 +119,7 @@ Remove-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)'
 > `Allowlist` exposes this monitor to the internet. Do this only if you understand and accept
 > the risks below.
 
-System Monitor was built for trusted home and office networks. It was **not** designed or
+SRRVRR was built for trusted home and office networks. It was **not** designed or
 security-tested for the internet. If you allow public IP addresses:
 
 - **No password.** Anyone who connects from an allowed IP sees the page. There is no login.
@@ -171,14 +176,14 @@ either with the `Processes` setting.
 ## Troubleshooting
 
 - **Page won't load from another PC:** make sure it was started as administrator, and check the
-  firewall rule: `Get-NetFirewallRule -DisplayName 'System Monitor'`.
+  firewall rule: `Get-NetFirewallRule -DisplayName 'SRRVRR'`.
 - **"The process cannot access the file because it is being used by another process":**
   something else is using the port. Pick another `Port`.
 - **GPU tile says "... not found, showing ...":** `PreferredGpu` doesn't exactly match any card's
   name. The startup message lists the names Windows reports; copy one into the config.
 - **GPU shows N/A:** the machine has no GPU performance counters (e.g. no GPU or a basic display driver).
 - **Script won't run (execution policy):** use the `.bat` launcher, or run
-  `powershell -ExecutionPolicy Bypass -File .\SystemMonitor.ps1`.
+  `powershell -ExecutionPolicy Bypass -File .\SRRVRR.ps1`.
 
 ## How it works
 

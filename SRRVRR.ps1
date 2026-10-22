@@ -1,11 +1,11 @@
 <#
-  SystemMonitor.ps1 - a tiny live CPU / memory / GPU / network monitor.
+  SRRVRR.ps1 - a tiny live CPU / memory / GPU / network monitor for the SRRVRR server.
 
   Run it on the machine you want to watch, then open http://<that-machine>:8099
   in any browser. Press Ctrl+C in this window to stop it.
 
-  Settings (port, firewall, GPU, processes) live in SystemMonitor.config.psd1
-  next to this script; copy SystemMonitor.config.example.psd1 to create it.
+  Settings (port, firewall, GPU, processes) live in SRRVRR.config.psd1 next to
+  this script; copy SRRVRR.config.example.psd1 to create it.
   Run as administrator so other PCs can open the page and the firewall rule
   can be managed.
 #>
@@ -93,13 +93,13 @@ trap {
     Stop-StartupSpinner
     try { [Console]::CursorVisible = $true } catch { }
     Write-Host ''
-    Write-Host "System Monitor stopped: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "SRRVRR stopped: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 
 # --- Settings -----------------------------------------------------------------
 Set-Step 'Reading settings'
-# Defaults, replaced by anything set in SystemMonitor.config.psd1. That file is
+# Defaults, replaced by anything set in SRRVRR.config.psd1. That file is
 # not part of the code (see .gitignore), so updates never overwrite it.
 $settings = @{
     Port              = 8099
@@ -115,7 +115,13 @@ $retired = @{
     OpenFirewall  = 'the firewall rule is always set up, since other PCs need it'
     GpuFallback   = 'without a PreferredGpu, the GPU with the most video memory is used'
 }
-$configPath = Join-Path $PSScriptRoot 'SystemMonitor.config.psd1'
+$configPath = Join-Path $PSScriptRoot 'SRRVRR.config.psd1'
+# Before the rename to SRRVRR the settings file was SystemMonitor.config.psd1; still read it if that's all there is.
+$legacyConfig = Join-Path $PSScriptRoot 'SystemMonitor.config.psd1'
+if (-not (Test-Path -LiteralPath $configPath) -and (Test-Path -LiteralPath $legacyConfig)) {
+    $configPath = $legacyConfig
+    Write-Status 'Note: using the old settings file name SystemMonitor.config.psd1; rename it to SRRVRR.config.psd1.'
+}
 if (Test-Path -LiteralPath $configPath) {
     $config = Import-PowerShellDataFile -LiteralPath $configPath
     foreach ($k in $config.Keys) {
@@ -125,7 +131,7 @@ if (Test-Path -LiteralPath $configPath) {
     }
     Write-Status "Settings loaded from $configPath"
 } else {
-    Write-Status 'No SystemMonitor.config.psd1 found, using default settings. Copy SystemMonitor.config.example.psd1 to SystemMonitor.config.psd1 to change them.'
+    Write-Status 'No SRRVRR.config.psd1 found, using default settings. Copy SRRVRR.config.example.psd1 to SRRVRR.config.psd1 to change them.'
 }
 if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
 
@@ -249,7 +255,6 @@ $gpuVendor = if ($gpu) { $gpu.Vendor } else { '' }
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 $state = [hashtable]::Synchronized(@{
     ready = $false
-    host  = $env:COMPUTERNAME
     cores = [int]$env:NUMBER_OF_PROCESSORS
     memTotal = $totalRam
     hasGpu = $hasGpu
@@ -271,7 +276,8 @@ using System.Runtime.InteropServices;
 using System.Threading;
 
 public static class ProcessNetTrace {
-    const string SessionName = "SystemMonitorNet";
+    const string SessionName = "SRRVRRNet";
+    const string LegacySessionName = "SystemMonitorNet";   // name used before the rename to SRRVRR
     static readonly Guid KernelNetwork = new Guid("7DD42A49-5329-4832-8DFD-43D979153A88");
 
     delegate void EventRecordCallback(IntPtr record);
@@ -316,15 +322,18 @@ public static class ProcessNetTrace {
         return p;
     }
 
-    public static void Stop() {
+    public static void Stop() { StopSession(SessionName); }
+
+    static void StopSession(string name) {
         IntPtr p = NewProperties();
-        ControlTraceW(0, SessionName, p, 1);     // EVENT_TRACE_CONTROL_STOP
+        ControlTraceW(0, name, p, 1);            // EVENT_TRACE_CONTROL_STOP
         Marshal.FreeHGlobal(p);
     }
 
     public static bool Start() {
         if (IntPtr.Size != 8) { Error = "needs 64-bit PowerShell"; return false; }
         Stop();                                  // clear a session left behind by an earlier run
+        StopSession(LegacySessionName);
         ulong session;
         IntPtr props = NewProperties();
         int rc = StartTraceW(out session, SessionName, props);
@@ -524,7 +533,7 @@ $html = @'
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>System Monitor</title>
+<title>SRRVRR</title>
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--text:#1b1f24;--muted:#667080;--grid:rgba(0,0,0,.07);--border:#e2e5e9;
   --cpu:#1f7ae0;--mem:#8e44c9;--gpu:#139068;--rx:#d9661f;--tx:#c2185b;--bad:#d33}
@@ -573,7 +582,7 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
 </style>
 </head>
 <body>
-<header><h1 id="host">System Monitor</h1><span id="status">Connecting&hellip;</span></header>
+<header><h1>SRRVRR</h1><span id="status">Connecting&hellip;</span></header>
 <main>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>CPU</span><span class="value" id="cpuV">&ndash;</span></div>
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
@@ -628,8 +637,6 @@ function draw(id, series, max, scaleLabel) {
   if (scaleLabel) { g.fillStyle = css('--muted'); g.font = '11px system-ui,sans-serif'; g.fillText(scaleLabel, 4, 12); }
 }
 function render(s) {
-  document.title = s.host + ' \u00b7 System Monitor';
-  $('host').textContent = s.host;
   $('cpuV').textContent = s.cpu.toFixed(0) + '%';
   $('cpuS').textContent = s.cores + ' logical processors';
   const memPct = 100 * s.memUsed / s.memTotal;
@@ -699,14 +706,15 @@ try {
     Invoke-Reported -Arguments $firewallArgs -Script {
         param($Port, $Scope, $Addresses)
         $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $Port }
-        Get-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+        # Also removes the rules from before the rename to SRRVRR ('System Monitor').
+        Get-NetFirewallRule -DisplayName 'SRRVRR', 'SRRVRR (blocked)', 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
         switch ($Scope) {
-            'LocalSubnet' { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
-            'Allowlist'   { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress $Addresses -Action Allow -ErrorAction Stop | Out-Null }
+            'LocalSubnet' { New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
+            'Allowlist'   { New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress $Addresses -Action Allow -ErrorAction Stop | Out-Null }
             'Blocklist'   {
                 # Local network, minus the listed addresses (Windows applies Block rules first).
-                New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
-                New-NetFirewallRule -DisplayName 'System Monitor (blocked)' @rule -RemoteAddress $Addresses -Action Block -ErrorAction Stop | Out-Null
+                New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
+                New-NetFirewallRule -DisplayName 'SRRVRR (blocked)' @rule -RemoteAddress $Addresses -Action Block -ErrorAction Stop | Out-Null
             }
         }
     } | Out-Null
@@ -742,7 +750,7 @@ try {
 # A nod to SimCity 2000 and The Sims, whose loading screens famously did this too.
 Set-Step 'Reticulating Splines...'
 Stop-StartupSpinner
-Write-Host "System Monitor running at $url"
+Write-Host "SRRVRR running at $url"
 
 # A spinner on the last console line shows the monitor is alive. Skipped when
 # output goes to a file instead of a console window.
