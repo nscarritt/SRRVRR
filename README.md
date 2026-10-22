@@ -22,6 +22,11 @@ Updated every second, each with a 60-second graph:
 Below the graphs, a **Processes** table shows CPU, memory, GPU and network up/down for
 specific programs (a Valheim dedicated server and Plex), or "Offline" when they aren't running.
 
+A **Storage** card lists every local drive (1 GB or larger) with a usage bar, used/total space and
+the health Windows reports for the disk it's on (Healthy / Warning / Unhealthy, from the drive's
+own SMART self-monitoring). Bars turn amber at 85% full and red at 95%. Drives are re-checked
+every 30 seconds on a separate background thread, so the once-a-second graphs never stall.
+
 The page follows your system's light/dark theme and works on phones.
 
 ## Requirements
