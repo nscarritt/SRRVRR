@@ -15,6 +15,9 @@ called out under **Changed** or **Removed** with upgrade notes.
   used/total space and the disk's health as Windows reports it (SMART-based for physical disks).
   Checked every 30 seconds by a new second background sampler, so slow checks never stall the
   once-a-second graphs.
+- **Uptime and pending restart** in the header: "Up 3 days, 4 hours", plus a "Restart pending"
+  badge when Windows Update or the servicing stack is waiting on a restart (checked every
+  60 seconds).
 
 ## [0.2.0] - 2026-10-22
 

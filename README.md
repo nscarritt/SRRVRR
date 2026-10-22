@@ -27,6 +27,10 @@ the health Windows reports for the disk it's on (Healthy / Warning / Unhealthy, 
 own SMART self-monitoring). Bars turn amber at 85% full and red at 95%. Drives are re-checked
 every 30 seconds on a separate background thread, so the once-a-second graphs never stall.
 
+The header shows how long the server has been up (e.g. "Up 3 days, 4 hours") and an amber
+**Restart pending** badge when Windows has installed updates that are waiting for a restart
+(checked every 60 seconds via the registry markers Windows Update and the servicing stack set).
+
 The page follows your system's light/dark theme and works on phones.
 
 ## Requirements

@@ -253,6 +253,8 @@ $gpuLabel = if ($gpu) { $gpu.Name } else { $null }
 $gpuVendor = if ($gpu) { $gpu.Vendor } else { '' }
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+# Windows' start time, read once; uptime is worked out from it on every request.
+$bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $state = [hashtable]::Synchronized(@{
     ready = $false
     cores = [int]$env:NUMBER_OF_PROCESSORS
@@ -571,6 +573,15 @@ $slowChecks = {
                 $state.drivesError = $null
             } catch { $state.drivesError = $_.Exception.Message }
         }
+        # Pending Windows restart, every 60 seconds: Windows Update and the servicing
+        # stack each leave a registry marker while an installed update waits for a restart.
+        if ($tick % 12 -eq 0) {
+            $reasons = @()
+            if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $reasons += 'Windows Update' }
+            if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $reasons += 'Windows component servicing' }
+            $state.restartPending = [bool]$reasons
+            $state.restartReason = $reasons -join ', '
+        }
         $tick++
         Start-Sleep -Seconds 5
     }
@@ -582,6 +593,7 @@ $slowWorker.Runspace = $slowRunspace
 [void]$slowWorker.AddScript($slowChecks).AddArgument($state)
 [void]$slowWorker.BeginInvoke()
 Write-Status 'Every 30 seconds: drive space and drive health'
+Write-Status 'Every 60 seconds: whether Windows is waiting to restart for updates'
 
 # --- Web page -----------------------------------------------------------------
 $html = @'
@@ -599,7 +611,9 @@ $html = @'
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,"Segoe UI",sans-serif}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;max-width:1100px;margin:0 auto;padding:20px 24px 0}
-h1{font-size:18px;margin:0;font-weight:600}
+h1{font-size:18px;margin:0;font-weight:600;display:inline}
+#uptime{color:var(--muted);font-size:13px;margin-left:10px;font-variant-numeric:tabular-nums}
+#restart{color:var(--warn);border:1px solid var(--warn);border-radius:999px;font-size:12px;font-weight:600;padding:1px 8px;margin-left:8px;white-space:nowrap}
 #status{color:var(--muted);font-size:13px}
 #status.bad{color:var(--bad)}
 main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-width:1100px;margin:0 auto;padding:16px 24px 24px}
@@ -653,7 +667,7 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
 </style>
 </head>
 <body>
-<header><h1>SRRVRR</h1><span id="status">Connecting&hellip;</span></header>
+<header><div><h1>SRRVRR</h1><span id="uptime"></span><span id="restart" hidden>Restart pending</span></div><span id="status">Connecting&hellip;</span></header>
 <main>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>CPU</span><span class="value" id="cpuV">&ndash;</span></div>
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
@@ -709,7 +723,15 @@ function draw(id, series, max, scaleLabel) {
   }
   if (scaleLabel) { g.fillStyle = css('--muted'); g.font = '11px system-ui,sans-serif'; g.fillText(scaleLabel, 4, 12); }
 }
+function since(sec) {               // 273600 -> "3 days, 4 hours"
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  const unit = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  return d ? unit(d, 'day') + ', ' + unit(h, 'hour') : h ? unit(h, 'hour') + ', ' + unit(m, 'minute') : unit(m, 'minute');
+}
 function render(s) {
+  if (s.uptime != null) $('uptime').textContent = 'Up ' + since(s.uptime);
+  $('restart').hidden = !s.restartPending;
+  $('restart').title = s.restartReason ? 'Waiting on: ' + s.restartReason : '';
   $('cpuV').textContent = s.cpu.toFixed(0) + '%';
   $('cpuS').textContent = s.cores + ' logical processors';
   const memPct = 100 * s.memUsed / s.memTotal;
@@ -878,6 +900,7 @@ try {
             if ($ctx.Request.Url.AbsolutePath -eq '/stats') {
                 $snapshot = @{}
                 foreach ($k in @($state.Keys)) { $snapshot[$k] = $state[$k] }
+                $snapshot.uptime = [int]((Get-Date) - $bootTime).TotalSeconds
                 Send-Response $ctx ($snapshot | ConvertTo-Json -Compress) 'application/json'
             } else {
                 Send-Response $ctx $html 'text/html; charset=utf-8'
