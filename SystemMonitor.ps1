@@ -23,7 +23,7 @@ $ErrorActionPreference = 'Stop'
 # is skipped when output goes to a file.
 $startup = [hashtable]::Synchronized(@{
     Step   = 0
-    Steps  = 7        # number of Set-Step calls below
+    Steps  = 8        # number of Set-Step calls below
     Active = -not [Console]::IsOutputRedirected
     Lock   = New-Object Object
     Width  = 70
@@ -738,6 +738,9 @@ try {
     $url = "http://localhost:$($settings.Port)"
     Write-Status -Warning 'Not running as administrator, so only this machine can open the page.'
 }
+
+# A nod to SimCity 2000 and The Sims, whose loading screens famously did this too.
+Set-Step 'Reticulating Splines...'
 Stop-StartupSpinner
 Write-Host "System Monitor running at $url"
 
