@@ -9,17 +9,26 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-22
+
+Server health at a glance: storage, uptime and restarts, and GPU temperature.
+
 ### Added
 
 - **Storage card**: every local drive with a usage bar (amber at 85% full, red at 95%),
   used/total space and the disk's health as Windows reports it (SMART-based for physical disks).
   Checked every 30 seconds by a new second background sampler, so slow checks never stall the
-  once-a-second graphs.
+  once-a-second graphs. ([#14](https://github.com/nscarritt/SRRVRR/pull/14))
 - **Uptime and pending restart** in the header: "Up 3 days, 4 hours", plus a "Restart pending"
   badge when Windows Update or the servicing stack is waiting on a restart (checked every
-  60 seconds).
+  60 seconds). ([#15](https://github.com/nscarritt/SRRVRR/pull/15))
 - **GPU temperature** on the GPU tile for NVIDIA cards, from `nvidia-smi`, every 5 seconds;
-  amber at 80 °C, red at 90 °C.
+  amber at 80 °C, red at 90 °C. ([#16](https://github.com/nscarritt/SRRVRR/pull/16))
+
+### Changed
+
+- Startup step 5 is now "Starting the background samplers" and lists what each sampler checks
+  and how often. ([#14](https://github.com/nscarritt/SRRVRR/pull/14))
 
 ## [0.2.0] - 2026-10-22
 
@@ -112,6 +121,7 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nscarritt/SRRVRR/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nscarritt/SRRVRR/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nscarritt/SRRVRR/releases/tag/v0.1.0
