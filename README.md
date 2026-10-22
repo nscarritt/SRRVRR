@@ -189,3 +189,10 @@ adapter IDs as the GPU counters.
 Logos and icons are built into the script, so the page needs no internet access: Valheim emblem
 (valheimgame.com), Plex chevron (Plex Media Server), NVIDIA eye mark (nvidia.com), and CPU/RAM/network
 icons from [Lucide](https://lucide.dev) (ISC license).
+
+## License
+
+[MIT](LICENSE) © 2026 nscarritt. Provided "as is", without warranty of any kind; see the
+[Disclaimer and limitation of liability](#disclaimer-and-limitation-of-liability) above.
+Valheim, Plex and NVIDIA logos are trademarks of their respective owners and are used only to
+identify those products; they are not covered by this license.
