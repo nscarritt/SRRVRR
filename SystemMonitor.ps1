@@ -4,31 +4,109 @@
   Run it on the machine you want to watch, then open http://<that-machine>:8099
   in any browser. Press Ctrl+C in this window to stop it.
 
-  Run as administrator so other PCs can open the page. Add -OpenFirewall once
-  to allow the port through Windows Firewall (local network only).
+  Settings (port, listen address, firewall, GPU, processes) live in
+  SystemMonitor.config.psd1 next to this script; copy
+  SystemMonitor.config.example.psd1 to create it. Run as administrator so other
+  PCs can open the page and the firewall rule can be managed.
 #>
 param(
-    [int]$Port = 8099,
-    [switch]$OpenFirewall
+    [int]$Port,              # overrides Port from the config file
+    [switch]$OpenFirewall    # overrides OpenFirewall from the config file
 )
 
 $ErrorActionPreference = 'Stop'
 
-# --- GPU to watch -------------------------------------------------------------
-# Part of the graphics card's name as shown in Device Manager > Display adapters.
-# Only that card is counted on the GPU tile and in the table, so integrated
-# graphics are ignored. Set to '' to count every GPU.
-$gpuName = 'T600'
+# --- Settings -----------------------------------------------------------------
+# Defaults, replaced by anything set in SystemMonitor.config.psd1. That file is
+# not part of the code (see .gitignore), so updates never overwrite it.
+$settings = @{
+    Port              = 8099
+    ListenAddress     = '+'
+    OpenFirewall      = $true
+    FirewallScope     = 'LocalSubnet'
+    FirewallAddresses = @()
+    AllowPublicAddresses = $false
+    PreferredGpu      = ''
+    GpuFallback       = 'Dedicated'
+    Processes         = @{}
+}
+$configPath = Join-Path $PSScriptRoot 'SystemMonitor.config.psd1'
+if (Test-Path -LiteralPath $configPath) {
+    $config = Import-PowerShellDataFile -LiteralPath $configPath
+    foreach ($k in $config.Keys) {
+        if ($settings.ContainsKey($k)) { $settings[$k] = $config[$k] }
+        else { Write-Warning "Unknown setting '$k' in $configPath (ignored)." }
+    }
+    Write-Host "Settings loaded from $configPath"
+} else {
+    Write-Host 'No SystemMonitor.config.psd1 found, using default settings. Copy SystemMonitor.config.example.psd1 to SystemMonitor.config.psd1 to change them.'
+}
+if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
+if ($OpenFirewall) { $settings.OpenFirewall = $true }
+
+$scopes = 'LocalSubnet', 'Allowlist', 'Blocklist'
+if ($settings.FirewallScope -notin $scopes) { throw "FirewallScope must be one of: $($scopes -join ', ')" }
+if ($settings.FirewallScope -in 'Allowlist', 'Blocklist' -and -not $settings.FirewallAddresses) {
+    throw "FirewallScope '$($settings.FirewallScope)' needs at least one address in FirewallAddresses."
+}
+
+# The page is meant for local networks, so firewall addresses must be private:
+# 10.x, 172.16-31.x, 192.168.x, 169.254.x, 127.x, or IPv6 fe80::/10 and fc00::/7.
+# The one exception: with AllowPublicAddresses, an Allowlist may also name
+# single public IPs, at the user's own risk (see the README's security warning).
+function Test-PrivateAddress([string]$entry) {
+    function Test-Ip([string]$text, [int]$prefix) {
+        $ip = $null
+        if (-not [System.Net.IPAddress]::TryParse($text, [ref]$ip)) { return $false }
+        $b = $ip.GetAddressBytes()
+        if ($b.Length -eq 4) {
+            # The whole subnet must fit inside one private block.
+            $blocks = @(@(10, 0, 8), @(172, 16, 12), @(192, 168, 16), @(169, 254, 16), @(127, 0, 8))
+            foreach ($blk in $blocks) {
+                $inBlock = if ($blk[2] -eq 8) { $b[0] -eq $blk[0] } elseif ($blk[2] -eq 12) { $b[0] -eq $blk[0] -and ($b[1] -band 0xF0) -eq $blk[1] } else { $b[0] -eq $blk[0] -and $b[1] -eq $blk[1] }
+                if ($inBlock -and $prefix -ge $blk[2]) { return $true }
+            }
+            return $false
+        }
+        if ($b[0] -eq 0xFE -and ($b[1] -band 0xC0) -eq 0x80) { return $prefix -ge 10 }   # fe80::/10 link-local
+        if (($b[0] -band 0xFE) -eq 0xFC) { return $prefix -ge 7 }                          # fc00::/7 unique local
+        return $false
+    }
+    if ($entry -match '^(.+)/(\d+)$') { return Test-Ip $matches[1] ([int]$matches[2]) }
+    if ($entry -match '^(.+)-(.+)$') { return (Test-Ip $matches[1] 128) -and (Test-Ip $matches[2] 128) }
+    Test-Ip $entry 128
+}
+# One specific address, written out in full: no ranges, subnets or "any" addresses.
+function Test-SingleAddress([string]$entry) {
+    $ip = $null
+    if ($entry -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -and $entry -notmatch ':') { return $false }
+    if (-not [System.Net.IPAddress]::TryParse($entry, [ref]$ip)) { return $false }
+    -not ($ip.Equals([System.Net.IPAddress]::Any) -or $ip.Equals([System.Net.IPAddress]::IPv6Any) -or $ip.Equals([System.Net.IPAddress]::Broadcast))
+}
+$public = @($settings.FirewallAddresses | Where-Object { -not (Test-PrivateAddress $_) })
+if ($settings.FirewallScope -ne 'LocalSubnet' -and $public) {
+    if ($settings.FirewallScope -ne 'Allowlist' -or -not $settings.AllowPublicAddresses) {
+        $hint = if ($settings.FirewallScope -eq 'Allowlist') { ' To let specific public IPs in AT YOUR OWN RISK, set AllowPublicAddresses = $true (read the README security warning first).' } else { '' }
+        throw "FirewallAddresses must be private (local network) addresses. Not allowed: $($public -join ', ').$hint"
+    }
+    $wide = @($public | Where-Object { -not (Test-SingleAddress $_) })
+    if ($wide) { throw "Public addresses must be single IPs, not ranges, subnets or 'any' addresses. Not allowed: $($wide -join ', ')" }
+    Write-Warning ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
+        "which has no password and no encryption: $($public -join ', '). You accept this risk; see the README security warning.")
+}
+$fallbacks = 'Dedicated', 'Integrated', 'All'
+if ($settings.GpuFallback -notin $fallbacks) { throw "GpuFallback must be one of: $($fallbacks -join ', ')" }
 
 # --- Processes shown in the table under the graphs ----------------------------
-# name:  label on the page
+# name:  label on the page, and the switch name under Processes in the config
 # main:  process that must be running for the row to show as online
 # match: every process counted toward the row (wildcards allowed)
 # icon:  logo shown before the name (a .plogo-<icon> style in the page); optional
 $services = @(
     @{ name = 'Valheim'; main = 'valheim_server';    match = 'valheim_server'; icon = 'valheim' }
     @{ name = 'Plex';    main = 'Plex Media Server'; match = 'Plex*';          icon = 'plex' }   # includes Plex Transcoder etc.
-)
+) | Where-Object { $settings.Processes[$_.name] -ne $false }
+$services = @($services)
 
 # --- Which counters exist on this machine ------------------------------------
 $cat = [System.Diagnostics.PerformanceCounterCategory]
@@ -44,19 +122,32 @@ if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
 # Windows lists each graphics card under this registry key with the same ID
-# (LUID) the GPU counters use, which lets us pick out the card by name.
-$gpuLuid = $null; $gpuLabel = $null
-if ($hasGpu -and $gpuName) {
+# (LUID) the GPU counters use, which lets us pick out one card.
+$gpus = @{}   # luid -> card
+if ($hasGpu) {
     $live = (New-Object System.Diagnostics.PerformanceCounterCategory 'GPU Adapter Memory').GetInstanceNames()
     foreach ($key in Get-ChildItem HKLM:\SOFTWARE\Microsoft\DirectX -ErrorAction SilentlyContinue) {
         $adapter = Get-ItemProperty $key.PSPath
-        if ($adapter.Description -notlike "*$gpuName*" -or $null -eq $adapter.AdapterLuid) { continue }
+        if (-not $adapter.Description -or $null -eq $adapter.AdapterLuid) { continue }
+        if ($adapter.VendorId -eq 0x1414) { continue }   # Microsoft Basic Render Driver (software, not a GPU)
         $l = [int64]$adapter.AdapterLuid
         $luid = '0x{0:x8}_0x{1:x8}' -f ($l -shr 32), ($l -band 4294967295)
-        if ($live | Where-Object { $_ -like "luid_${luid}_*" }) { $gpuLuid = $luid; $gpuLabel = $adapter.Description; break }
+        if (-not ($live | Where-Object { $_ -like "luid_${luid}_*" })) { continue }   # not present right now
+        $gpus[$luid] = [pscustomobject]@{ Name = $adapter.Description; Luid = $luid; Dedicated = [int64]$adapter.DedicatedVideoMemory }
     }
-    if (-not $gpuLuid) { Write-Warning "No GPU matching '$gpuName' found; counting all GPUs." }
 }
+$gpu = $null; $gpuNote = $null
+if ($settings.PreferredGpu) {
+    $gpu = $gpus.Values | Where-Object { $_.Name -like "*$($settings.PreferredGpu)*" } | Select-Object -First 1
+    if (-not $gpu) { $gpuNote = "$($settings.PreferredGpu) not found"; Write-Warning "No GPU matching '$($settings.PreferredGpu)'; using GpuFallback '$($settings.GpuFallback)'." }
+}
+if (-not $gpu -and $gpus.Count) {
+    # A graphics card has far more dedicated video memory than built-in graphics.
+    if ($settings.GpuFallback -eq 'Dedicated')  { $gpu = $gpus.Values | Sort-Object Dedicated -Descending | Select-Object -First 1 }
+    if ($settings.GpuFallback -eq 'Integrated') { $gpu = $gpus.Values | Sort-Object Dedicated | Select-Object -First 1 }
+}
+$gpuLuid = if ($gpu) { $gpu.Luid } else { $null }
+$gpuLabel = if ($gpu) { $gpu.Name } else { $null }
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 $state = [hashtable]::Synchronized(@{
@@ -66,7 +157,7 @@ $state = [hashtable]::Synchronized(@{
     memTotal = $totalRam
     hasGpu = $hasGpu
     gpuLabel = $gpuLabel
-    gpuMissing = if ($hasGpu -and $gpuName -and -not $gpuLuid) { $gpuName } else { $null }
+    gpuNote = $gpuNote
 })
 
 # --- Per-process network ------------------------------------------------------
@@ -385,7 +476,7 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
     <div class="sub" id="gpuS">&nbsp;</div><canvas id="gpuC"></canvas></section>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>Network</span><span class="value" id="netV">&ndash;</span></div>
     <div class="sub" id="netS">&nbsp;</div><canvas id="netC"></canvas></section>
-  <section class="card wide"><div class="label">Processes</div>
+  <section class="card wide" id="procCard"><div class="label">Processes</div>
     <div class="scroll"><table>
       <colgroup><col style="width:24%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:20%"><col style="width:20%"></colgroup>
       <thead><tr><th>Process</th><th>CPU</th><th>Memory</th><th>GPU</th><th>Up</th><th>Down</th></tr></thead>
@@ -440,7 +531,7 @@ function render(s) {
   if (s.hasGpu) {
     $('gpuV').textContent = s.gpu.toFixed(0) + '%';
     $('gpuS').textContent = (s.gpuEngine ? s.gpuEngine.toUpperCase() + ' engine \u00b7 ' : '') + gb(s.gpuMem) + ' GB dedicated memory';
-    const card = s.gpuLabel || (s.gpuMissing ? s.gpuMissing + ' not found, showing all GPUs' : '');
+    const card = (s.gpuNote ? s.gpuNote + ', showing ' : '') + (s.gpuLabel || (s.gpuNote ? 'all GPUs' : ''));
     if (card) $('gpuS').textContent = card + ' ' + String.fromCharCode(183) + ' ' + $('gpuS').textContent;
   } else {
     $('gpuV').textContent = 'N/A';
@@ -464,6 +555,7 @@ function renderProcs(s) {
     ? '<tr><td>' + name(p) + '</td><td>' + pct(p.cpu) + '</td><td>' + pct(p.mem) + '</td><td>' +
       (s.hasGpu ? pct(p.gpu) : 'N/A') + '</td><td class="up">' + rate(p.tx) + '</td><td class="down">' + rate(p.rx) + '</td></tr>'
     : '<tr><td>' + name(p) + '</td><td class="offline" colspan="5">Offline</td></tr>').join('');
+  $('procCard').hidden = !(s.services || []).length;   // every process turned off in the config
   $('procNote').hidden = !s.netError;
   $('procNote').textContent = s.netError ? 'Per-process network unavailable: ' + s.netError + '.' : '';
 }
@@ -491,27 +583,39 @@ tick();
 '@
 
 # --- HTTP server --------------------------------------------------------------
-if ($OpenFirewall -and -not (Get-NetFirewallRule -DisplayName 'System Monitor' -ErrorAction SilentlyContinue)) {
+# Rebuilt on every start so the rules always match the current settings.
+if ($settings.OpenFirewall) {
     try {
-        New-NetFirewallRule -DisplayName 'System Monitor' -Direction Inbound -Protocol TCP -LocalPort $Port `
-            -RemoteAddress LocalSubnet -Action Allow | Out-Null
-        Write-Host "Firewall rule 'System Monitor' added for port $Port (local network only)."
+        $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $settings.Port }
+        Get-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+        switch ($settings.FirewallScope) {
+            'LocalSubnet' { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
+            'Allowlist'   { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress $settings.FirewallAddresses -Action Allow -ErrorAction Stop | Out-Null }
+            'Blocklist'   {
+                # Local network, minus the listed addresses (Windows applies Block rules first).
+                New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
+                New-NetFirewallRule -DisplayName 'System Monitor (blocked)' @rule -RemoteAddress $settings.FirewallAddresses -Action Block -ErrorAction Stop | Out-Null
+            }
+        }
+        $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
+        Write-Host "Firewall: port $($settings.Port) open ($who)."
     } catch {
-        Write-Warning 'Could not add the firewall rule (needs administrator).'
+        Write-Warning "Could not update the firewall rule (needs administrator): $($_.Exception.Message)"
     }
 }
 
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://+:$Port/")
+$listener.Prefixes.Add("http://$($settings.ListenAddress):$($settings.Port)/")
 try {
     $listener.Start()
-    $url = "http://$($env:COMPUTERNAME):$Port"
+    $shownAddress = if ($settings.ListenAddress -eq '+') { $env:COMPUTERNAME } else { $settings.ListenAddress }
+    $url = "http://${shownAddress}:$($settings.Port)"
 } catch {
     $listener = New-Object System.Net.HttpListener
-    $listener.Prefixes.Add("http://localhost:$Port/")
+    $listener.Prefixes.Add("http://localhost:$($settings.Port)/")
     $listener.Start()
-    $url = "http://localhost:$Port"
-    Write-Warning 'Not running as administrator, so only this machine can open the page.'
+    $url = "http://localhost:$($settings.Port)"
+    Write-Warning "Could not listen on '$($settings.ListenAddress)' (needs administrator, or the address isn't on this machine), so only this machine can open the page."
 }
 Write-Host "System Monitor running at $url  (Ctrl+C to stop)"
 
