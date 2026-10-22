@@ -8,23 +8,17 @@
     # --- Web page -------------------------------------------------------------
 
     # Port the dashboard is served on: http://<this-machine>:<Port>
+    # The monitor always listens on this machine's own addresses; the console
+    # shows both its name and its network IP when it starts.
     Port = 8099
-
-    # Address to listen on:
-    #   '+'            every address this machine has (default)
-    #   '192.168.1.50' only this one address (must belong to this machine)
-    #   'localhost'    only this machine can open the page
-    ListenAddress = '+'
 
     # --- Windows Firewall -----------------------------------------------------
 
-    # $true:  on every start, set up an inbound rule named "System Monitor"
-    #         for Port, matching FirewallScope below (needs administrator)
-    # $false: leave the firewall alone
-    OpenFirewall = $true
-
-    # Who the firewall lets in. The page is meant for local networks only
-    # (see AllowPublicAddresses below for the one, at-your-own-risk exception).
+    # Other PCs can only open the page through the firewall, so on every start
+    # the monitor sets up an inbound rule named "System Monitor" for Port
+    # (needs administrator). This chooses who that rule lets in. The page is
+    # meant for local networks only (see AllowPublicAddresses below for the
+    # one, at-your-own-risk exception).
     #   'LocalSubnet' devices on the same local network (default)
     #   'Allowlist'   only the addresses in FirewallAddresses
     #   'Blocklist'   the local network, except the addresses in FirewallAddresses
@@ -47,15 +41,14 @@
 
     # --- GPU ------------------------------------------------------------------
 
-    # Part of the graphics card's name, as shown in Device Manager >
-    # Display adapters (e.g. 'T600' or 'RTX 4070'). '' to skip.
+    # The graphics card to show, by its exact name as Windows reports it: the
+    # "Name" under Display in dxdiag, or Device Manager > Display adapters,
+    # e.g. 'NVIDIA T600' or 'AMD Radeon RX 7800 XT'. The console shows the
+    # card in use when it starts, and lists every GPU's name if this one isn't
+    # found. Leave it '' (or if the name isn't found) to use the GPU with the most
+    # video memory. The GPU tile shows that card maker's logo (NVIDIA, AMD or
+    # Intel).
     PreferredGpu = ''
-
-    # Which GPU to show when PreferredGpu is '' or isn't found:
-    #   'Dedicated'  the graphics card (the GPU with the most video memory)
-    #   'Integrated' the processor's built-in graphics (the least video memory)
-    #   'All'        add up every GPU
-    GpuFallback = 'Dedicated'
 
     # --- Processes table ------------------------------------------------------
 

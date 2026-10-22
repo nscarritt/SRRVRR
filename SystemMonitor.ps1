@@ -4,14 +4,13 @@
   Run it on the machine you want to watch, then open http://<that-machine>:8099
   in any browser. Press Ctrl+C in this window to stop it.
 
-  Settings (port, listen address, firewall, GPU, processes) live in
-  SystemMonitor.config.psd1 next to this script; copy
-  SystemMonitor.config.example.psd1 to create it. Run as administrator so other
-  PCs can open the page and the firewall rule can be managed.
+  Settings (port, firewall, GPU, processes) live in SystemMonitor.config.psd1
+  next to this script; copy SystemMonitor.config.example.psd1 to create it.
+  Run as administrator so other PCs can open the page and the firewall rule
+  can be managed.
 #>
 param(
-    [int]$Port,              # overrides Port from the config file
-    [switch]$OpenFirewall    # overrides OpenFirewall from the config file
+    [int]$Port    # overrides Port from the config file
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,20 +76,24 @@ Set-Step 'Reading settings'
 # not part of the code (see .gitignore), so updates never overwrite it.
 $settings = @{
     Port              = 8099
-    ListenAddress     = '+'
-    OpenFirewall      = $true
     FirewallScope     = 'LocalSubnet'
     FirewallAddresses = @()
     AllowPublicAddresses = $false
     PreferredGpu      = ''
-    GpuFallback       = 'Dedicated'
     Processes         = @{}
+}
+# Settings from older versions, now handled automatically.
+$retired = @{
+    ListenAddress = 'the monitor always listens on this machine''s own addresses'
+    OpenFirewall  = 'the firewall rule is always set up, since other PCs need it'
+    GpuFallback   = 'without a PreferredGpu, the GPU with the most video memory is used'
 }
 $configPath = Join-Path $PSScriptRoot 'SystemMonitor.config.psd1'
 if (Test-Path -LiteralPath $configPath) {
     $config = Import-PowerShellDataFile -LiteralPath $configPath
     foreach ($k in $config.Keys) {
         if ($settings.ContainsKey($k)) { $settings[$k] = $config[$k] }
+        elseif ($retired.ContainsKey($k)) { Write-Status "Note: setting '$k' is no longer used ($($retired[$k])); you can delete it from the config." }
         else { Write-Status -Warning "Unknown setting '$k' in $configPath (ignored)." }
     }
     Write-Status "Settings loaded from $configPath"
@@ -98,7 +101,6 @@ if (Test-Path -LiteralPath $configPath) {
     Write-Status 'No SystemMonitor.config.psd1 found, using default settings. Copy SystemMonitor.config.example.psd1 to SystemMonitor.config.psd1 to change them.'
 }
 if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
-if ($OpenFirewall) { $settings.OpenFirewall = $true }
 
 $scopes = 'LocalSubnet', 'Allowlist', 'Blocklist'
 if ($settings.FirewallScope -notin $scopes) { throw "FirewallScope must be one of: $($scopes -join ', ')" }
@@ -150,8 +152,6 @@ if ($settings.FirewallScope -ne 'LocalSubnet' -and $public) {
     Write-Status -Warning ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
         "which has no password and no encryption: $($public -join ', '). You accept this risk; see the README security warning.")
 }
-$fallbacks = 'Dedicated', 'Integrated', 'All'
-if ($settings.GpuFallback -notin $fallbacks) { throw "GpuFallback must be one of: $($fallbacks -join ', ')" }
 
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page, and the switch name under Processes in the config
@@ -179,8 +179,9 @@ if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
 Set-Step 'Finding the GPU'
-# Windows lists each graphics card under this registry key with the same ID
-# (LUID) the GPU counters use, which lets us pick out one card.
+# Windows lists each graphics card under this registry key, with the name dxdiag
+# shows, its vendor, and the same ID (LUID) the GPU counters use, which lets us
+# pick out one card.
 $gpus = @{}   # luid -> card
 if ($hasGpu) {
     $live = (New-Object System.Diagnostics.PerformanceCounterCategory 'GPU Adapter Memory').GetInstanceNames()
@@ -191,21 +192,32 @@ if ($hasGpu) {
         $l = [int64]$adapter.AdapterLuid
         $luid = '0x{0:x8}_0x{1:x8}' -f ($l -shr 32), ($l -band 4294967295)
         if (-not ($live | Where-Object { $_ -like "luid_${luid}_*" })) { continue }   # not present right now
-        $gpus[$luid] = [pscustomobject]@{ Name = $adapter.Description; Luid = $luid; Dedicated = [int64]$adapter.DedicatedVideoMemory }
+        $vendor = switch ([int]$adapter.VendorId) { 0x10DE { 'nvidia' } 0x1002 { 'amd' } 0x1022 { 'amd' } 0x8086 { 'intel' } default { '' } }
+        $gpus[$luid] = [pscustomobject]@{ Name = $adapter.Description.Trim(); Luid = $luid; Vendor = $vendor; Dedicated = [int64]$adapter.DedicatedVideoMemory }
     }
 }
+# PreferredGpu is the card's exact name; otherwise (or if it isn't found) use the
+# GPU with the most video memory, which is the graphics card rather than built-in graphics.
 $gpu = $null; $gpuNote = $null
+$byMemory = @($gpus.Values | Sort-Object Dedicated -Descending)
 if ($settings.PreferredGpu) {
-    $gpu = $gpus.Values | Where-Object { $_.Name -like "*$($settings.PreferredGpu)*" } | Select-Object -First 1
-    if (-not $gpu) { $gpuNote = "$($settings.PreferredGpu) not found"; Write-Status -Warning "No GPU matching '$($settings.PreferredGpu)'; using GpuFallback '$($settings.GpuFallback)'." }
+    $gpu = $byMemory | Where-Object { $_.Name -eq $settings.PreferredGpu.Trim() } | Select-Object -First 1
+    if (-not $gpu) {
+        $gpuNote = "$($settings.PreferredGpu) not found"
+        $names = if ($byMemory) { ($byMemory | ForEach-Object { "'$($_.Name)'" }) -join ', ' } else { 'none' }
+        Write-Status -Warning "No GPU named '$($settings.PreferredGpu)'. GPUs on this machine: $names. Using the one with the most video memory."
+    }
 }
-if (-not $gpu -and $gpus.Count) {
-    # A graphics card has far more dedicated video memory than built-in graphics.
-    if ($settings.GpuFallback -eq 'Dedicated')  { $gpu = $gpus.Values | Sort-Object Dedicated -Descending | Select-Object -First 1 }
-    if ($settings.GpuFallback -eq 'Integrated') { $gpu = $gpus.Values | Sort-Object Dedicated | Select-Object -First 1 }
+if (-not $gpu -and $byMemory) { $gpu = $byMemory[0] }
+if ($gpu) {
+    # Just the card and its size, as Windows reports them, e.g. "NVIDIA T600 (dot) 4 GB".
+    $gb = $gpu.Dedicated / 1GB
+    $size = if ($gb -ge 2) { ' {0} {1:0} GB' -f [char]0x00B7, $gb } elseif ($gb -gt 0) { ' {0} {1:0.#} GB' -f [char]0x00B7, $gb } else { '' }
+    Write-Status "$($gpu.Name)$size"
 }
 $gpuLuid = if ($gpu) { $gpu.Luid } else { $null }
 $gpuLabel = if ($gpu) { $gpu.Name } else { $null }
+$gpuVendor = if ($gpu) { $gpu.Vendor } else { '' }
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 $state = [hashtable]::Synchronized(@{
@@ -216,6 +228,7 @@ $state = [hashtable]::Synchronized(@{
     hasGpu = $hasGpu
     gpuLabel = $gpuLabel
     gpuNote = $gpuNote
+    gpuVendor = $gpuVendor
 })
 
 # --- Per-process network ------------------------------------------------------
@@ -499,9 +512,14 @@ main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-wid
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px 12px;min-width:0}
 .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .label{font-weight:600;font-size:22px;display:inline-flex;align-items:center;gap:8px}   /* ~85% of the 26px metric */
-/* Tile icons: CPU, memory and network from Lucide (lucide.dev, ISC license); NVIDIA eye mark from nvidia.com */
+/* Tile icons: CPU, memory, network and generic GPU from Lucide (lucide.dev, ISC license); NVIDIA eye mark
+   (nvidia.com), AMD arrow (amd.com) and Intel wordmark (Intel 2020 logo) are trademarks of their owners */
 .ticon{height:1em;width:1em;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .ticon.brand{width:auto;fill:currentColor;stroke:none}
+/* The GPU tile shows the logo of the chosen card's maker, or a plain GPU icon. */
+#gpuIcon{display:inline-flex}
+#gpuIcon svg{display:none}
+#gpuIcon[data-v=""] .v-generic,#gpuIcon[data-v="nvidia"] .v-nvidia,#gpuIcon[data-v="amd"] .v-amd,#gpuIcon[data-v="intel"] .v-intel{display:block}
 .value{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .sub{color:var(--muted);font-size:12.5px;min-height:18px;font-variant-numeric:tabular-nums}
 canvas{display:block;width:100%;height:120px;margin-top:8px}
@@ -532,7 +550,7 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/></svg>Memory</span><span class="value" id="memV">&ndash;</span></div>
     <div class="sub" id="memS">&nbsp;</div><canvas id="memC"></canvas></section>
-  <section class="card"><div class="top"><span class="label"><svg class="ticon brand" viewBox="0 0 271.5 179.7" aria-label="NVIDIA"><path d="M101.3,53.6V37.4c1.6-0.1,3.2-0.2,4.8-0.2c44.4-1.4,73.5,38.2,73.5,38.2S148.2,119,114.5,119c-4.5,0-8.9-0.7-13.1-2.1V67.7c17.3,2.1,20.8,9.7,31.1,27l23.1-19.4c0,0-16.9-22.1-45.3-22.1C107.3,53.1,104.3,53.3,101.3,53.6 M101.3,0v24.2c1.6-0.1,3.2-0.2,4.8-0.3c61.7-2.1,102,50.6,102,50.6s-46.2,56.2-94.3,56.2c-4.2,0-8.3-0.4-12.4-1.1v15c3.4,0.4,6.9,0.7,10.3,0.7c44.8,0,77.2-22.9,108.6-49.9c5.2,4.2,26.5,14.3,30.9,18.7c-29.8,25-99.3,45.1-138.7,45.1c-3.8,0-7.4-0.2-11-0.6v21.1h170.2V0L101.3,0z M101.3,116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22,52.9-25.6v14h-0.1c-17.3-2.1-30.9,14.1-30.9,14.1S78,109,101.3,116.9 M27.8,77.4c0,0,24.5-36.2,73.6-40V24.2C47,28.6,0,74.6,0,74.6s26.6,77,101.3,84v-14C46.5,137.8,27.8,77.4,27.8,77.4z"/></svg>GPU</span><span class="value" id="gpuV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><span id="gpuIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21V3M2 5h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2.26M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3"/><circle cx="16" cy="11" r="2"/><circle cx="8" cy="11" r="2"/></svg><svg class="ticon brand v-nvidia" viewBox="0 0 271.5 179.7" aria-label="NVIDIA"><path d="M101.3,53.6V37.4c1.6-0.1,3.2-0.2,4.8-0.2c44.4-1.4,73.5,38.2,73.5,38.2S148.2,119,114.5,119c-4.5,0-8.9-0.7-13.1-2.1V67.7c17.3,2.1,20.8,9.7,31.1,27l23.1-19.4c0,0-16.9-22.1-45.3-22.1C107.3,53.1,104.3,53.3,101.3,53.6 M101.3,0v24.2c1.6-0.1,3.2-0.2,4.8-0.3c61.7-2.1,102,50.6,102,50.6s-46.2,56.2-94.3,56.2c-4.2,0-8.3-0.4-12.4-1.1v15c3.4,0.4,6.9,0.7,10.3,0.7c44.8,0,77.2-22.9,108.6-49.9c5.2,4.2,26.5,14.3,30.9,18.7c-29.8,25-99.3,45.1-138.7,45.1c-3.8,0-7.4-0.2-11-0.6v21.1h170.2V0L101.3,0z M101.3,116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22,52.9-25.6v14h-0.1c-17.3-2.1-30.9,14.1-30.9,14.1S78,109,101.3,116.9 M27.8,77.4c0,0,24.5-36.2,73.6-40V24.2C47,28.6,0,74.6,0,74.6s26.6,77,101.3,84v-14C46.5,137.8,27.8,77.4,27.8,77.4z"/></svg><svg class="ticon brand v-amd" viewBox="106.4 0 33.32 33.33" aria-label="AMD"><polygon points="130.64 9.08 115.75 9.08 106.68 0 139.72 0 139.72 33.05 130.64 23.97 130.64 9.08"/><polygon points="115.74 23.98 115.74 10.9 106.4 20.24 106.4 33.33 119.48 33.33 128.82 23.98 115.74 23.98"/></svg><svg class="ticon brand v-intel" viewBox="4.7 2.2 357 150.4" aria-label="Intel"><rect x="4.7" y="5.2" width="28.1" height="28.1"/><path d="M32.1,151.6V50.3H5.4v101.2h26.7V151.6z M208.9,152.6v-24.8c-3.9,0-7.2-0.2-9.6-0.6c-2.8-0.4-4.9-1.4-6.3-2.8 c-1.4-1.4-2.3-3.4-2.8-6.1c-0.4-2.5-0.6-5.8-0.6-9.8V73.2h19.3V50.3h-19.3V10.9h-26.7v97.9c0,8.3,0.7,15.3,2.1,20.9 c1.4,5.5,3.8,10,7.1,13.4s7.7,5.8,13,7.3c5.4,1.5,12.2,2.2,20.3,2.2L208.9,152.6L208.9,152.6z M361.7,151.6V3.1H335v148.5H361.7z M137.2,60.3c-7.4-8-17.8-12-31-12c-6.4,0-12.3,1.3-17.5,3.9C83.4,54.8,79,58.4,75.4,63L74,64.9v-1.7V50.3H47.7v101.2h26.5V97.6v3.7 c0-0.6,0-1.2,0-1.8c0.3-9.5,2.6-16.5,7-21c4.7-4.8,10.4-7.2,16.9-7.2c7.7,0,13.6,2.4,17.5,7c3.8,4.6,5.8,11.1,5.8,19.4l0,0V98l0,0 l0,0v53.5h26.9V94.1C148.4,79.7,144.6,68.3,137.2,60.3z M321.2,100.8c0-7.3-1.3-14.1-3.8-20.5c-2.6-6.3-6.2-11.9-10.7-16.7 c-4.6-4.8-10.1-8.5-16.5-11.2s-13.5-4-21.2-4c-7.3,0-14.2,1.4-20.6,4.1c-6.4,2.8-12,6.5-16.7,11.2s-8.5,10.3-11.2,16.7 c-2.8,6.4-4.1,13.3-4.1,20.6c0,7.3,1.3,14.2,3.9,20.6c2.6,6.4,6.3,12,10.9,16.7c4.6,4.7,10.3,8.5,16.9,11.2 c6.6,2.8,13.9,4.2,21.7,4.2c22.6,0,36.6-10.3,45-19.9l-19.2-14.6c-4,4.8-13.6,11.3-25.6,11.3c-7.5,0-13.7-1.7-18.4-5.2 c-4.7-3.4-7.9-8.2-9.6-14.1l-0.3-0.9h79.5L321.2,100.8L321.2,100.8z M241.9,91.5c0-7.4,8.5-20.3,26.8-20.4 c18.3,0,26.9,12.9,26.9,20.3L241.9,91.5z"/></svg></span>GPU</span><span class="value" id="gpuV">&ndash;</span></div>
     <div class="sub" id="gpuS">&nbsp;</div><canvas id="gpuC"></canvas></section>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>Network</span><span class="value" id="netV">&ndash;</span></div>
     <div class="sub" id="netS">&nbsp;</div><canvas id="netC"></canvas></section>
@@ -588,6 +606,7 @@ function render(s) {
   const memPct = 100 * s.memUsed / s.memTotal;
   $('memV').textContent = memPct.toFixed(0) + '%';
   $('memS').textContent = gb(s.memUsed) + ' / ' + gb(s.memTotal) + ' GB in use';
+  $('gpuIcon').dataset.v = s.gpuVendor || '';
   if (s.hasGpu) {
     $('gpuV').textContent = s.gpu.toFixed(0) + '%';
     $('gpuS').textContent = (s.gpuEngine ? s.gpuEngine.toUpperCase() + ' engine \u00b7 ' : '') + gb(s.gpuMem) + ' GB dedicated memory';
@@ -644,40 +663,45 @@ tick();
 
 # --- HTTP server --------------------------------------------------------------
 Set-Step 'Setting up the firewall'
-# Rebuilt on every start so the rules always match the current settings.
-if ($settings.OpenFirewall) {
-    try {
-        $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $settings.Port }
-        Get-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
-        switch ($settings.FirewallScope) {
-            'LocalSubnet' { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
-            'Allowlist'   { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress $settings.FirewallAddresses -Action Allow -ErrorAction Stop | Out-Null }
-            'Blocklist'   {
-                # Local network, minus the listed addresses (Windows applies Block rules first).
-                New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
-                New-NetFirewallRule -DisplayName 'System Monitor (blocked)' @rule -RemoteAddress $settings.FirewallAddresses -Action Block -ErrorAction Stop | Out-Null
-            }
+# Other PCs can only reach the page through the firewall, so the rule is always
+# set up, and rebuilt on every start to match the current settings.
+try {
+    $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $settings.Port }
+    Get-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+    switch ($settings.FirewallScope) {
+        'LocalSubnet' { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
+        'Allowlist'   { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress $settings.FirewallAddresses -Action Allow -ErrorAction Stop | Out-Null }
+        'Blocklist'   {
+            # Local network, minus the listed addresses (Windows applies Block rules first).
+            New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
+            New-NetFirewallRule -DisplayName 'System Monitor (blocked)' @rule -RemoteAddress $settings.FirewallAddresses -Action Block -ErrorAction Stop | Out-Null
         }
-        $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
-        Write-Status "Firewall: port $($settings.Port) open ($who)."
-    } catch {
-        Write-Status -Warning "Could not update the firewall rule (needs administrator): $($_.Exception.Message)"
     }
+    $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
+    Write-Status "Firewall: port $($settings.Port) open ($who)."
+} catch {
+    Write-Status -Warning "Could not update the firewall rule (needs administrator): $($_.Exception.Message)"
 }
 
 Set-Step 'Starting the web server'
+# Listens on every address this machine has: its network IP, its name and localhost.
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://$($settings.ListenAddress):$($settings.Port)/")
+$listener.Prefixes.Add("http://+:$($settings.Port)/")
 try {
     $listener.Start()
-    $shownAddress = if ($settings.ListenAddress -eq '+') { $env:COMPUTERNAME } else { $settings.ListenAddress }
-    $url = "http://${shownAddress}:$($settings.Port)"
+    $url = "http://$($env:COMPUTERNAME):$($settings.Port)"
+    # Also show the network IP (of the adapter with the default route), which works even where names don't.
+    try {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | Sort-Object RouteMetric | Select-Object -First 1
+        $ip = (Get-NetIPAddress -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -ErrorAction Stop | Select-Object -First 1).IPAddress
+        if ($ip) { $url += "  or  http://${ip}:$($settings.Port)" }
+    } catch { }
 } catch {
     $listener = New-Object System.Net.HttpListener
     $listener.Prefixes.Add("http://localhost:$($settings.Port)/")
     $listener.Start()
     $url = "http://localhost:$($settings.Port)"
-    Write-Status -Warning "Could not listen on '$($settings.ListenAddress)' (needs administrator, or the address isn't on this machine), so only this machine can open the page."
+    Write-Status -Warning 'Not running as administrator, so only this machine can open the page.'
 }
 Stop-StartupSpinner
 Write-Host "System Monitor running at $url"
