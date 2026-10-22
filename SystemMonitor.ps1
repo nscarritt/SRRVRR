@@ -14,6 +14,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# --- GPU to watch -------------------------------------------------------------
+# Part of the graphics card's name as shown in Device Manager > Display adapters.
+# Only that card is counted on the GPU tile and in the table, so integrated
+# graphics are ignored. Set to '' to count every GPU.
+$gpuName = 'T600'
+
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page
 # main:  process that must be running for the row to show as online
@@ -37,6 +43,21 @@ if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
+# Windows lists each graphics card under this registry key with the same ID
+# (LUID) the GPU counters use, which lets us pick out the card by name.
+$gpuLuid = $null; $gpuLabel = $null
+if ($hasGpu -and $gpuName) {
+    $live = (New-Object System.Diagnostics.PerformanceCounterCategory 'GPU Adapter Memory').GetInstanceNames()
+    foreach ($key in Get-ChildItem HKLM:\SOFTWARE\Microsoft\DirectX -ErrorAction SilentlyContinue) {
+        $adapter = Get-ItemProperty $key.PSPath
+        if ($adapter.Description -notlike "*$gpuName*" -or $null -eq $adapter.AdapterLuid) { continue }
+        $l = [int64]$adapter.AdapterLuid
+        $luid = '0x{0:x8}_0x{1:x8}' -f ($l -shr 32), ($l -band 4294967295)
+        if ($live | Where-Object { $_ -like "luid_${luid}_*" }) { $gpuLuid = $luid; $gpuLabel = $adapter.Description; break }
+    }
+    if (-not $gpuLuid) { Write-Warning "No GPU matching '$gpuName' found; counting all GPUs." }
+}
+
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 $state = [hashtable]::Synchronized(@{
     ready = $false
@@ -44,6 +65,8 @@ $state = [hashtable]::Synchronized(@{
     cores = [int]$env:NUMBER_OF_PROCESSORS
     memTotal = $totalRam
     hasGpu = $hasGpu
+    gpuLabel = $gpuLabel
+    gpuMissing = if ($hasGpu -and $gpuName -and -not $gpuLuid) { $gpuName } else { $null }
 })
 
 # --- Per-process network ------------------------------------------------------
@@ -173,7 +196,7 @@ $state.netError = [ProcessNetTrace]::Error
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid)
     $cats = @{}
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
     $prev = $null
@@ -214,6 +237,7 @@ $sampler = {
                 $util = Get-Values 'GPU Engine' 'Utilization Percentage'
                 foreach ($k in $util.Keys) {
                     if ($k -match 'pid_(\d+)_luid_(\w+?_\w+?)_phys_(\d+)_eng_(\d+)_engtype_(.*)$') {
+                        if ($gpuLuid -and $matches[2] -ne $gpuLuid) { continue }   # another GPU
                         $key = "$($matches[2])|$($matches[3])|$($matches[4])"
                         if (-not $engines.ContainsKey($key)) { $engines[$key] = @{ v = 0.0; t = $matches[5] } }
                         $engines[$key].v += $util[$k]
@@ -277,7 +301,9 @@ $sampler = {
                 $state.tx = [math]::Round((Get-Sum (Get-Values 'Network Interface' 'Bytes Sent/sec')))
                 $state.gpu = [math]::Round([math]::Min(100, $gpu), 1)
                 $state.gpuEngine = $gpuEngine
-                $state.gpuMem = Get-Sum (Get-Values 'GPU Adapter Memory' 'Dedicated Usage')
+                $gpuMem = Get-Values 'GPU Adapter Memory' 'Dedicated Usage'
+                $state.gpuMem = 0
+                foreach ($k in $gpuMem.Keys) { if (-not $gpuLuid -or $k -like "luid_${gpuLuid}_*") { $state.gpuMem += $gpuMem[$k] } }
                 $state.ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
                 $state.error = $null
                 $state.ready = $true
@@ -295,7 +321,7 @@ $runspace = [runspacefactory]::CreateRunspace()
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid)
 [void]$worker.BeginInvoke()
 
 # --- Web page -----------------------------------------------------------------
@@ -414,6 +440,8 @@ function render(s) {
   if (s.hasGpu) {
     $('gpuV').textContent = s.gpu.toFixed(0) + '%';
     $('gpuS').textContent = (s.gpuEngine ? s.gpuEngine.toUpperCase() + ' engine \u00b7 ' : '') + gb(s.gpuMem) + ' GB dedicated memory';
+    const card = s.gpuLabel || (s.gpuMissing ? s.gpuMissing + ' not found, showing all GPUs' : '');
+    if (card) $('gpuS').textContent = card + ' ' + String.fromCharCode(183) + ' ' + $('gpuS').textContent;
   } else {
     $('gpuV').textContent = 'N/A';
     $('gpuS').textContent = 'No GPU counters on this machine';
