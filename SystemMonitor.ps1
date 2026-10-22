@@ -14,6 +14,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# --- Processes shown in the table under the graphs ----------------------------
+# name:  label on the page
+# main:  process that must be running for the row to show as online
+# match: every process counted toward the row (wildcards allowed)
+$services = @(
+    @{ name = 'Valheim'; main = 'valheim_server';    match = 'valheim_server' }
+    @{ name = 'Plex';    main = 'Plex Media Server'; match = 'Plex*' }   # includes Plex Transcoder etc.
+)
+
 # --- Which counters exist on this machine ------------------------------------
 $cat = [System.Diagnostics.PerformanceCounterCategory]
 if ($cat::Exists('Processor Information') -and $cat::CounterExists('% Processor Utility', 'Processor Information')) {
@@ -25,6 +34,7 @@ $categories = @($cpuCounter[0], 'Memory', 'Network Interface')
 $hasGpu = $cat::Exists('GPU Engine')
 if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
+if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 $state = [hashtable]::Synchronized(@{
@@ -35,15 +45,140 @@ $state = [hashtable]::Synchronized(@{
     hasGpu = $hasGpu
 })
 
+# --- Per-process network ------------------------------------------------------
+# Windows has no per-process network counter, so this listens to the kernel's
+# network events (the same source Resource Monitor uses) and adds up bytes per
+# process ID. Needs administrator.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public static class ProcessNetTrace {
+    const string SessionName = "SystemMonitorNet";
+    static readonly Guid KernelNetwork = new Guid("7DD42A49-5329-4832-8DFD-43D979153A88");
+
+    delegate void EventRecordCallback(IntPtr record);
+    static EventRecordCallback callback;   // must stay referenced while the trace runs
+    static Dictionary<int, long[]> totals = new Dictionary<int, long[]>();   // pid -> [sent, received]
+    static readonly object gate = new object();
+    public static string Error;
+    public static long EventsSeen;           // every event delivered, for troubleshooting
+    public static int TraceResult = -1;      // ProcessTrace's return code once it stops
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    static extern int StartTraceW(out ulong handle, string name, IntPtr properties);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    static extern int ControlTraceW(ulong handle, string name, IntPtr properties, uint code);
+    [DllImport("advapi32.dll")]
+    static extern int EnableTraceEx2(ulong handle, ref Guid provider, uint controlCode, byte level,
+        ulong matchAny, ulong matchAll, uint timeout, IntPtr parameters);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern ulong OpenTraceW(IntPtr logfile);
+    [DllImport("advapi32.dll")]
+    static extern int ProcessTrace(ulong[] handles, uint count, IntPtr start, IntPtr end);
+
+    static IntPtr Zeroed(int size) {
+        IntPtr p = Marshal.AllocHGlobal(size);
+        for (int i = 0; i < size; i++) Marshal.WriteByte(p, i, 0);
+        return p;
+    }
+
+    // EVENT_TRACE_PROPERTIES (120 bytes on x64) followed by room for the session name.
+    static IntPtr NewProperties() {
+        int size = 120 + 1024 * 2;
+        IntPtr p = Zeroed(size);
+        Marshal.WriteInt32(p, 0, size);          // Wnode.BufferSize
+        Marshal.WriteInt32(p, 40, 1);            // Wnode.ClientContext: QPC timestamps
+        Marshal.WriteInt32(p, 44, 0x00020000);   // Wnode.Flags: WNODE_FLAG_TRACED_GUID
+        Marshal.WriteInt32(p, 48, 64);           // BufferSize (KB)
+        Marshal.WriteInt32(p, 52, 16);           // MinimumBuffers
+        Marshal.WriteInt32(p, 56, 128);          // MaximumBuffers: room for bursts without dropping events
+        Marshal.WriteInt32(p, 64, 0x100);        // LogFileMode: EVENT_TRACE_REAL_TIME_MODE
+        Marshal.WriteInt32(p, 68, 1);            // FlushTimer (seconds)
+        Marshal.WriteInt32(p, 116, 120);         // LoggerNameOffset
+        return p;
+    }
+
+    public static void Stop() {
+        IntPtr p = NewProperties();
+        ControlTraceW(0, SessionName, p, 1);     // EVENT_TRACE_CONTROL_STOP
+        Marshal.FreeHGlobal(p);
+    }
+
+    public static bool Start() {
+        if (IntPtr.Size != 8) { Error = "needs 64-bit PowerShell"; return false; }
+        Stop();                                  // clear a session left behind by an earlier run
+        ulong session;
+        IntPtr props = NewProperties();
+        int rc = StartTraceW(out session, SessionName, props);
+        Marshal.FreeHGlobal(props);
+        if (rc != 0) { Error = rc == 5 ? "needs administrator" : "StartTrace error " + rc; return false; }
+
+        Guid provider = KernelNetwork;
+        rc = EnableTraceEx2(session, ref provider, 1, 5, ulong.MaxValue, 0, 0, IntPtr.Zero);
+        if (rc != 0) { Error = "EnableTrace error " + rc; Stop(); return false; }
+
+        // EVENT_TRACE_LOGFILE (448 bytes on x64)
+        IntPtr log = Zeroed(448);
+        Marshal.WriteIntPtr(log, 8, Marshal.StringToHGlobalUni(SessionName));   // LoggerName
+        Marshal.WriteInt32(log, 28, 0x100 | 0x10000000);   // ProcessTraceMode: real time, event records
+        callback = OnEvent;
+        Marshal.WriteIntPtr(log, 424, Marshal.GetFunctionPointerForDelegate(callback));   // EventRecordCallback
+        ulong trace = OpenTraceW(log);
+        if (trace == ulong.MaxValue) { Error = "OpenTrace error " + Marshal.GetLastWin32Error(); Stop(); return false; }
+
+        Thread t = new Thread(() => { TraceResult = ProcessTrace(new ulong[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); });
+        t.IsBackground = true;
+        t.Start();
+        return true;
+    }
+
+    static void OnEvent(IntPtr record) {
+        Interlocked.Increment(ref EventsSeen);
+        bool sent;
+        switch ((ushort)Marshal.ReadInt16(record, 40)) {   // EventHeader.EventDescriptor.Id
+            case 10: case 26: case 42: case 58: sent = true; break;    // TCP/UDP send, IPv4/IPv6
+            case 11: case 27: case 43: case 59: sent = false; break;   // TCP/UDP receive, IPv4/IPv6
+            default: return;
+        }
+        if ((ushort)Marshal.ReadInt16(record, 86) < 8) return;   // UserDataLength
+        IntPtr data = Marshal.ReadIntPtr(record, 96);             // UserData: PID, size, ...
+        int pid = Marshal.ReadInt32(data, 0);
+        long size = (uint)Marshal.ReadInt32(data, 4);
+        lock (gate) {
+            long[] t;
+            if (!totals.TryGetValue(pid, out t)) { t = new long[2]; totals[pid] = t; }
+            t[sent ? 0 : 1] += size;
+        }
+    }
+
+    // Bytes per process since the previous call.
+    public static Dictionary<int, long[]> Drain() {
+        lock (gate) {
+            Dictionary<int, long[]> d = totals;
+            totals = new Dictionary<int, long[]>();
+            return d;
+        }
+    }
+}
+'@
+$netPerProcess = [ProcessNetTrace]::Start()
+$state.netError = [ProcessNetTrace]::Error
+
 # --- Background sampler: one reading per second -------------------------------
 # Reads whole counter categories at once (much faster than Get-Counter when there
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess)
     $cats = @{}
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
     $prev = $null
+    $cpuTimes = @{}   # process id -> CPU seconds at the previous read
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $cores = [Environment]::ProcessorCount
 
     # @{ instance = value } for one counter, between the previous read and this one.
     function Get-Values($category, $counter) {
@@ -64,6 +199,8 @@ $sampler = {
         try {
             $cur = @{}
             foreach ($n in $cats.Keys) { $cur[$n] = $cats[$n].ReadCategory() }
+            $elapsed = $clock.Elapsed.TotalSeconds
+            $clock.Restart()
 
             if ($prev) {
                 $cpu = 0
@@ -72,16 +209,65 @@ $sampler = {
 
                 # Like Task Manager: add up every process on each engine, then report the busiest engine.
                 $engines = @{}
+                $gpuByProc = @{}   # process id -> @{ engine = utilization }
                 $util = Get-Values 'GPU Engine' 'Utilization Percentage'
                 foreach ($k in $util.Keys) {
-                    if ($k -match 'luid_(\w+?_\w+?)_phys_(\d+)_eng_(\d+)_engtype_(.*)$') {
-                        $key = "$($matches[1])|$($matches[2])|$($matches[3])"
-                        if (-not $engines.ContainsKey($key)) { $engines[$key] = @{ v = 0.0; t = $matches[4] } }
+                    if ($k -match 'pid_(\d+)_luid_(\w+?_\w+?)_phys_(\d+)_eng_(\d+)_engtype_(.*)$') {
+                        $key = "$($matches[2])|$($matches[3])|$($matches[4])"
+                        if (-not $engines.ContainsKey($key)) { $engines[$key] = @{ v = 0.0; t = $matches[5] } }
                         $engines[$key].v += $util[$k]
+                        $procId = [int]$matches[1]
+                        if (-not $gpuByProc.ContainsKey($procId)) { $gpuByProc[$procId] = @{} }
+                        $gpuByProc[$procId][$key] += $util[$k]
                     }
                 }
                 $gpu = 0; $gpuEngine = ''
                 foreach ($e in $engines.Values) { if ($e.v -gt $gpu) { $gpu = $e.v; $gpuEngine = $e.t } }
+
+                # Per-process rows: CPU and GPU the way Task Manager counts them, memory as a share of RAM.
+                $procs = Get-Process
+                $net = if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null }
+                $privateMem = @{}   # process id -> private working set
+                if ($cur.ContainsKey('Process')) {
+                    $ids = $cur['Process']['ID Process']; $ws = $cur['Process']['Working Set - Private']
+                    foreach ($k in $ws.Keys) { $i = $ids[$k]; if ($i) { $privateMem[[int]$i.RawValue] = $ws[$k].RawValue } }
+                }
+                $nextCpuTimes = @{}
+                $rows = @()
+                foreach ($svc in $services) {
+                    $group = @($procs | Where-Object { $_.ProcessName -like $svc.match })
+                    if (-not ($group | Where-Object { $_.ProcessName -eq $svc.main })) {
+                        $rows += @{ name = $svc.name; online = $false }
+                        continue
+                    }
+                    $cpuSec = 0.0; $mem = 0; $sent = 0; $recv = 0; $gpuEngines = @{}
+                    foreach ($p in $group) {
+                        $mem += if ($privateMem.ContainsKey($p.Id)) { $privateMem[$p.Id] } else { $p.WorkingSet64 }
+                        try {
+                            $t = $p.TotalProcessorTime.TotalSeconds
+                            if ($cpuTimes.ContainsKey($p.Id)) { $cpuSec += $t - $cpuTimes[$p.Id] }
+                            $nextCpuTimes[$p.Id] = $t
+                        } catch { }   # process exited or is not readable
+                        if ($gpuByProc.ContainsKey($p.Id)) {
+                            foreach ($e in $gpuByProc[$p.Id].Keys) { $gpuEngines[$e] += $gpuByProc[$p.Id][$e] }
+                        }
+                        $bytes = $null
+                        if ($net -and $net.TryGetValue($p.Id, [ref]$bytes)) { $sent += $bytes[0]; $recv += $bytes[1] }
+                    }
+                    $procGpu = 0
+                    foreach ($v in $gpuEngines.Values) { if ($v -gt $procGpu) { $procGpu = $v } }
+                    $rows += @{
+                        name   = $svc.name
+                        online = $true
+                        cpu    = [math]::Round([math]::Min(100, 100 * $cpuSec / ($elapsed * $cores)), 1)
+                        mem    = [math]::Round(100 * $mem / $totalRam, 1)
+                        gpu    = [math]::Round([math]::Min(100, $procGpu), 1)
+                        tx     = if ($net) { [math]::Round($sent / $elapsed) } else { $null }
+                        rx     = if ($net) { [math]::Round($recv / $elapsed) } else { $null }
+                    }
+                }
+                $cpuTimes = $nextCpuTimes
+                $state.services = $rows
 
                 $state.cpu = [math]::Round([math]::Min(100, $cpu), 1)
                 $state.memUsed = $totalRam - (Get-Sum (Get-Values 'Memory' 'Available Bytes'))
@@ -107,7 +293,7 @@ $runspace = [runspacefactory]::CreateRunspace()
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess)
 [void]$worker.BeginInvoke()
 
 # --- Web page -----------------------------------------------------------------
@@ -139,6 +325,17 @@ main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-wid
 canvas{display:block;width:100%;height:120px;margin-top:8px}
 .key{display:inline-flex;align-items:center;gap:5px;margin-right:12px}
 .key i{width:10px;height:3px;border-radius:2px;display:inline-block}
+.wide{grid-column:1/-1}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin-top:6px;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:500;font-size:12.5px;text-align:right;padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{text-align:right;padding:9px 10px;font-size:15px;white-space:nowrap}
+tr+tr td{border-top:1px solid var(--border)}
+th:first-child,td:first-child{text-align:left;padding-left:0;font-weight:600}
+td.offline{text-align:left;color:var(--muted)}
+td.up{color:var(--tx)} td.down{color:var(--rx)}
+#procNote{color:var(--muted);font-size:12.5px;margin-top:6px}
+@media (max-width:700px){th,td{padding-left:5px;padding-right:5px}td{font-size:14px}}
 </style>
 </head>
 <body>
@@ -152,6 +349,12 @@ canvas{display:block;width:100%;height:120px;margin-top:8px}
     <div class="sub" id="gpuS">&nbsp;</div><canvas id="gpuC"></canvas></section>
   <section class="card"><div class="top"><span class="label">Network</span><span class="value" id="netV">&ndash;</span></div>
     <div class="sub" id="netS">&nbsp;</div><canvas id="netC"></canvas></section>
+  <section class="card wide"><div class="label">Processes</div>
+    <div class="scroll"><table>
+      <thead><tr><th>Process</th><th>CPU</th><th>Memory</th><th>GPU</th><th>Up</th><th>Down</th></tr></thead>
+      <tbody id="procs"></tbody>
+    </table></div>
+    <div id="procNote" hidden></div></section>
 </main>
 <script>
 const N = 60, hist = {cpu: [], mem: [], gpu: [], rx: [], tx: []};
@@ -212,6 +415,17 @@ function render(s) {
   draw('gpuC', [{data: hist.gpu, color: css('--gpu'), fill: true}], 100);
   const netMax = niceMax(Math.max(...hist.rx, ...hist.tx, 0));
   draw('netC', [{data: hist.rx, color: css('--rx'), fill: true}, {data: hist.tx, color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax));
+  renderProcs(s);
+}
+function renderProcs(s) {
+  const pct = v => (v < 10 ? v.toFixed(1) : v.toFixed(0)) + '%';
+  const rate = v => v == null ? 'n/a' : bits(v);
+  $('procs').innerHTML = (s.services || []).map(p => p.online
+    ? '<tr><td>' + p.name + '</td><td>' + pct(p.cpu) + '</td><td>' + pct(p.mem) + '</td><td>' +
+      (s.hasGpu ? pct(p.gpu) : 'N/A') + '</td><td class="up">' + rate(p.tx) + '</td><td class="down">' + rate(p.rx) + '</td></tr>'
+    : '<tr><td>' + p.name + '</td><td class="offline" colspan="5">Offline</td></tr>').join('');
+  $('procNote').hidden = !s.netError;
+  $('procNote').textContent = s.netError ? 'Per-process network unavailable: ' + s.netError + '.' : '';
 }
 async function tick() {
   try {
@@ -287,6 +501,7 @@ try {
     }
 } finally {
     $listener.Stop()
+    if ($netPerProcess) { [ProcessNetTrace]::Stop() }
     $worker.Stop()
     $runspace.Close()
 }

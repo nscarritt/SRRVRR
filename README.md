@@ -17,7 +17,34 @@ Updated every second, each with a 60-second graph:
 | GPU     | Busiest GPU engine (e.g. 3D, video decode), plus dedicated GPU memory in use |
 | Network | Receive and send rates across all adapters |
 
+Below the graphs, a **Processes** table shows CPU, memory, GPU and network up/down for
+specific programs (by default a Valheim dedicated server and Plex), or "Offline" when
+they aren't running.
+
 The page follows your system's light/dark theme and works on phones.
+
+## Choosing which processes to show
+
+Edit the `$services` list near the top of `SystemMonitor.ps1`:
+
+```powershell
+$services = @(
+    @{ name = 'Valheim'; main = 'valheim_server';    match = 'valheim_server' }
+    @{ name = 'Plex';    main = 'Plex Media Server'; match = 'Plex*' }
+)
+```
+
+- `name` is the label on the page.
+- `main` is the process that must be running for the row to count as online.
+- `match` covers every process added into the row; wildcards are allowed, so `Plex*`
+  includes Plex Transcoder and Plex's other helpers.
+
+Process names are as shown by `Get-Process`, without `.exe`.
+
+Per-process numbers are calculated the way Task Manager does: CPU is a share of all
+cores, memory is private working set as a share of total RAM, and GPU is the busiest engine.
+Per-process network comes from Windows' kernel network events (the same source Resource
+Monitor uses) and needs the monitor to run as administrator; otherwise it shows "n/a".
 
 ## Requirements
 
