@@ -31,6 +31,10 @@ The header shows how long the server has been up (e.g. "Up 3 days, 4 hours") and
 **Restart pending** badge when Windows has installed updates that are waiting for a restart
 (checked every 60 seconds via the registry markers Windows Update and the servicing stack set).
 
+For NVIDIA cards, the GPU tile also shows the card's temperature next to its usage, from
+`nvidia-smi` (installed with NVIDIA's driver), updated every 5 seconds. It turns amber at 80 °C
+and red at 90 °C. AMD and Intel have no built-in equivalent, so their cards show no temperature.
+
 The page follows your system's light/dark theme and works on phones.
 
 ## Requirements

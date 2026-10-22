@@ -251,6 +251,14 @@ if ($gpu) {
 $gpuLuid = if ($gpu) { $gpu.Luid } else { $null }
 $gpuLabel = if ($gpu) { $gpu.Name } else { $null }
 $gpuVendor = if ($gpu) { $gpu.Vendor } else { '' }
+# GPU temperature comes from nvidia-smi, the command-line tool NVIDIA's driver
+# installs. AMD and Intel have no built-in equivalent, so their cards show none.
+$smiPath = $null
+if ($gpuVendor -eq 'nvidia') {
+    $smiPath = (Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue).Source
+    if (-not $smiPath -and (Test-Path "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe")) { $smiPath = "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe" }
+    Write-Status $(if ($smiPath) { "Temperature from $smiPath" } else { 'No nvidia-smi found, so no GPU temperature.' })
+}
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 # Windows' start time, read once; uptime is worked out from it on every request.
@@ -535,10 +543,22 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state)
+    param($state, $smiPath, $gpuName)
     $ProgressPreference = 'SilentlyContinue'   # no window to show progress in; don't let records pile up in memory
     $tick = 0
     while ($true) {
+        # GPU temperature, every 5 seconds: one line per NVIDIA card, "name, degrees C".
+        if ($smiPath) {
+            try {
+                $lines = @(& $smiPath --query-gpu=name,temperature.gpu --format=csv,noheader,nounits 2>$null)
+                $temp = $null
+                foreach ($line in $lines) {
+                    $name, $degrees = $line -split ',\s*', 2
+                    if ($name.Trim() -eq $gpuName -or $lines.Count -eq 1) { $temp = [int]$degrees; break }
+                }
+                $state.gpuTemp = $temp
+            } catch { $state.gpuTemp = $null }
+        }
         # Drives, every 30 seconds: space per volume, health of the disk it's on.
         if ($tick % 6 -eq 0) {
             try {
@@ -590,7 +610,8 @@ $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
 $slowWorker.Runspace = $slowRunspace
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel)
+if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 [void]$slowWorker.BeginInvoke()
 Write-Status 'Every 30 seconds: drive space and drive health'
 Write-Status 'Every 60 seconds: whether Windows is waiting to restart for updates'
@@ -630,6 +651,8 @@ main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-wid
 #gpuIcon svg{display:none}
 #gpuIcon[data-v=""] .v-generic,#gpuIcon[data-v="nvidia"] .v-nvidia,#gpuIcon[data-v="amd"] .v-amd,#gpuIcon[data-v="intel"] .v-intel{display:block}
 .value{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.temp{font-size:16px;color:var(--muted);margin-right:10px}
+.temp.warn{color:var(--warn)} .temp.hot{color:var(--bad)}
 .sub{color:var(--muted);font-size:12.5px;min-height:18px;font-variant-numeric:tabular-nums}
 canvas{display:block;width:100%;height:120px;margin-top:8px}
 .key{display:inline-flex;align-items:center;gap:5px;margin-right:12px}
@@ -673,7 +696,7 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/></svg>Memory</span><span class="value" id="memV">&ndash;</span></div>
     <div class="sub" id="memS">&nbsp;</div><canvas id="memC"></canvas></section>
-  <section class="card"><div class="top"><span class="label"><span id="gpuIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21V3M2 5h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2.26M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3"/><circle cx="16" cy="11" r="2"/><circle cx="8" cy="11" r="2"/></svg><svg class="ticon brand v-nvidia" viewBox="0 0 271.5 179.7" aria-label="NVIDIA"><path d="M101.3,53.6V37.4c1.6-0.1,3.2-0.2,4.8-0.2c44.4-1.4,73.5,38.2,73.5,38.2S148.2,119,114.5,119c-4.5,0-8.9-0.7-13.1-2.1V67.7c17.3,2.1,20.8,9.7,31.1,27l23.1-19.4c0,0-16.9-22.1-45.3-22.1C107.3,53.1,104.3,53.3,101.3,53.6 M101.3,0v24.2c1.6-0.1,3.2-0.2,4.8-0.3c61.7-2.1,102,50.6,102,50.6s-46.2,56.2-94.3,56.2c-4.2,0-8.3-0.4-12.4-1.1v15c3.4,0.4,6.9,0.7,10.3,0.7c44.8,0,77.2-22.9,108.6-49.9c5.2,4.2,26.5,14.3,30.9,18.7c-29.8,25-99.3,45.1-138.7,45.1c-3.8,0-7.4-0.2-11-0.6v21.1h170.2V0L101.3,0z M101.3,116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22,52.9-25.6v14h-0.1c-17.3-2.1-30.9,14.1-30.9,14.1S78,109,101.3,116.9 M27.8,77.4c0,0,24.5-36.2,73.6-40V24.2C47,28.6,0,74.6,0,74.6s26.6,77,101.3,84v-14C46.5,137.8,27.8,77.4,27.8,77.4z"/></svg><svg class="ticon brand v-amd" viewBox="106.4 0 33.32 33.33" aria-label="AMD"><polygon points="130.64 9.08 115.75 9.08 106.68 0 139.72 0 139.72 33.05 130.64 23.97 130.64 9.08"/><polygon points="115.74 23.98 115.74 10.9 106.4 20.24 106.4 33.33 119.48 33.33 128.82 23.98 115.74 23.98"/></svg><svg class="ticon brand v-intel" viewBox="4.7 2.2 357 150.4" aria-label="Intel"><rect x="4.7" y="5.2" width="28.1" height="28.1"/><path d="M32.1,151.6V50.3H5.4v101.2h26.7V151.6z M208.9,152.6v-24.8c-3.9,0-7.2-0.2-9.6-0.6c-2.8-0.4-4.9-1.4-6.3-2.8 c-1.4-1.4-2.3-3.4-2.8-6.1c-0.4-2.5-0.6-5.8-0.6-9.8V73.2h19.3V50.3h-19.3V10.9h-26.7v97.9c0,8.3,0.7,15.3,2.1,20.9 c1.4,5.5,3.8,10,7.1,13.4s7.7,5.8,13,7.3c5.4,1.5,12.2,2.2,20.3,2.2L208.9,152.6L208.9,152.6z M361.7,151.6V3.1H335v148.5H361.7z M137.2,60.3c-7.4-8-17.8-12-31-12c-6.4,0-12.3,1.3-17.5,3.9C83.4,54.8,79,58.4,75.4,63L74,64.9v-1.7V50.3H47.7v101.2h26.5V97.6v3.7 c0-0.6,0-1.2,0-1.8c0.3-9.5,2.6-16.5,7-21c4.7-4.8,10.4-7.2,16.9-7.2c7.7,0,13.6,2.4,17.5,7c3.8,4.6,5.8,11.1,5.8,19.4l0,0V98l0,0 l0,0v53.5h26.9V94.1C148.4,79.7,144.6,68.3,137.2,60.3z M321.2,100.8c0-7.3-1.3-14.1-3.8-20.5c-2.6-6.3-6.2-11.9-10.7-16.7 c-4.6-4.8-10.1-8.5-16.5-11.2s-13.5-4-21.2-4c-7.3,0-14.2,1.4-20.6,4.1c-6.4,2.8-12,6.5-16.7,11.2s-8.5,10.3-11.2,16.7 c-2.8,6.4-4.1,13.3-4.1,20.6c0,7.3,1.3,14.2,3.9,20.6c2.6,6.4,6.3,12,10.9,16.7c4.6,4.7,10.3,8.5,16.9,11.2 c6.6,2.8,13.9,4.2,21.7,4.2c22.6,0,36.6-10.3,45-19.9l-19.2-14.6c-4,4.8-13.6,11.3-25.6,11.3c-7.5,0-13.7-1.7-18.4-5.2 c-4.7-3.4-7.9-8.2-9.6-14.1l-0.3-0.9h79.5L321.2,100.8L321.2,100.8z M241.9,91.5c0-7.4,8.5-20.3,26.8-20.4 c18.3,0,26.9,12.9,26.9,20.3L241.9,91.5z"/></svg></span>GPU</span><span class="value" id="gpuV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><span id="gpuIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21V3M2 5h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2.26M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3"/><circle cx="16" cy="11" r="2"/><circle cx="8" cy="11" r="2"/></svg><svg class="ticon brand v-nvidia" viewBox="0 0 271.5 179.7" aria-label="NVIDIA"><path d="M101.3,53.6V37.4c1.6-0.1,3.2-0.2,4.8-0.2c44.4-1.4,73.5,38.2,73.5,38.2S148.2,119,114.5,119c-4.5,0-8.9-0.7-13.1-2.1V67.7c17.3,2.1,20.8,9.7,31.1,27l23.1-19.4c0,0-16.9-22.1-45.3-22.1C107.3,53.1,104.3,53.3,101.3,53.6 M101.3,0v24.2c1.6-0.1,3.2-0.2,4.8-0.3c61.7-2.1,102,50.6,102,50.6s-46.2,56.2-94.3,56.2c-4.2,0-8.3-0.4-12.4-1.1v15c3.4,0.4,6.9,0.7,10.3,0.7c44.8,0,77.2-22.9,108.6-49.9c5.2,4.2,26.5,14.3,30.9,18.7c-29.8,25-99.3,45.1-138.7,45.1c-3.8,0-7.4-0.2-11-0.6v21.1h170.2V0L101.3,0z M101.3,116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22,52.9-25.6v14h-0.1c-17.3-2.1-30.9,14.1-30.9,14.1S78,109,101.3,116.9 M27.8,77.4c0,0,24.5-36.2,73.6-40V24.2C47,28.6,0,74.6,0,74.6s26.6,77,101.3,84v-14C46.5,137.8,27.8,77.4,27.8,77.4z"/></svg><svg class="ticon brand v-amd" viewBox="106.4 0 33.32 33.33" aria-label="AMD"><polygon points="130.64 9.08 115.75 9.08 106.68 0 139.72 0 139.72 33.05 130.64 23.97 130.64 9.08"/><polygon points="115.74 23.98 115.74 10.9 106.4 20.24 106.4 33.33 119.48 33.33 128.82 23.98 115.74 23.98"/></svg><svg class="ticon brand v-intel" viewBox="4.7 2.2 357 150.4" aria-label="Intel"><rect x="4.7" y="5.2" width="28.1" height="28.1"/><path d="M32.1,151.6V50.3H5.4v101.2h26.7V151.6z M208.9,152.6v-24.8c-3.9,0-7.2-0.2-9.6-0.6c-2.8-0.4-4.9-1.4-6.3-2.8 c-1.4-1.4-2.3-3.4-2.8-6.1c-0.4-2.5-0.6-5.8-0.6-9.8V73.2h19.3V50.3h-19.3V10.9h-26.7v97.9c0,8.3,0.7,15.3,2.1,20.9 c1.4,5.5,3.8,10,7.1,13.4s7.7,5.8,13,7.3c5.4,1.5,12.2,2.2,20.3,2.2L208.9,152.6L208.9,152.6z M361.7,151.6V3.1H335v148.5H361.7z M137.2,60.3c-7.4-8-17.8-12-31-12c-6.4,0-12.3,1.3-17.5,3.9C83.4,54.8,79,58.4,75.4,63L74,64.9v-1.7V50.3H47.7v101.2h26.5V97.6v3.7 c0-0.6,0-1.2,0-1.8c0.3-9.5,2.6-16.5,7-21c4.7-4.8,10.4-7.2,16.9-7.2c7.7,0,13.6,2.4,17.5,7c3.8,4.6,5.8,11.1,5.8,19.4l0,0V98l0,0 l0,0v53.5h26.9V94.1C148.4,79.7,144.6,68.3,137.2,60.3z M321.2,100.8c0-7.3-1.3-14.1-3.8-20.5c-2.6-6.3-6.2-11.9-10.7-16.7 c-4.6-4.8-10.1-8.5-16.5-11.2s-13.5-4-21.2-4c-7.3,0-14.2,1.4-20.6,4.1c-6.4,2.8-12,6.5-16.7,11.2s-8.5,10.3-11.2,16.7 c-2.8,6.4-4.1,13.3-4.1,20.6c0,7.3,1.3,14.2,3.9,20.6c2.6,6.4,6.3,12,10.9,16.7c4.6,4.7,10.3,8.5,16.9,11.2 c6.6,2.8,13.9,4.2,21.7,4.2c22.6,0,36.6-10.3,45-19.9l-19.2-14.6c-4,4.8-13.6,11.3-25.6,11.3c-7.5,0-13.7-1.7-18.4-5.2 c-4.7-3.4-7.9-8.2-9.6-14.1l-0.3-0.9h79.5L321.2,100.8L321.2,100.8z M241.9,91.5c0-7.4,8.5-20.3,26.8-20.4 c18.3,0,26.9,12.9,26.9,20.3L241.9,91.5z"/></svg></span>GPU</span><span class="value"><span class="temp" id="gpuTemp"></span><span id="gpuV">&ndash;</span></span></div>
     <div class="sub" id="gpuS">&nbsp;</div><canvas id="gpuC"></canvas></section>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>Network</span><span class="value" id="netV">&ndash;</span></div>
     <div class="sub" id="netS">&nbsp;</div><canvas id="netC"></canvas></section>
@@ -738,6 +761,9 @@ function render(s) {
   $('memV').textContent = memPct.toFixed(0) + '%';
   $('memS').textContent = gb(s.memUsed) + ' / ' + gb(s.memTotal) + ' GB in use';
   $('gpuIcon').dataset.v = s.gpuVendor || '';
+  const t = s.gpuTemp;                // degrees C from nvidia-smi; amber at 80, red at 90
+  $('gpuTemp').textContent = t == null ? '' : t + String.fromCharCode(176) + 'C';
+  $('gpuTemp').className = 'temp' + (t >= 90 ? ' hot' : t >= 80 ? ' warn' : '');
   if (s.hasGpu) {
     $('gpuV').textContent = s.gpu.toFixed(0) + '%';
     $('gpuS').textContent = (s.gpuEngine ? s.gpuEngine.toUpperCase() + ' engine \u00b7 ' : '') + gb(s.gpuMem) + ' GB dedicated memory';

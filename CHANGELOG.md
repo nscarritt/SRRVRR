@@ -18,6 +18,8 @@ called out under **Changed** or **Removed** with upgrade notes.
 - **Uptime and pending restart** in the header: "Up 3 days, 4 hours", plus a "Restart pending"
   badge when Windows Update or the servicing stack is waiting on a restart (checked every
   60 seconds).
+- **GPU temperature** on the GPU tile for NVIDIA cards, from `nvidia-smi`, every 5 seconds;
+  amber at 80 °C, red at 90 °C.
 
 ## [0.2.0] - 2026-10-22
 
