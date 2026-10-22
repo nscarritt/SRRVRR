@@ -1,9 +1,8 @@
-# System Monitor settings
+# SRRVRR settings
 #
-# Copy this file to SystemMonitor.config.psd1 (in the same folder as
-# SystemMonitor.ps1) and edit the copy. SystemMonitor.config.psd1 is not part
-# of the code, so updating System Monitor never overwrites your settings.
-# Restart System Monitor after changing anything.
+# Copy this file to SRRVRR.config.psd1 (in the same folder as SRRVRR.ps1) and
+# edit the copy. SRRVRR.config.psd1 is not part of the code, so updating
+# SRRVRR never overwrites your settings. Restart SRRVRR after changing anything.
 @{
     # --- Web page -------------------------------------------------------------
 
@@ -15,7 +14,7 @@
     # --- Windows Firewall -----------------------------------------------------
 
     # Other PCs can only open the page through the firewall, so on every start
-    # the monitor sets up an inbound rule named "System Monitor" for Port
+    # the monitor sets up an inbound rule named "SRRVRR" for Port
     # (needs administrator). This chooses who that rule lets in. The page is
     # meant for local networks only (see AllowPublicAddresses below for the
     # one, at-your-own-risk exception).
