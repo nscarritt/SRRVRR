@@ -15,13 +15,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# --- Startup spinner ----------------------------------------------------------
-# Starting up takes a few seconds with nothing to print (compiling, querying
-# Windows, firewall), so a spinner on a background thread shows it's working,
-# labelled with the current step. Messages go through Write-Status so they
-# don't collide with the spinner line. Skipped when output goes to a file.
+# --- Startup steps ------------------------------------------------------------
+# Each startup step prints its own numbered line, with anything it finds on the
+# lines under it, so it's clear what the script is doing. A spinner on a
+# background thread sits below the current step while it works. Messages go
+# through Write-Status so they don't collide with the spinner line. The spinner
+# is skipped when output goes to a file.
 $startup = [hashtable]::Synchronized(@{
-    Label  = 'Starting up'
+    Step   = 0
+    Steps  = 8        # number of Set-Step calls below
     Active = -not [Console]::IsOutputRedirected
     Lock   = New-Object Object
     Width  = 70
@@ -36,9 +38,7 @@ if ($startup.Active) {
             [System.Threading.Monitor]::Enter($s.Lock)
             try {
                 if ($s.Active) {
-                    $line = "  $($frames[$i++ % 4])  Starting up: $($s.Label)..."
-                    if ($line.Length -gt $s.Width) { $line = $line.Substring(0, $s.Width) }
-                    [Console]::Write("`r" + $line.PadRight($s.Width))
+                    [Console]::Write("`r" + "      $($frames[$i++ % 4])  working...".PadRight($s.Width))
                 }
             } finally { [System.Threading.Monitor]::Exit($s.Lock) }
             Start-Sleep -Milliseconds 150
@@ -46,13 +46,40 @@ if ($startup.Active) {
     }).AddArgument($startup)
     [void]$startupSpinner.BeginInvoke()
 }
-function Set-Step([string]$label) { $startup.Label = $label }
-function Write-Status([string]$message, [switch]$Warning) {
+function Write-Status([string]$message, [switch]$Warning, [switch]$Step) {
     [System.Threading.Monitor]::Enter($startup.Lock)
     try {
         if ($startup.Active) { [Console]::Write("`r" + (' ' * $startup.Width) + "`r") }   # clear the spinner line
-        if ($Warning) { Write-Warning $message } else { Write-Host $message }
+        if ($Warning) { Write-Warning $message }
+        elseif ($Step) { Write-Host $message }
+        else { Write-Host "      $message" }   # details sit under their step
     } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
+}
+function Set-Step([string]$label) {
+    $startup.Step++
+    Write-Status -Step "[$($startup.Step)/$($startup.Steps)] $label"
+}
+# Runs Windows commands in their own PowerShell pipeline so that any progress
+# PowerShell reports while doing them (e.g. "Preparing modules for first use")
+# is printed as plain lines under the current step, instead of a progress box.
+# Returns the commands' output; errors come back as normal errors.
+function Invoke-Reported([scriptblock]$Script, [hashtable]$Arguments = @{}) {
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($Script.ToString()).AddParameters($Arguments)
+    $handle = $ps.BeginInvoke()
+    $seen = 0; $last = ''
+    while (-not $handle.IsCompleted -or $seen -lt $ps.Streams.Progress.Count) {
+        while ($seen -lt $ps.Streams.Progress.Count) {
+            $p = $ps.Streams.Progress[$seen++]
+            $status = "$($p.StatusDescription)".Trim()
+            $text = "PowerShell: $($p.Activity.Trim())" + $(if ($status -and $status -ne $p.Activity.Trim()) { " - $status" } else { '' })
+            if ($p.RecordType -ne 'Completed' -and $text -ne $last) { Write-Status $text; $last = $text }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    try { $ps.EndInvoke($handle) }
+    catch { if ($_.Exception.InnerException) { throw $_.Exception.InnerException } else { throw } }
+    finally { $ps.Dispose() }
 }
 function Stop-StartupSpinner {
     [System.Threading.Monitor]::Enter($startup.Lock)
@@ -165,7 +192,7 @@ $services = @(
 $services = @($services)
 
 # --- Which counters exist on this machine ------------------------------------
-Set-Step 'Checking performance counters'
+Set-Step 'Checking Windows performance counters'
 $cat = [System.Diagnostics.PerformanceCounterCategory]
 if ($cat::Exists('Processor Information') -and $cat::CounterExists('% Processor Utility', 'Processor Information')) {
     $cpuCounter = 'Processor Information', '% Processor Utility'   # same number Task Manager shows
@@ -178,7 +205,7 @@ if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
-Set-Step 'Finding the GPU'
+Set-Step 'Finding the graphics card'
 # Windows lists each graphics card under this registry key, with the name dxdiag
 # shows, its vendor, and the same ID (LUID) the GPU counters use, which lets us
 # pick out one card.
@@ -232,10 +259,11 @@ $state = [hashtable]::Synchronized(@{
 })
 
 # --- Per-process network ------------------------------------------------------
-Set-Step 'Preparing network tracking'
+Set-Step 'Preparing per-program network tracking (Windows network events)'
 # Windows has no per-process network counter, so this listens to the kernel's
 # network events (the same source Resource Monitor uses) and adds up bytes per
 # process ID. Needs administrator.
+Write-Status 'Compiling the network event reader (C# code built into this script)'
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -353,6 +381,7 @@ public static class ProcessNetTrace {
 '@
 $netPerProcess = [ProcessNetTrace]::Start()
 $state.netError = [ProcessNetTrace]::Error
+Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } else { "Per-program network tracking is off ($([ProcessNetTrace]::Error))." })
 
 # --- Background sampler: one reading per second -------------------------------
 # Reads whole counter categories at once (much faster than Get-Counter when there
@@ -480,7 +509,7 @@ $sampler = {
     }
 }
 
-Set-Step 'Starting the sampler'
+Set-Step 'Starting the once-a-second sampler'
 $runspace = [runspacefactory]::CreateRunspace()
 $runspace.Open()
 $worker = [powershell]::Create()
@@ -662,28 +691,32 @@ tick();
 '@
 
 # --- HTTP server --------------------------------------------------------------
-Set-Step 'Setting up the firewall'
+Set-Step 'Setting up the Windows Firewall rule'
 # Other PCs can only reach the page through the firewall, so the rule is always
 # set up, and rebuilt on every start to match the current settings.
 try {
-    $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $settings.Port }
-    Get-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
-    switch ($settings.FirewallScope) {
-        'LocalSubnet' { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
-        'Allowlist'   { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress $settings.FirewallAddresses -Action Allow -ErrorAction Stop | Out-Null }
-        'Blocklist'   {
-            # Local network, minus the listed addresses (Windows applies Block rules first).
-            New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
-            New-NetFirewallRule -DisplayName 'System Monitor (blocked)' @rule -RemoteAddress $settings.FirewallAddresses -Action Block -ErrorAction Stop | Out-Null
+    $firewallArgs = @{ Port = $settings.Port; Scope = $settings.FirewallScope; Addresses = $settings.FirewallAddresses }
+    Invoke-Reported -Arguments $firewallArgs -Script {
+        param($Port, $Scope, $Addresses)
+        $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $Port }
+        Get-NetFirewallRule -DisplayName 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+        switch ($Scope) {
+            'LocalSubnet' { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
+            'Allowlist'   { New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress $Addresses -Action Allow -ErrorAction Stop | Out-Null }
+            'Blocklist'   {
+                # Local network, minus the listed addresses (Windows applies Block rules first).
+                New-NetFirewallRule -DisplayName 'System Monitor' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
+                New-NetFirewallRule -DisplayName 'System Monitor (blocked)' @rule -RemoteAddress $Addresses -Action Block -ErrorAction Stop | Out-Null
+            }
         }
-    }
+    } | Out-Null
     $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
     Write-Status "Firewall: port $($settings.Port) open ($who)."
 } catch {
     Write-Status -Warning "Could not update the firewall rule (needs administrator): $($_.Exception.Message)"
 }
 
-Set-Step 'Starting the web server'
+Set-Step 'Starting the web page server'
 # Listens on every address this machine has: its network IP, its name and localhost.
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://+:$($settings.Port)/")
@@ -692,8 +725,10 @@ try {
     $url = "http://$($env:COMPUTERNAME):$($settings.Port)"
     # Also show the network IP (of the adapter with the default route), which works even where names don't.
     try {
-        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | Sort-Object RouteMetric | Select-Object -First 1
-        $ip = (Get-NetIPAddress -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -ErrorAction Stop | Select-Object -First 1).IPAddress
+        $ip = Invoke-Reported -Script {
+            $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop | Sort-Object RouteMetric | Select-Object -First 1
+            (Get-NetIPAddress -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -ErrorAction Stop | Select-Object -First 1).IPAddress
+        } | Select-Object -First 1
         if ($ip) { $url += "  or  http://${ip}:$($settings.Port)" }
     } catch { }
 } catch {
@@ -703,6 +738,9 @@ try {
     $url = "http://localhost:$($settings.Port)"
     Write-Status -Warning 'Not running as administrator, so only this machine can open the page.'
 }
+
+# A nod to SimCity 2000 and The Sims, whose loading screens famously did this too.
+Set-Step 'Reticulating Splines...'
 Stop-StartupSpinner
 Write-Host "System Monitor running at $url"
 
