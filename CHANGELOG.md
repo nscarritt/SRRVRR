@@ -9,6 +9,12 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Changed
+
+- **License changed from MIT to the
+  [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)**:
+  noncommercial use only. Versions 0.1.0 to 0.3.0 remain available under MIT.
+
 ## [0.3.0] - 2026-10-22
 
 Server health at a glance: storage, uptime and restarts, and GPU temperature.

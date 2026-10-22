@@ -218,7 +218,22 @@ Logos and icons are built into the script, so the page needs no internet access:
 
 ## License
 
-[MIT](LICENSE) © 2026 nscarritt. Provided "as is", without warranty of any kind; see the
-[Disclaimer and limitation of liability](#disclaimer-and-limitation-of-liability) above.
-Valheim, Plex, NVIDIA, AMD and Intel logos are trademarks of their respective owners and are used only to
-identify those products; they are not covered by this license.
+Copyright 2026 nscarritt. Licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE)
+([official text](https://polyformproject.org/licenses/noncommercial/1.0.0)).
+
+In short (the license text is what counts):
+
+- **Noncommercial use only.** Personal use, hobby projects, research and use by charities,
+  schools and public bodies are allowed. Commercial use is not.
+- You may share it and changes you make, for noncommercial purposes, keeping the license and the
+  `Required Notice` line with it.
+- No warranty and no liability; see also the
+  [Disclaimer and limitation of liability](#disclaimer-and-limitation-of-liability) above.
+
+Versions 0.1.0 to 0.3.0 were released under the MIT License; copies obtained under those
+releases keep their MIT terms. This license applies from the next version on.
+
+Valheim, Plex, NVIDIA, AMD and Intel logos are trademarks of their respective owners and are
+used only to identify those products; they are not covered by this license. The CPU, memory,
+network, GPU and storage icons are from [Lucide](https://lucide.dev) (ISC license).
