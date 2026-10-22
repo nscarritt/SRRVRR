@@ -14,7 +14,7 @@ Updated every second, each with a 60-second graph:
 |---------|---------|
 | CPU     | Overall utilization (the same number Task Manager shows) |
 | Memory  | % used and GB used / total |
-| GPU     | Busiest engine (e.g. 3D, video decode) of one chosen GPU, plus its dedicated memory in use |
+| GPU     | Busiest engine (e.g. 3D, video decode) of one chosen GPU, plus its dedicated memory in use. The tile shows the card maker's logo (NVIDIA, AMD or Intel) |
 | Network | Receive and send rates across all adapters |
 
 Below the graphs, a **Processes** table shows CPU, memory, GPU and network up/down for
@@ -37,7 +37,8 @@ The page follows your system's light/dark theme and works on phones.
 2. Copy `SystemMonitor.config.example.psd1` to `SystemMonitor.config.psd1` and edit it
    (see [Settings](#settings)). Without it, the defaults below are used.
 3. Right-click `Start System Monitor.bat` > **Run as administrator**.
-4. Open `http://<that-machine>:8099` from any browser on your network.
+4. Open the address the window shows, e.g. `http://<that-machine>:8099` or
+   `http://<its-IP>:8099`, from any browser on your network.
 
 Leave the window open while you want monitoring. Close it (or press Ctrl+C) to stop.
 
@@ -52,14 +53,11 @@ copying a new version of the code never overwrites it. When updating, replace on
 
 | Setting | Default | Values |
 |---------|---------|--------|
-| `Port` | `8099` | Port the dashboard is served on. |
-| `ListenAddress` | `'+'` | `'+'` = every address on this machine. An IP address of this machine (e.g. `'192.168.1.50'`) = only that address. `'localhost'` = only this machine can open the page. |
-| `OpenFirewall` | `$true` | `$true` = on every start, set up a Windows Firewall rule named "System Monitor" for `Port` (needs administrator). `$false` = leave the firewall alone. |
-| `FirewallScope` | `'LocalSubnet'` | Who the firewall lets in: `'LocalSubnet'` = devices on the same local network. `'Allowlist'` = only `FirewallAddresses`. `'Blocklist'` = the local network, except `FirewallAddresses`. |
+| `Port` | `8099` | Port the dashboard is served on. The monitor always listens on this machine's own addresses (its name, its network IP and `localhost`). |
+| `FirewallScope` | `'LocalSubnet'` | The firewall rule is always set up, since other PCs can't reach the page without it. This chooses who it lets in: `'LocalSubnet'` = devices on the same local network. `'Allowlist'` = only `FirewallAddresses`. `'Blocklist'` = the local network, except `FirewallAddresses`. |
 | `FirewallAddresses` | `@()` | Addresses for `Allowlist`/`Blocklist`: single IPs, ranges or subnets, e.g. `@('192.168.1.20', '192.168.1.100-192.168.1.120', '10.0.0.0/24')`. Private addresses only: `192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`, `169.254.x.x`, `127.x.x.x`, IPv6 `fe80::/10` and `fc00::/7`; anything else stops the monitor with a message (but see `AllowPublicAddresses`). |
 | `AllowPublicAddresses` | `$false` | **Security risk, at your own risk.** `$true` lets an `Allowlist` also contain specific public (internet) IPs, single addresses only. Read [Security warning: public IP addresses](#security-warning-public-ip-addresses) first. |
-| `PreferredGpu` | `''` | Part of a graphics card's name as shown in Device Manager > Display adapters, e.g. `'T600'`. `''` = skip and use `GpuFallback`. |
-| `GpuFallback` | `'Dedicated'` | GPU to show when `PreferredGpu` is empty or not found: `'Dedicated'` = the graphics card (the GPU with the most video memory). `'Integrated'` = the processor's built-in graphics (the least). `'All'` = add up every GPU. |
+| `PreferredGpu` | `''` | The graphics card to show, by its exact name as Windows reports it (dxdiag > Display > Name, or Device Manager > Display adapters), e.g. `'NVIDIA T600'`. Not case-sensitive. `''`, or a name that isn't found, = the GPU with the most video memory. The console lists every GPU it finds at startup, so you can copy the name. |
 | `Processes` | all `$true` | One switch per built-in table row, e.g. `@{ Valheim = $true; Plex = $false }`. `$false` hides that row; the table disappears when every row is hidden. |
 
 Example:
@@ -67,31 +65,36 @@ Example:
 ```powershell
 @{
     Port              = 8099
-    ListenAddress     = '+'
-    OpenFirewall      = $true
     FirewallScope     = 'LocalSubnet'
     FirewallAddresses = @()
-    PreferredGpu      = 'T600'
-    GpuFallback       = 'Dedicated'
+    PreferredGpu      = 'NVIDIA T600'
     Processes         = @{ Valheim = $true; Plex = $true }
 }
 ```
 
 `SystemMonitor.config.example.psd1` has the same settings with comments explaining each one.
-Unknown settings are ignored with a warning; invalid `FirewallScope` or `GpuFallback` values
-stop the monitor with a message saying what's allowed.
+Unknown settings are ignored with a warning; an invalid `FirewallScope` value stops the monitor
+with a message saying what's allowed.
 
-### Command-line overrides
+### Upgrading from an older version
+
+`ListenAddress`, `OpenFirewall` and `GpuFallback` are no longer used: the monitor always listens
+on this machine's own addresses, always sets up the firewall rule, and falls back to the GPU with
+the most video memory. An old config still works; the monitor just notes that those settings can
+be deleted. `PreferredGpu` now needs the card's full name (e.g. `'NVIDIA T600'` rather than
+`'T600'`); if it doesn't match, the startup message lists the names to choose from.
+
+### Command-line override
 
 ```powershell
-.\SystemMonitor.ps1 [-Port <number>] [-OpenFirewall]
+.\SystemMonitor.ps1 [-Port <number>]
 ```
 
-`-Port` and `-OpenFirewall` override the config file for that run.
+`-Port` overrides the config file for that run.
 
 ### Firewall rules
 
-With `OpenFirewall = $true`, the rules are rebuilt on every start to match the current settings:
+The rules are rebuilt on every start to match the current settings:
 
 - `LocalSubnet`, `Allowlist`: one Allow rule, "System Monitor".
 - `Blocklist`: an Allow rule for the local network plus a Block rule, "System Monitor (blocked)",
@@ -171,8 +174,8 @@ either with the `Processes` setting.
   firewall rule: `Get-NetFirewallRule -DisplayName 'System Monitor'`.
 - **"The process cannot access the file because it is being used by another process":**
   something else is using the port. Pick another `Port`.
-- **GPU tile says "... not found, showing ...":** `PreferredGpu` doesn't match any card's name;
-  check Device Manager > Display adapters.
+- **GPU tile says "... not found, showing ...":** `PreferredGpu` doesn't exactly match any card's
+  name. The startup message lists the names Windows reports; copy one into the config.
 - **GPU shows N/A:** the machine has no GPU performance counters (e.g. no GPU or a basic display driver).
 - **Script won't run (execution policy):** use the `.bat` launcher, or run
   `powershell -ExecutionPolicy Bypass -File .\SystemMonitor.ps1`.
@@ -183,16 +186,19 @@ A background loop reads Windows performance counters once per second
 (`Processor Information`, `Memory`, `Network Interface`, `GPU Engine`, `GPU Adapter Memory`,
 `Process`) and keeps the latest values in memory. A small built-in web server (`HttpListener`)
 serves the dashboard page at `/` and the latest readings as JSON at `/stats`, which the page polls.
-The GPU is picked through Windows' DirectX adapter list in the registry, which uses the same
-adapter IDs as the GPU counters.
+The GPU is picked through Windows' DirectX adapter list in the registry (the same names dxdiag
+shows), which uses the same adapter IDs as the GPU counters and also gives the card's vendor ID
+for the logo: NVIDIA (`10DE`), AMD (`1002`/`1022`) or Intel (`8086`); anything else gets a
+plain GPU icon.
 
 Logos and icons are built into the script, so the page needs no internet access: Valheim emblem
-(valheimgame.com), Plex chevron (Plex Media Server), NVIDIA eye mark (nvidia.com), and CPU/RAM/network
-icons from [Lucide](https://lucide.dev) (ISC license).
+(valheimgame.com), Plex chevron (Plex Media Server), NVIDIA eye mark (nvidia.com), AMD arrow
+(amd.com), Intel wordmark (Intel's 2020 logo), and CPU/RAM/network/GPU icons from
+[Lucide](https://lucide.dev) (ISC license).
 
 ## License
 
 [MIT](LICENSE) © 2026 nscarritt. Provided "as is", without warranty of any kind; see the
 [Disclaimer and limitation of liability](#disclaimer-and-limitation-of-liability) above.
-Valheim, Plex and NVIDIA logos are trademarks of their respective owners and are used only to
+Valheim, Plex, NVIDIA, AMD and Intel logos are trademarks of their respective owners and are used only to
 identify those products; they are not covered by this license.
