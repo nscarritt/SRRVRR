@@ -6,6 +6,8 @@ browser on your network.
 
 One PowerShell script. Nothing to install.
 
+Current version: **0.2.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
+
 ## What it shows
 
 Updated every second, each with a 60-second graph:
