@@ -612,7 +612,7 @@ $html = @'
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,"Segoe UI",sans-serif}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;max-width:1100px;margin:0 auto;padding:20px 24px 0}
 h1{font-size:18px;margin:0;font-weight:600;display:inline}
-#uptime{color:var(--muted);font-size:13px;margin-left:10px;font-variant-numeric:tabular-nums}
+#uptime{color:var(--muted);font-size:13px;margin-left:10px;font-variant-numeric:tabular-nums;white-space:nowrap;display:inline-block}
 #restart{color:var(--warn);border:1px solid var(--warn);border-radius:999px;font-size:12px;font-weight:600;padding:1px 8px;margin-left:8px;white-space:nowrap}
 #status{color:var(--muted);font-size:13px}
 #status.bad{color:var(--bad)}
