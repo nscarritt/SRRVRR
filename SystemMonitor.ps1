@@ -327,7 +327,8 @@ canvas{display:block;width:100%;height:120px;margin-top:8px}
 .key i{width:10px;height:3px;border-radius:2px;display:inline-block}
 .wide{grid-column:1/-1}
 .scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;margin-top:6px;font-variant-numeric:tabular-nums}
+table{width:100%;min-width:440px;table-layout:fixed;border-collapse:collapse;margin-top:6px;font-variant-numeric:tabular-nums}
+th,td{overflow:hidden;text-overflow:ellipsis}
 th{color:var(--muted);font-weight:500;font-size:12.5px;text-align:right;padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
 td{text-align:right;padding:9px 10px;font-size:15px;white-space:nowrap}
 tr+tr td{border-top:1px solid var(--border)}
@@ -351,6 +352,7 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
     <div class="sub" id="netS">&nbsp;</div><canvas id="netC"></canvas></section>
   <section class="card wide"><div class="label">Processes</div>
     <div class="scroll"><table>
+      <colgroup><col style="width:24%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:20%"><col style="width:20%"></colgroup>
       <thead><tr><th>Process</th><th>CPU</th><th>Memory</th><th>GPU</th><th>Up</th><th>Down</th></tr></thead>
       <tbody id="procs"></tbody>
     </table></div>
