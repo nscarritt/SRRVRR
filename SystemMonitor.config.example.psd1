@@ -23,8 +23,8 @@
     # $false: leave the firewall alone
     OpenFirewall = $true
 
-    # Who the firewall lets in. The page is for local networks only; there is
-    # no option to open it to the internet.
+    # Who the firewall lets in. The page is meant for local networks only
+    # (see AllowPublicAddresses below for the one, at-your-own-risk exception).
     #   'LocalSubnet' devices on the same local network (default)
     #   'Allowlist'   only the addresses in FirewallAddresses
     #   'Blocklist'   the local network, except the addresses in FirewallAddresses
@@ -35,6 +35,15 @@
     # Only private addresses are accepted: 192.168.x.x, 10.x.x.x, 172.16-31.x.x,
     # 169.254.x.x, 127.x.x.x, and IPv6 fe80::/10 and fc00::/7.
     FirewallAddresses = @()
+
+    # !!! SECURITY RISK - AT YOUR OWN RISK !!!
+    # $true lets an Allowlist also contain specific PUBLIC (internet) IPs,
+    # one single address each (no ranges or subnets). Anyone using an allowed
+    # IP can see this page, which has NO password and NO encryption, once your
+    # router forwards Port to this machine. Read "Security warning: public IP
+    # addresses" in the README before turning this on. The authors accept no
+    # liability for any consequences of enabling it.
+    AllowPublicAddresses = $false
 
     # --- GPU ------------------------------------------------------------------
 

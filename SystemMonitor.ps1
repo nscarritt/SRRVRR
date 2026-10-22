@@ -25,6 +25,7 @@ $settings = @{
     OpenFirewall      = $true
     FirewallScope     = 'LocalSubnet'
     FirewallAddresses = @()
+    AllowPublicAddresses = $false
     PreferredGpu      = ''
     GpuFallback       = 'Dedicated'
     Processes         = @{}
@@ -49,8 +50,10 @@ if ($settings.FirewallScope -in 'Allowlist', 'Blocklist' -and -not $settings.Fir
     throw "FirewallScope '$($settings.FirewallScope)' needs at least one address in FirewallAddresses."
 }
 
-# The page is for local networks only, so every firewall address must be private:
+# The page is meant for local networks, so firewall addresses must be private:
 # 10.x, 172.16-31.x, 192.168.x, 169.254.x, 127.x, or IPv6 fe80::/10 and fc00::/7.
+# The one exception: with AllowPublicAddresses, an Allowlist may also name
+# single public IPs, at the user's own risk (see the README's security warning).
 function Test-PrivateAddress([string]$entry) {
     function Test-Ip([string]$text, [int]$prefix) {
         $ip = $null
@@ -73,9 +76,23 @@ function Test-PrivateAddress([string]$entry) {
     if ($entry -match '^(.+)-(.+)$') { return (Test-Ip $matches[1] 128) -and (Test-Ip $matches[2] 128) }
     Test-Ip $entry 128
 }
+# One specific address, written out in full: no ranges, subnets or "any" addresses.
+function Test-SingleAddress([string]$entry) {
+    $ip = $null
+    if ($entry -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -and $entry -notmatch ':') { return $false }
+    if (-not [System.Net.IPAddress]::TryParse($entry, [ref]$ip)) { return $false }
+    -not ($ip.Equals([System.Net.IPAddress]::Any) -or $ip.Equals([System.Net.IPAddress]::IPv6Any) -or $ip.Equals([System.Net.IPAddress]::Broadcast))
+}
 $public = @($settings.FirewallAddresses | Where-Object { -not (Test-PrivateAddress $_) })
 if ($settings.FirewallScope -ne 'LocalSubnet' -and $public) {
-    throw "FirewallAddresses must be private (local network) addresses. Not allowed: $($public -join ', ')"
+    if ($settings.FirewallScope -ne 'Allowlist' -or -not $settings.AllowPublicAddresses) {
+        $hint = if ($settings.FirewallScope -eq 'Allowlist') { ' To let specific public IPs in AT YOUR OWN RISK, set AllowPublicAddresses = $true (read the README security warning first).' } else { '' }
+        throw "FirewallAddresses must be private (local network) addresses. Not allowed: $($public -join ', ').$hint"
+    }
+    $wide = @($public | Where-Object { -not (Test-SingleAddress $_) })
+    if ($wide) { throw "Public addresses must be single IPs, not ranges, subnets or 'any' addresses. Not allowed: $($wide -join ', ')" }
+    Write-Warning ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
+        "which has no password and no encryption: $($public -join ', '). You accept this risk; see the README security warning.")
 }
 $fallbacks = 'Dedicated', 'Integrated', 'All'
 if ($settings.GpuFallback -notin $fallbacks) { throw "GpuFallback must be one of: $($fallbacks -join ', ')" }
