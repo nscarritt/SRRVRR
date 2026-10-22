@@ -518,13 +518,70 @@ $sampler = {
     }
 }
 
-Set-Step 'Starting the once-a-second sampler'
+Set-Step 'Starting the background samplers'
 $runspace = [runspacefactory]::CreateRunspace()
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
 [void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid)
 [void]$worker.BeginInvoke()
+Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
+
+# --- Slow checks --------------------------------------------------------------
+# Things that change slowly and take a few hundred milliseconds to read (like
+# disk health) run on their own background thread every few seconds, so they
+# never stall the once-a-second graphs. The loop ticks every 5 seconds; each
+# check runs on its own multiple of that.
+$slowChecks = {
+    param($state)
+    $ProgressPreference = 'SilentlyContinue'   # no window to show progress in; don't let records pile up in memory
+    $tick = 0
+    while ($true) {
+        # Drives, every 30 seconds: space per volume, health of the disk it's on.
+        if ($tick % 6 -eq 0) {
+            try {
+                $diskOf = @{}   # drive letter -> disk number
+                foreach ($part in Get-Partition -ErrorAction SilentlyContinue) {
+                    if ($part.DriveLetter) { $diskOf[[string]$part.DriveLetter] = [int]$part.DiskNumber }
+                }
+                # Physical disks report SMART-based health; Get-Disk also covers
+                # virtual disks such as Storage Spaces.
+                $health = @{}   # disk number -> @{ name; health }
+                foreach ($d in Get-Disk -ErrorAction SilentlyContinue) { $health[[int]$d.Number] = @{ name = $d.FriendlyName; health = [string]$d.HealthStatus } }
+                foreach ($d in Get-PhysicalDisk -ErrorAction SilentlyContinue) {
+                    $n = 0
+                    if ([int]::TryParse($d.DeviceId, [ref]$n)) { $health[$n] = @{ name = $d.FriendlyName; health = [string]$d.HealthStatus } }
+                }
+                $drives = @()
+                foreach ($v in Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Sort-Object DeviceID) {
+                    if ([double]$v.Size -lt 1GB) { continue }   # tiny system/metadata partitions aren't storage people use
+                    $disk = $null
+                    $letter = $v.DeviceID.TrimEnd(':')
+                    if ($diskOf.ContainsKey($letter)) { $disk = $health[$diskOf[$letter]] }
+                    $drives += @{
+                        letter = $v.DeviceID
+                        label  = $v.VolumeName
+                        size   = [double]$v.Size
+                        free   = [double]$v.FreeSpace
+                        disk   = if ($disk) { $disk.name } else { $null }
+                        health = if ($disk) { $disk.health } else { $null }
+                    }
+                }
+                $state.drives = $drives
+                $state.drivesError = $null
+            } catch { $state.drivesError = $_.Exception.Message }
+        }
+        $tick++
+        Start-Sleep -Seconds 5
+    }
+}
+$slowRunspace = [runspacefactory]::CreateRunspace()
+$slowRunspace.Open()
+$slowWorker = [powershell]::Create()
+$slowWorker.Runspace = $slowRunspace
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state)
+[void]$slowWorker.BeginInvoke()
+Write-Status 'Every 30 seconds: drive space and drive health'
 
 # --- Web page -----------------------------------------------------------------
 $html = @'
@@ -536,9 +593,9 @@ $html = @'
 <title>SRRVRR</title>
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--text:#1b1f24;--muted:#667080;--grid:rgba(0,0,0,.07);--border:#e2e5e9;
-  --cpu:#1f7ae0;--mem:#8e44c9;--gpu:#139068;--rx:#d9661f;--tx:#c2185b;--bad:#d33}
+  --cpu:#1f7ae0;--mem:#8e44c9;--gpu:#139068;--rx:#d9661f;--tx:#c2185b;--bad:#d33;--warn:#b7791f;--ok:#139068}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e23;--text:#e8eaed;--muted:#9aa3ad;--grid:rgba(255,255,255,.07);--border:#2a2f36;
-  --cpu:#4c9bff;--mem:#b67cf0;--gpu:#3ccf98;--rx:#ff9a52;--tx:#f2669a;--bad:#ff6b6b}}
+  --cpu:#4c9bff;--mem:#b67cf0;--gpu:#3ccf98;--rx:#ff9a52;--tx:#f2669a;--bad:#ff6b6b;--warn:#f0b429;--ok:#3ccf98}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,"Segoe UI",sans-serif}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;max-width:1100px;margin:0 auto;padding:20px 24px 0}
@@ -578,6 +635,20 @@ td.offline{text-align:left;color:var(--muted)}
 .plogo-plex{background-image:url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3MiA3MiI+PGRlZnM+PHJhZGlhbEdyYWRpZW50IGlkPSJnIiBjeD0iLjYyIiBjeT0iLjU1IiByPSIuNjIiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2Y5YmUyMCIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2NjN2MxOSIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHdpZHRoPSI3MiIgaGVpZ2h0PSI3MiIgZmlsbD0iIzFmMWYxZiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuOSA3LjkpIHNjYWxlKC43OCkiIGZpbGw9InVybCgjZykiIGQ9Ik0xNC4wMyAwIDM3LjA5IDM2IDE0LjAzIDcyaDIwLjg4TDU3Ljk3IDM2IDM0LjkxIDB6Ii8+PC9zdmc+)}
 td.up{color:var(--tx)} td.down{color:var(--rx)}
 #procNote{color:var(--muted);font-size:12.5px;margin-top:6px}
+/* Storage: one row per drive - name, usage bar, used/total, disk health */
+.drive{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,2fr) 9.5em 7.5em;gap:14px;align-items:center;padding:9px 0;font-variant-numeric:tabular-nums}
+.drive+.drive{border-top:1px solid var(--border)}
+.drive b{font-weight:600}
+.drive .dname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drive .dname span{color:var(--muted);margin-left:6px}
+.bar{height:10px;border-radius:5px;background:var(--grid);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--mem)}
+.bar.warn i{background:var(--warn)} .bar.crit i{background:var(--bad)}
+.dsize{text-align:right;white-space:nowrap}
+.dhealth{text-align:right;white-space:nowrap;font-weight:600}
+.dhealth.ok{color:var(--ok)} .dhealth.warn{color:var(--warn)} .dhealth.bad{color:var(--bad)} .dhealth.unknown{color:var(--muted);font-weight:400}
+@media (max-width:700px){.drive{grid-template-columns:1fr auto;grid-template-areas:"name health" "bar bar" "size size";gap:6px 10px}
+  .drive .dname{grid-area:name} .drive .bar{grid-area:bar} .drive .dsize{grid-area:size;text-align:left;color:var(--muted)} .drive .dhealth{grid-area:health}}
 @media (max-width:700px){th,td{padding-left:5px;padding-right:5px}td{font-size:14px}}
 </style>
 </head>
@@ -599,6 +670,8 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
       <tbody id="procs"></tbody>
     </table></div>
     <div id="procNote" hidden></div></section>
+  <section class="card wide" id="driveCard" hidden><div class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"/></svg>Storage</div>
+    <div id="drives"></div></section>
 </main>
 <script>
 const N = 60, hist = {cpu: [], mem: [], gpu: [], rx: [], tx: []};
@@ -661,6 +734,24 @@ function render(s) {
   const netMax = niceMax(Math.max(...hist.rx, ...hist.tx, 0));
   draw('netC', [{data: hist.rx, color: css('--rx'), fill: true}, {data: hist.tx, color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax));
   renderProcs(s);
+  renderDrives(s);
+}
+function size(b) {                  // bytes -> "931 GB" / "7.3 TB"
+  return b >= 1e12 ? (b / 1099511627776).toFixed(1) + ' TB' : (b / 1073741824).toFixed(0) + ' GB';
+}
+function renderDrives(s) {
+  const drives = s.drives || [];
+  $('driveCard').hidden = !drives.length;
+  $('drives').innerHTML = drives.map(d => {
+    const used = d.size - d.free, pct = d.size ? 100 * used / d.size : 0;
+    const level = pct >= 95 ? 'crit' : pct >= 85 ? 'warn' : '';        // amber at 85% full, red at 95%
+    const h = d.health || '', cls = h === 'Healthy' ? 'ok' : h === 'Warning' ? 'warn' : h === 'Unhealthy' ? 'bad' : 'unknown';
+    const title = (d.disk ? d.disk + ': ' : '') + (h || 'health not reported');
+    return '<div class="drive"><div class="dname"><b>' + d.letter + '</b><span>' + (d.label || 'Local Disk') + '</span></div>' +
+      '<div class="bar ' + level + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
+      '<div class="dsize">' + size(used) + ' / ' + size(d.size) + ' &middot; ' + pct.toFixed(0) + '%</div>' +
+      '<div class="dhealth ' + cls + '" title="' + title + '">' + (h || 'Unknown') + '</div></div>';
+  }).join('');
 }
 function renderProcs(s) {
   const pct = v => (v < 10 ? v.toFixed(1) : v.toFixed(0)) + '%';
@@ -798,4 +889,6 @@ try {
     if ($netPerProcess) { [ProcessNetTrace]::Stop() }
     $worker.Stop()
     $runspace.Close()
+    $slowWorker.Stop()
+    $slowRunspace.Close()
 }
