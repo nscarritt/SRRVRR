@@ -617,7 +617,22 @@ try {
     $url = "http://localhost:$($settings.Port)"
     Write-Warning "Could not listen on '$($settings.ListenAddress)' (needs administrator, or the address isn't on this machine), so only this machine can open the page."
 }
-Write-Host "System Monitor running at $url  (Ctrl+C to stop)"
+Write-Host "System Monitor running at $url"
+
+# A spinner on the last console line shows the monitor is alive. Skipped when
+# output goes to a file instead of a console window.
+$spinner = -not [Console]::IsOutputRedirected
+$spinFrames = '|', '\', '-', '/'
+$spinFrame = 0
+$lastSpin = [DateTime]::MinValue
+function Show-Spinner {
+    if (-not $spinner) { return }
+    $now = [DateTime]::UtcNow
+    if (($now - $script:lastSpin).TotalMilliseconds -lt 150) { return }
+    $script:lastSpin = $now
+    [Console]::Write("`r  $($spinFrames[$script:spinFrame++ % 4])  Running... press Ctrl+C to stop ")
+}
+if ($spinner) { try { [Console]::CursorVisible = $false } catch { } }
 
 function Send-Response($ctx, [string]$body, [string]$type) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($body)
@@ -631,7 +646,8 @@ function Send-Response($ctx, [string]$body, [string]$type) {
 try {
     while ($listener.IsListening) {
         $pending = $listener.BeginGetContext($null, $null)
-        while (-not $pending.AsyncWaitHandle.WaitOne(250)) { }   # short waits keep Ctrl+C responsive
+        while (-not $pending.AsyncWaitHandle.WaitOne(50)) { Show-Spinner }   # short waits keep Ctrl+C responsive
+        Show-Spinner
         $ctx = $listener.EndGetContext($pending)
         try {
             if ($ctx.Request.Url.AbsolutePath -eq '/stats') {
@@ -644,6 +660,7 @@ try {
         } catch { }   # browser went away mid-response
     }
 } finally {
+    if ($spinner) { [Console]::WriteLine("`r  Stopped.                                "); try { [Console]::CursorVisible = $true } catch { } }
     $listener.Stop()
     if ($netPerProcess) { [ProcessNetTrace]::Stop() }
     $worker.Stop()
