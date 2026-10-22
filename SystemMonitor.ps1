@@ -319,7 +319,10 @@ main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-wid
 @media (max-width:700px){header{padding:16px 16px 0}main{grid-template-columns:1fr;padding:12px 16px 16px}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px 12px;min-width:0}
 .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.label{font-weight:600}
+.label{font-weight:600;font-size:22px;display:inline-flex;align-items:center;gap:8px}   /* ~85% of the 26px metric */
+/* Tile icons: CPU, memory and network from Lucide (lucide.dev, ISC license); NVIDIA eye mark from nvidia.com */
+.ticon{height:1em;width:1em;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ticon.brand{width:auto;fill:currentColor;stroke:none}
 .value{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .sub{color:var(--muted);font-size:12.5px;min-height:18px;font-variant-numeric:tabular-nums}
 canvas{display:block;width:100%;height:120px;margin-top:8px}
@@ -341,13 +344,13 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
 <body>
 <header><h1 id="host">System Monitor</h1><span id="status">Connecting&hellip;</span></header>
 <main>
-  <section class="card"><div class="top"><span class="label">CPU</span><span class="value" id="cpuV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>CPU</span><span class="value" id="cpuV">&ndash;</span></div>
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
-  <section class="card"><div class="top"><span class="label">Memory</span><span class="value" id="memV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/></svg>Memory</span><span class="value" id="memV">&ndash;</span></div>
     <div class="sub" id="memS">&nbsp;</div><canvas id="memC"></canvas></section>
-  <section class="card"><div class="top"><span class="label">GPU</span><span class="value" id="gpuV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><svg class="ticon brand" viewBox="0 0 271.5 179.7" aria-label="NVIDIA"><path d="M101.3,53.6V37.4c1.6-0.1,3.2-0.2,4.8-0.2c44.4-1.4,73.5,38.2,73.5,38.2S148.2,119,114.5,119c-4.5,0-8.9-0.7-13.1-2.1V67.7c17.3,2.1,20.8,9.7,31.1,27l23.1-19.4c0,0-16.9-22.1-45.3-22.1C107.3,53.1,104.3,53.3,101.3,53.6 M101.3,0v24.2c1.6-0.1,3.2-0.2,4.8-0.3c61.7-2.1,102,50.6,102,50.6s-46.2,56.2-94.3,56.2c-4.2,0-8.3-0.4-12.4-1.1v15c3.4,0.4,6.9,0.7,10.3,0.7c44.8,0,77.2-22.9,108.6-49.9c5.2,4.2,26.5,14.3,30.9,18.7c-29.8,25-99.3,45.1-138.7,45.1c-3.8,0-7.4-0.2-11-0.6v21.1h170.2V0L101.3,0z M101.3,116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22,52.9-25.6v14h-0.1c-17.3-2.1-30.9,14.1-30.9,14.1S78,109,101.3,116.9 M27.8,77.4c0,0,24.5-36.2,73.6-40V24.2C47,28.6,0,74.6,0,74.6s26.6,77,101.3,84v-14C46.5,137.8,27.8,77.4,27.8,77.4z"/></svg>GPU</span><span class="value" id="gpuV">&ndash;</span></div>
     <div class="sub" id="gpuS">&nbsp;</div><canvas id="gpuC"></canvas></section>
-  <section class="card"><div class="top"><span class="label">Network</span><span class="value" id="netV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>Network</span><span class="value" id="netV">&ndash;</span></div>
     <div class="sub" id="netS">&nbsp;</div><canvas id="netC"></canvas></section>
   <section class="card wide"><div class="label">Processes</div>
     <div class="scroll"><table>
