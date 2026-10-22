@@ -16,7 +16,63 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# --- Startup spinner ----------------------------------------------------------
+# Starting up takes a few seconds with nothing to print (compiling, querying
+# Windows, firewall), so a spinner on a background thread shows it's working,
+# labelled with the current step. Messages go through Write-Status so they
+# don't collide with the spinner line. Skipped when output goes to a file.
+$startup = [hashtable]::Synchronized(@{
+    Label  = 'Starting up'
+    Active = -not [Console]::IsOutputRedirected
+    Lock   = New-Object Object
+    Width  = 70
+})
+if ($startup.Active) {
+    try { $startup.Width = [Math]::Min(70, [Console]::WindowWidth - 1); [Console]::CursorVisible = $false } catch { }
+    $startupSpinner = [powershell]::Create()
+    [void]$startupSpinner.AddScript({
+        param($s)
+        $frames = '|', '\', '-', '/'; $i = 0
+        while ($s.Active) {
+            [System.Threading.Monitor]::Enter($s.Lock)
+            try {
+                if ($s.Active) {
+                    $line = "  $($frames[$i++ % 4])  Starting up: $($s.Label)..."
+                    if ($line.Length -gt $s.Width) { $line = $line.Substring(0, $s.Width) }
+                    [Console]::Write("`r" + $line.PadRight($s.Width))
+                }
+            } finally { [System.Threading.Monitor]::Exit($s.Lock) }
+            Start-Sleep -Milliseconds 150
+        }
+    }).AddArgument($startup)
+    [void]$startupSpinner.BeginInvoke()
+}
+function Set-Step([string]$label) { $startup.Label = $label }
+function Write-Status([string]$message, [switch]$Warning) {
+    [System.Threading.Monitor]::Enter($startup.Lock)
+    try {
+        if ($startup.Active) { [Console]::Write("`r" + (' ' * $startup.Width) + "`r") }   # clear the spinner line
+        if ($Warning) { Write-Warning $message } else { Write-Host $message }
+    } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
+}
+function Stop-StartupSpinner {
+    [System.Threading.Monitor]::Enter($startup.Lock)
+    try {
+        if ($startup.Active) { $startup.Active = $false; [Console]::Write("`r" + (' ' * $startup.Width) + "`r") }
+    } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
+}
+# Any error that stops the script: clear the spinner and show one plain message
+# instead of PowerShell's error block.
+trap {
+    Stop-StartupSpinner
+    try { [Console]::CursorVisible = $true } catch { }
+    Write-Host ''
+    Write-Host "System Monitor stopped: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
 # --- Settings -----------------------------------------------------------------
+Set-Step 'Reading settings'
 # Defaults, replaced by anything set in SystemMonitor.config.psd1. That file is
 # not part of the code (see .gitignore), so updates never overwrite it.
 $settings = @{
@@ -35,11 +91,11 @@ if (Test-Path -LiteralPath $configPath) {
     $config = Import-PowerShellDataFile -LiteralPath $configPath
     foreach ($k in $config.Keys) {
         if ($settings.ContainsKey($k)) { $settings[$k] = $config[$k] }
-        else { Write-Warning "Unknown setting '$k' in $configPath (ignored)." }
+        else { Write-Status -Warning "Unknown setting '$k' in $configPath (ignored)." }
     }
-    Write-Host "Settings loaded from $configPath"
+    Write-Status "Settings loaded from $configPath"
 } else {
-    Write-Host 'No SystemMonitor.config.psd1 found, using default settings. Copy SystemMonitor.config.example.psd1 to SystemMonitor.config.psd1 to change them.'
+    Write-Status 'No SystemMonitor.config.psd1 found, using default settings. Copy SystemMonitor.config.example.psd1 to SystemMonitor.config.psd1 to change them.'
 }
 if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
 if ($OpenFirewall) { $settings.OpenFirewall = $true }
@@ -91,7 +147,7 @@ if ($settings.FirewallScope -ne 'LocalSubnet' -and $public) {
     }
     $wide = @($public | Where-Object { -not (Test-SingleAddress $_) })
     if ($wide) { throw "Public addresses must be single IPs, not ranges, subnets or 'any' addresses. Not allowed: $($wide -join ', ')" }
-    Write-Warning ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
+    Write-Status -Warning ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
         "which has no password and no encryption: $($public -join ', '). You accept this risk; see the README security warning.")
 }
 $fallbacks = 'Dedicated', 'Integrated', 'All'
@@ -109,6 +165,7 @@ $services = @(
 $services = @($services)
 
 # --- Which counters exist on this machine ------------------------------------
+Set-Step 'Checking performance counters'
 $cat = [System.Diagnostics.PerformanceCounterCategory]
 if ($cat::Exists('Processor Information') -and $cat::CounterExists('% Processor Utility', 'Processor Information')) {
     $cpuCounter = 'Processor Information', '% Processor Utility'   # same number Task Manager shows
@@ -121,6 +178,7 @@ if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
+Set-Step 'Finding the GPU'
 # Windows lists each graphics card under this registry key with the same ID
 # (LUID) the GPU counters use, which lets us pick out one card.
 $gpus = @{}   # luid -> card
@@ -139,7 +197,7 @@ if ($hasGpu) {
 $gpu = $null; $gpuNote = $null
 if ($settings.PreferredGpu) {
     $gpu = $gpus.Values | Where-Object { $_.Name -like "*$($settings.PreferredGpu)*" } | Select-Object -First 1
-    if (-not $gpu) { $gpuNote = "$($settings.PreferredGpu) not found"; Write-Warning "No GPU matching '$($settings.PreferredGpu)'; using GpuFallback '$($settings.GpuFallback)'." }
+    if (-not $gpu) { $gpuNote = "$($settings.PreferredGpu) not found"; Write-Status -Warning "No GPU matching '$($settings.PreferredGpu)'; using GpuFallback '$($settings.GpuFallback)'." }
 }
 if (-not $gpu -and $gpus.Count) {
     # A graphics card has far more dedicated video memory than built-in graphics.
@@ -161,6 +219,7 @@ $state = [hashtable]::Synchronized(@{
 })
 
 # --- Per-process network ------------------------------------------------------
+Set-Step 'Preparing network tracking'
 # Windows has no per-process network counter, so this listens to the kernel's
 # network events (the same source Resource Monitor uses) and adds up bytes per
 # process ID. Needs administrator.
@@ -408,6 +467,7 @@ $sampler = {
     }
 }
 
+Set-Step 'Starting the sampler'
 $runspace = [runspacefactory]::CreateRunspace()
 $runspace.Open()
 $worker = [powershell]::Create()
@@ -583,6 +643,7 @@ tick();
 '@
 
 # --- HTTP server --------------------------------------------------------------
+Set-Step 'Setting up the firewall'
 # Rebuilt on every start so the rules always match the current settings.
 if ($settings.OpenFirewall) {
     try {
@@ -598,12 +659,13 @@ if ($settings.OpenFirewall) {
             }
         }
         $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
-        Write-Host "Firewall: port $($settings.Port) open ($who)."
+        Write-Status "Firewall: port $($settings.Port) open ($who)."
     } catch {
-        Write-Warning "Could not update the firewall rule (needs administrator): $($_.Exception.Message)"
+        Write-Status -Warning "Could not update the firewall rule (needs administrator): $($_.Exception.Message)"
     }
 }
 
+Set-Step 'Starting the web server'
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://$($settings.ListenAddress):$($settings.Port)/")
 try {
@@ -615,8 +677,9 @@ try {
     $listener.Prefixes.Add("http://localhost:$($settings.Port)/")
     $listener.Start()
     $url = "http://localhost:$($settings.Port)"
-    Write-Warning "Could not listen on '$($settings.ListenAddress)' (needs administrator, or the address isn't on this machine), so only this machine can open the page."
+    Write-Status -Warning "Could not listen on '$($settings.ListenAddress)' (needs administrator, or the address isn't on this machine), so only this machine can open the page."
 }
+Stop-StartupSpinner
 Write-Host "System Monitor running at $url"
 
 # A spinner on the last console line shows the monitor is alive. Skipped when
