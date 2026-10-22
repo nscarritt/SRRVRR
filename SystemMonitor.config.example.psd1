@@ -43,9 +43,9 @@
 
     # The graphics card to show, by its exact name as Windows reports it: the
     # "Name" under Display in dxdiag, or Device Manager > Display adapters,
-    # e.g. 'NVIDIA T600' or 'AMD Radeon RX 7800 XT'. The console lists the
-    # GPUs it finds every time it starts, so you can copy the name from there.
-    # Leave it '' (or if the name isn't found) to use the GPU with the most
+    # e.g. 'NVIDIA T600' or 'AMD Radeon RX 7800 XT'. The console shows the
+    # card in use when it starts, and lists every GPU's name if this one isn't
+    # found. Leave it '' (or if the name isn't found) to use the GPU with the most
     # video memory. The GPU tile shows that card maker's logo (NVIDIA, AMD or
     # Intel).
     PreferredGpu = ''

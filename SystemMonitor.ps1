@@ -210,8 +210,10 @@ if ($settings.PreferredGpu) {
 }
 if (-not $gpu -and $byMemory) { $gpu = $byMemory[0] }
 if ($gpu) {
-    $why = if ($settings.PreferredGpu -and -not $gpuNote) { 'PreferredGpu' } else { 'most video memory' }
-    Write-Status ("GPU: $($gpu.Name) ($why)" + $(if ($byMemory.Count -gt 1) { '. Others: ' + (($byMemory | Where-Object { $_ -ne $gpu } | ForEach-Object { $_.Name }) -join ', ') } else { '' }))
+    # Just the card and its size, as Windows reports them, e.g. "NVIDIA T600 (dot) 4 GB".
+    $gb = $gpu.Dedicated / 1GB
+    $size = if ($gb -ge 2) { ' {0} {1:0} GB' -f [char]0x00B7, $gb } elseif ($gb -gt 0) { ' {0} {1:0.#} GB' -f [char]0x00B7, $gb } else { '' }
+    Write-Status "$($gpu.Name)$size"
 }
 $gpuLuid = if ($gpu) { $gpu.Luid } else { $null }
 $gpuLabel = if ($gpu) { $gpu.Name } else { $null }
