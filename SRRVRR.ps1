@@ -736,8 +736,9 @@ function render(s) {
   renderProcs(s);
   renderDrives(s);
 }
-function size(b) {                  // bytes -> "931 GB" / "7.3 TB"
-  return b >= 1e12 ? (b / 1099511627776).toFixed(1) + ' TB' : (b / 1073741824).toFixed(0) + ' GB';
+function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
+  const TB = 1099511627776, GB = 1073741824;
+  return b >= TB ? (b / TB).toFixed(1) + ' TB' : (b / GB).toFixed(0) + ' GB';
 }
 function renderDrives(s) {
   const drives = s.drives || [];
