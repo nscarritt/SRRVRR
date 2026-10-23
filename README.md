@@ -181,6 +181,14 @@ Resource Monitor uses) and needs the monitor to run as administrator; otherwise 
 The built-in rows are Valheim (`valheim_server.exe`) and Plex (`Plex Media Server.exe`); hide
 either with the `Processes` setting.
 
+Under each running process, a quiet detail line says what it's doing:
+
+- **Plex:** active streams and how many are transcoding (re-encoding on the fly, which is what
+  loads the GPU) versus direct play, e.g. "2 streams · 1 transcoding". Hover for who is watching
+  what. Read every 10 seconds from Plex's local API (`/status/sessions`). The Plex token is read
+  from Plex's own settings in the registry of the account Plex runs under; it is never stored in
+  the config, printed, or sent to the page.
+
 ## Administrator vs. not
 
 - **As administrator:** the page is reachable from other devices on your network, the firewall

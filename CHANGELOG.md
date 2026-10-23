@@ -9,6 +9,13 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Plex activity** in a quiet line under the Plex row: active streams and how many are
+  transcoding vs direct play ("2 streams · 1 transcoding"), with who is watching what on hover.
+  Read every 10 seconds from Plex's local API using the token from Plex's own settings (never
+  stored, printed or sent to the page).
+
 ### Changed
 
 - **License changed from MIT to the
