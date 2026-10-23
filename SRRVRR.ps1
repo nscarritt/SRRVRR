@@ -213,6 +213,7 @@ $categories = @($cpuCounter[0], 'Memory', 'Network Interface')
 $hasGpu = $cat::Exists('GPU Engine')
 if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
+if ($cat::CounterExists('Disk Read Bytes/sec', 'LogicalDisk')) { $categories += 'LogicalDisk' }   # per-drive read/write speed
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
 Set-Step 'Finding the graphics card'
@@ -522,6 +523,13 @@ $sampler = {
                 $gpuMem = Get-Values 'GPU Adapter Memory' 'Dedicated Usage'
                 $state.gpuMem = 0
                 foreach ($k in $gpuMem.Keys) { if (-not $gpuLuid -or $k -like "luid_${gpuLuid}_*") { $state.gpuMem += $gpuMem[$k] } }
+                # Read/write speed per drive letter (the LogicalDisk counters' "C:", "D:" ... instances).
+                $diskIO = @{}
+                $reads = Get-Values 'LogicalDisk' 'Disk Read Bytes/sec'; $writes = Get-Values 'LogicalDisk' 'Disk Write Bytes/sec'
+                foreach ($k in $reads.Keys) {
+                    if ($k -match '^[A-Za-z]:$') { $diskIO[$k.ToUpper()] = @{ r = [math]::Round($reads[$k]); w = [math]::Round($writes[$k]) } }
+                }
+                $state.diskIO = $diskIO
                 $state.ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
                 $state.error = $null
                 $state.ready = $true
@@ -799,8 +807,8 @@ td.up{color:var(--tx)} td.down{color:var(--rx)}
 tr.detail td{border-top:none;padding:0 0 9px calc(1.15em + 7px);font-size:12.5px;font-weight:400;color:var(--muted);text-align:left;white-space:normal}
 tr.detail .warn{color:var(--warn)}
 #procNote{color:var(--muted);font-size:12.5px;margin-top:6px}
-/* Storage: one row per drive - name, usage bar, used/total, disk health */
-.drive{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,2fr) 9.5em 7.5em;gap:14px;align-items:center;padding:9px 0;font-variant-numeric:tabular-nums}
+/* Storage: one row per drive - name, usage bar, used/total, disk health, read/write speed */
+.drive{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 9.5em 7.5em 12.5em;gap:14px;align-items:center;padding:9px 0;font-variant-numeric:tabular-nums}
 .drive+.drive{border-top:1px solid var(--border)}
 .drive b{font-weight:600}
 .drive .dname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -811,8 +819,9 @@ tr.detail .warn{color:var(--warn)}
 .dsize{text-align:right;white-space:nowrap}
 .dhealth{text-align:right;white-space:nowrap;font-weight:600}
 .dhealth.ok{color:var(--ok)} .dhealth.warn{color:var(--warn)} .dhealth.bad{color:var(--bad)} .dhealth.unknown{color:var(--muted);font-weight:400}
-@media (max-width:700px){.drive{grid-template-columns:1fr auto;grid-template-areas:"name health" "bar bar" "size size";gap:6px 10px}
-  .drive .dname{grid-area:name} .drive .bar{grid-area:bar} .drive .dsize{grid-area:size;text-align:left;color:var(--muted)} .drive .dhealth{grid-area:health}}
+.dio{text-align:right;white-space:nowrap;color:var(--muted)}
+@media (max-width:700px){.drive{grid-template-columns:1fr auto;grid-template-areas:"name health" "bar bar" "size io";gap:6px 10px}
+  .drive .dname{grid-area:name} .drive .bar{grid-area:bar} .drive .dsize{grid-area:size;text-align:left;color:var(--muted)} .drive .dhealth{grid-area:health} .drive .dio{grid-area:io}}
 @media (max-width:700px){th,td{padding-left:5px;padding-right:5px}td{font-size:14px}}
 </style>
 </head>
@@ -915,8 +924,14 @@ function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 
   const TB = 1099511627776, GB = 1073741824;
   return b >= TB ? (b / TB).toFixed(1) + ' TB' : (b / GB).toFixed(0) + ' GB';
 }
+function speed(b) {                 // bytes per second -> "12 MB/s", or "0" when idle
+  if (!b) return '0';
+  const u = ['B/s', 'KB/s', 'MB/s', 'GB/s']; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (b < 10 && i ? b.toFixed(1) : b.toFixed(0)) + ' ' + u[i];
+}
 function renderDrives(s) {
-  const drives = s.drives || [];
+  const drives = s.drives || [], io = s.diskIO || {};
   $('driveCard').hidden = !drives.length;
   $('drives').innerHTML = drives.map(d => {
     const used = d.size - d.free, pct = d.size ? 100 * used / d.size : 0;
@@ -926,7 +941,9 @@ function renderDrives(s) {
     return '<div class="drive"><div class="dname"><b>' + d.letter + '</b><span>' + (d.label || 'Local Disk') + '</span></div>' +
       '<div class="bar ' + level + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
       '<div class="dsize">' + size(used) + ' / ' + size(d.size) + ' &middot; ' + pct.toFixed(0) + '%</div>' +
-      '<div class="dhealth ' + cls + '" title="' + title + '">' + (h || 'Unknown') + '</div></div>';
+      '<div class="dhealth ' + cls + '" title="' + title + '">' + (h || 'Unknown') + '</div>' +
+      '<div class="dio" title="Read and write speed right now">' +
+      (io[d.letter] ? 'R ' + speed(io[d.letter].r) + ' &middot; W ' + speed(io[d.letter].w) : '') + '</div></div>';
   }).join('');
 }
 // Text from other programs (show titles, player names) is escaped before it goes into the page.

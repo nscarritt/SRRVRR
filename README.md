@@ -25,7 +25,9 @@ specific programs (a Valheim dedicated server and Plex), or "Offline" when they 
 A **Storage** card lists every local drive (1 GB or larger) with a usage bar, used/total space and
 the health Windows reports for the disk it's on (Healthy / Warning / Unhealthy, from the drive's
 own SMART self-monitoring). Bars turn amber at 85% full and red at 95%. Drives are re-checked
-every 30 seconds on a separate background thread, so the once-a-second graphs never stall.
+every 30 seconds on a separate background thread, so the once-a-second graphs never stall. The
+last column shows each drive's live read and write speed ("R 12 MB/s · W 3 MB/s"), updated every
+second from Windows' per-drive disk counters.
 
 The header shows how long the server has been up (e.g. "Up 3 days, 4 hours") and an amber
 **Restart pending** badge when Windows has installed updates that are waiting for a restart

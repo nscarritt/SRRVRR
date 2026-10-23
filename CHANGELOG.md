@@ -9,6 +9,15 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Live read/write speed per drive** on the Storage card ("R 12 MB/s · W 3 MB/s"), updated every
+  second.
+
+### Changed
+
+- Storage card usage bars are about half as wide, to make room and reduce visual weight.
+
 ## [0.4.0] - 2026-10-23
 
 What the servers are doing: Plex streams and Valheim players, without adding visual noise.
