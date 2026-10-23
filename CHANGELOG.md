@@ -9,18 +9,24 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
+Storage polish and friendlier guidance.
+
 ### Added
 
 - **Live read/write speed per drive** on the Storage card ("R 12 MB/s · W 3 MB/s"), updated every
-  second.
+  second. ([#23](https://github.com/nscarritt/SRRVRR/pull/23))
 
 ### Changed
 
 - Storage card usage bars are about half as wide, to make room and reduce visual weight.
+  ([#23](https://github.com/nscarritt/SRRVRR/pull/23))
 - When a Valheim server never answers the status query, the message now names the fix: start it
-  with `-public 1` (crossplay servers never answer).
+  with `-public 1` (crossplay servers never answer). ([#24](https://github.com/nscarritt/SRRVRR/pull/24))
 - **No longer limited to English Windows** in the README: counters are read through .NET, which
   resolves English counter names on any display language. Tested on English Windows only.
+  ([#25](https://github.com/nscarritt/SRRVRR/pull/25))
 
 ## [0.4.0] - 2026-10-23
 
@@ -168,7 +174,8 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/nscarritt/SRRVRR/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nscarritt/SRRVRR/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nscarritt/SRRVRR/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nscarritt/SRRVRR/compare/v0.1.0...v0.2.0
