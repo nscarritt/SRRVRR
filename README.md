@@ -41,9 +41,15 @@ The page follows your system's light/dark theme and works on phones.
 
 ## Requirements
 
-- Windows 10/11 or Windows Server with Windows PowerShell 5.1 (built in)
-- English-language Windows (performance counter names are localized)
+- Windows 10/11 or Windows Server with Windows PowerShell 5.1 (built in), in any display language
 - Any modern browser to view the page
+
+**Language support.** Windows translates performance-counter names into its display language,
+which breaks tools that look counters up by name with `Get-Counter`. SRRVRR doesn't use it: it
+reads counters through .NET, which resolves the English names on every language edition of
+Windows, and its other checks (drive health, firewall, registry) don't depend on the language.
+The page and console text are in English. It has been tested on English Windows only; if
+something doesn't show up on another language, please open an issue.
 
 ## Quick start
 
