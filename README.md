@@ -6,7 +6,7 @@ browser on your network.
 
 One PowerShell script. Nothing to install.
 
-Current version: **0.3.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
+Current version: **0.4.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
 
 ## What it shows
 
@@ -194,8 +194,9 @@ Under each running process, a quiet detail line says what it's doing:
   how long each has been on. Read every 10 seconds with Valve's A2S server query (UDP, on
   `ValheimPort` + 1). Valheim answers that query from its main game loop, so a reply over 250 ms
   turns amber; and since its simulation is mostly one main thread, cores near 1.0 while players
-  report lag point at that thread. Per-player ping is not part of the query. Servers in
-  crossplay mode don't answer it, which shows quietly as "status query off"; a server that stops
+  report lag point at that thread. Per-player ping is not part of the query. The server must run
+  with `-public 1`: servers started with `-public 0` or in crossplay mode don't answer the query,
+  which shows quietly as "status query off"; a server that stops
   answering after it had been shows in amber.
 
 ## Administrator vs. not

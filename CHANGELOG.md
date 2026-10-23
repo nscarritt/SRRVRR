@@ -9,26 +9,39 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
+What the servers are doing: Plex streams and Valheim players, without adding visual noise.
+
 ### Added
 
 - **Plex activity** in a quiet line under the Plex row: active streams and how many are
   transcoding vs direct play ("2 streams · 1 transcoding"), with who is watching what on hover.
   Read every 10 seconds from Plex's local API using the token from Plex's own settings (never
-  stored, printed or sent to the page).
+  stored, printed or sent to the page). ([#20](https://github.com/nscarritt/SRRVRR/pull/20))
 - **Valheim activity** in a quiet line under the Valheim row: players online, status-query reply
   time (amber over 250 ms) and CPU in whole cores, with player names on hover. Read every
   10 seconds via Valve's A2S query on the new `ValheimPort` setting (default 2456) + 1. A server
-  that stops answering shows in amber; one that never answers (e.g. crossplay) shows quietly.
-
-### Fixed
-
-- `/stats` now declares UTF-8, so non-English names display correctly in every client.
+  that stops answering shows in amber; one that never answers shows quietly. Requires the server
+  to run with `-public 1`: servers started with `-public 0` (or in crossplay mode) don't answer
+  the query. ([#21](https://github.com/nscarritt/SRRVRR/pull/21))
 
 ### Changed
 
 - **License changed from MIT to the
   [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)**:
   noncommercial use only. Versions 0.1.0 to 0.3.0 remain available under MIT.
+  ([#18](https://github.com/nscarritt/SRRVRR/pull/18))
+
+### Fixed
+
+- `/stats` now declares UTF-8, so non-English names display correctly in every client.
+  ([#21](https://github.com/nscarritt/SRRVRR/pull/21))
+
+### Upgrading from 0.3.0
+
+- Optional new setting `ValheimPort` (default 2456). For the Valheim player count, start the
+  server with `-public 1`.
 
 ## [0.3.0] - 2026-10-22
 
@@ -142,7 +155,8 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nscarritt/SRRVRR/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nscarritt/SRRVRR/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nscarritt/SRRVRR/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nscarritt/SRRVRR/releases/tag/v0.1.0
