@@ -17,6 +17,8 @@ called out under **Changed** or **Removed** with upgrade notes.
 ### Changed
 
 - Storage card usage bars are about half as wide, to make room and reduce visual weight.
+- When a Valheim server never answers the status query, the message now names the fix: start it
+  with `-public 1` (crossplay servers never answer).
 
 ## [0.4.0] - 2026-10-23
 
