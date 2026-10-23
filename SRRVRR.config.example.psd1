@@ -57,4 +57,8 @@
         Valheim = $true
         Plex    = $true
     }
+
+    # The Valheim server's game port (the one players connect to). The player
+    # count comes from the server's status query on the next port up.
+    ValheimPort = 2456
 }

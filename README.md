@@ -74,6 +74,7 @@ copying a new version of the code never overwrites it. When updating, replace on
 | `AllowPublicAddresses` | `$false` | **Security risk, at your own risk.** `$true` lets an `Allowlist` also contain specific public (internet) IPs, single addresses only. Read [Security warning: public IP addresses](#security-warning-public-ip-addresses) first. |
 | `PreferredGpu` | `''` | The graphics card to show, by its exact name as Windows reports it (dxdiag > Display > Name, or Device Manager > Display adapters), e.g. `'NVIDIA T600'`. Not case-sensitive. `''`, or a name that isn't found, = the GPU with the most video memory. At startup the console shows the card in use and its size (e.g. `NVIDIA T600 · 4 GB`), and lists every GPU's name if `PreferredGpu` isn't found, so you can copy one. |
 | `Processes` | all `$true` | One switch per built-in table row, e.g. `@{ Valheim = $true; Plex = $false }`. `$false` hides that row; the table disappears when every row is hidden. |
+| `ValheimPort` | `2456` | The Valheim server's game port. Its player count is read from the status query on the next port up. |
 
 Example:
 
@@ -188,6 +189,14 @@ Under each running process, a quiet detail line says what it's doing:
   what. Read every 10 seconds from Plex's local API (`/status/sessions`). The Plex token is read
   from Plex's own settings in the registry of the account Plex runs under; it is never stored in
   the config, printed, or sent to the page.
+- **Valheim:** players online, how fast the server answers its status query, and its CPU use in
+  whole cores, e.g. "3 players · responding in 4 ms · using 0.9 cores". Hover for player names and
+  how long each has been on. Read every 10 seconds with Valve's A2S server query (UDP, on
+  `ValheimPort` + 1). Valheim answers that query from its main game loop, so a reply over 250 ms
+  turns amber; and since its simulation is mostly one main thread, cores near 1.0 while players
+  report lag point at that thread. Per-player ping is not part of the query. Servers in
+  crossplay mode don't answer it, which shows quietly as "status query off"; a server that stops
+  answering after it had been shows in amber.
 
 ## Administrator vs. not
 
