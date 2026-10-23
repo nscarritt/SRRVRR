@@ -108,6 +108,7 @@ $settings = @{
     AllowPublicAddresses = $false
     PreferredGpu      = ''
     Processes         = @{}
+    ValheimPort       = 2456
 }
 # Settings from older versions, now handled automatically.
 $retired = @{
@@ -135,6 +136,9 @@ if (Test-Path -LiteralPath $configPath) {
 }
 if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
 
+if ($settings.ValheimPort -isnot [int] -or $settings.ValheimPort -lt 1 -or $settings.ValheimPort -gt 65534) {
+    throw "ValheimPort must be the Valheim server's game port, a number from 1 to 65534 (default 2456)."
+}
 $scopes = 'LocalSubnet', 'Allowlist', 'Blocklist'
 if ($settings.FirewallScope -notin $scopes) { throw "FirewallScope must be one of: $($scopes -join ', ')" }
 if ($settings.FirewallScope -in 'Allowlist', 'Blocklist' -and -not $settings.FirewallAddresses) {
@@ -497,6 +501,9 @@ $sampler = {
                         icon   = $svc.icon
                         online = $true
                         cpu    = [math]::Round([math]::Min(100, 100 * $cpuSec / ($elapsed * $cores)), 1)
+                        # The same CPU time in whole cores (1.0 = one core flat out); shows when a
+                        # mostly single-threaded server like Valheim is maxing out its main thread.
+                        coresUsed = [math]::Round($cpuSec / $elapsed, 1)
                         mem    = [math]::Round(100 * $mem / $totalRam, 1)
                         gpu    = [math]::Round([math]::Min(100, $procGpu), 1)
                         tx     = if ($net) { [math]::Round($sent / $elapsed) } else { $null }
@@ -543,8 +550,39 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexToken, $plexUrl)
+    param($state, $smiPath, $gpuName, $plexToken, $plexUrl, $valheimQueryPort)
+
+    # Valve's A2S server query over UDP, which Valheim answers on its game port + 1.
+    # Sends one request and returns the reply bytes; when the server answers with a
+    # challenge (0x41 + 4 bytes, an anti-spoofing step), repeats the request with
+    # that challenge appended. $base is the request without any challenge.
+    function Invoke-A2S([byte[]]$base, [byte[]]$challenge, [int]$port) {
+        $udp = New-Object System.Net.Sockets.UdpClient
+        try {
+            $udp.Client.ReceiveTimeout = 1000
+            $udp.Connect('127.0.0.1', $port)
+            # (+ on two arrays gives a generic object[]; cast back to bytes for sending)
+            $request = if ($challenge) { [byte[]]($base + $challenge) } else { $base }
+            foreach ($attempt in 1, 2) {
+                [void]$udp.Send($request, $request.Length)
+                $from = New-Object System.Net.IPEndPoint ([System.Net.IPAddress]::Any, 0)
+                $reply = $udp.Receive([ref]$from)
+                if ($reply.Length -ge 9 -and $reply[4] -eq 0x41) { $request = [byte[]]($base + $reply[5..8]); continue }
+                return $reply
+            }
+            throw 'no answer after the challenge'
+        } finally { $udp.Close() }
+    }
+    # Reads a zero-terminated UTF-8 string starting at $pos (passed by reference).
+    function Read-A2SString([byte[]]$b, [ref]$pos) {
+        $start = $pos.Value
+        while ($pos.Value -lt $b.Length -and $b[$pos.Value] -ne 0) { $pos.Value++ }
+        $text = [Text.Encoding]::UTF8.GetString($b, $start, $pos.Value - $start)
+        $pos.Value++
+        $text
+    }
     $activity = @{}   # process name -> what it's doing (players, streams); published as $state.activity
+    $valheimAnswered = $false
     if ($plexUrl -and -not $plexToken) { $activity.Plex = @{ error = 'no Plex token found' }; $state.activity = $activity }
     $ProgressPreference = 'SilentlyContinue'   # no window to show progress in; don't let records pile up in memory
     $tick = 0
@@ -621,7 +659,53 @@ $slowChecks = {
                     }
                 }
                 $activity.Plex = @{ streams = $items.Count; transcoding = @($items | Where-Object { $_.transcoding }).Count; items = $items }
-            } catch { $activity.Plex = @{ error = "Plex didn't answer" } }
+            } catch { $activity.Plex = @{ error = "Plex didn't answer"; alert = $true } }
+            $state.activity = $activity
+        }
+        # Valheim activity, every 10 seconds: players online (A2S_INFO), their names and
+        # time connected (A2S_PLAYER), and how long the server takes to answer. The
+        # server answers from its main game loop, so a slow or missing reply is a sign
+        # that loop is bogged down. Per-player ping is not part of the query.
+        if ($tick % 2 -eq 0 -and $valheimQueryPort) {
+            try {
+                $header = [byte[]](0xFF, 0xFF, 0xFF, 0xFF)
+                $infoRequest = $header + [byte]0x54 + [Text.Encoding]::ASCII.GetBytes("Source Engine Query`0")
+                $timer = [System.Diagnostics.Stopwatch]::StartNew()
+                $info = Invoke-A2S $infoRequest $null $valheimQueryPort
+                $replyMs = [int]$timer.Elapsed.TotalMilliseconds
+                if ($info[4] -ne 0x49) { throw 'unexpected reply' }
+                # 0x49 reply: protocol byte, then name, map, folder, game strings, a 2-byte
+                # app ID, then players, max players, bots (one byte each).
+                $pos = 6
+                foreach ($i in 1..4) { [void](Read-A2SString $info ([ref]$pos)) }
+                $pos += 2
+                $players = [int]$info[$pos]; $maxPlayers = [int]$info[$pos + 1]
+
+                $names = @()
+                try {
+                    $list = Invoke-A2S ($header + [byte]0x55) ([byte[]](0xFF, 0xFF, 0xFF, 0xFF)) $valheimQueryPort
+                    if ($list[4] -eq 0x44) {
+                        # 0x44 reply: count, then per player: index, name, 4-byte score, 4-byte seconds connected.
+                        $pos = 6
+                        $count = [int]$list[5]
+                        # (guard: in PowerShell 1..0 counts down instead of being empty)
+                        if ($count -gt 0) { foreach ($i in 1..$count) {
+                            $pos++
+                            $n = Read-A2SString $list ([ref]$pos)
+                            $pos += 4
+                            $secs = [BitConverter]::ToSingle($list, $pos); $pos += 4
+                            if ($n) { $names += @{ name = $n; minutes = [int]($secs / 60) } }
+                        } }
+                    }
+                } catch { }   # names are a nice-to-have; the count above already worked
+                $activity.Valheim = @{ players = $players; maxPlayers = $maxPlayers; replyMs = $replyMs; names = $names }
+                $valheimAnswered = $true
+            } catch {
+                # Stopping after it used to answer is a real warning sign. Never answering usually
+                # means the query is off (crossplay servers don't answer it), so say so quietly.
+                $activity.Valheim = if ($valheimAnswered) { @{ error = 'stopped answering the status query'; alert = $true } }
+                                    else { @{ error = 'status query off, e.g. crossplay mode' } }
+            }
             $state.activity = $activity
         }
         $tick++
@@ -642,13 +726,16 @@ if ($services | Where-Object { $_.name -eq 'Plex' }) {
     Write-Status $(if ($plexToken) { "Plex token found in Plex's own settings" } else { 'No Plex token found, so Plex stream details are unavailable' })
 }
 
+$valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $settings.ValheimPort + 1 } else { $null }
+
 $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
 $slowWorker.Runspace = $slowRunspace
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexToken).AddArgument($plexUrl)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexToken).AddArgument($plexUrl).AddArgument($valheimQueryPort)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 if ($plexToken) { Write-Status 'Every 10 seconds: Plex streams and transcodes' }
+if ($valheimQueryPort) { Write-Status "Every 10 seconds: Valheim players and response time (query port $valheimQueryPort)" }
 [void]$slowWorker.BeginInvoke()
 Write-Status 'Every 30 seconds: drive space and drive health'
 Write-Status 'Every 60 seconds: whether Windows is waiting to restart for updates'
@@ -849,7 +936,20 @@ const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
 function detail(p, a) {
   if (!a) return '';
   let text = '', hover = [];
-  if (a.error) text = esc(p.name) + ' details unavailable (' + esc(a.error) + ')';
+  if (a.error) {
+    // A running server that stops answering is a real problem (amber); setup differences stay quiet.
+    text = (p.name === 'Valheim' ? 'Player count' : esc(p.name) + ' details') + ' unavailable (' + esc(a.error) + ')' +
+      (p.name === 'Valheim' && p.coresUsed != null ? ' &middot; using ' + p.coresUsed.toFixed(1) + ' cores' : '');
+    if (a.alert) text = '<span class="warn">' + text + '</span>';
+  }
+  else if (p.name === 'Valheim') {
+    const slow = a.replyMs >= 250;      // a sluggish reply suggests the game loop is struggling
+    text = (a.players ? plural(a.players, 'player') : 'No players') +
+      ' &middot; ' + (slow ? '<span class="warn">' : '') + 'responding in ' + a.replyMs + ' ms' + (slow ? '</span>' : '') +
+      (p.coresUsed != null ? ' &middot; using ' + p.coresUsed.toFixed(1) + ' cores' : '');
+    hover = (a.names || []).map(n => n.name + ' (' + since(n.minutes * 60) + ')');
+    if (a.players && !hover.length) hover = ['Player names not reported by the server'];
+  }
   else if (p.name === 'Plex') {
     text = a.streams ? plural(a.streams, 'stream') + ' &middot; ' +
       (a.transcoding ? a.transcoding + ' transcoding' : 'direct play') : 'No one watching';
@@ -984,7 +1084,7 @@ try {
                 $snapshot = @{}
                 foreach ($k in @($state.Keys)) { $snapshot[$k] = $state[$k] }
                 $snapshot.uptime = [int]((Get-Date) - $bootTime).TotalSeconds
-                Send-Response $ctx ($snapshot | ConvertTo-Json -Compress -Depth 6) 'application/json'
+                Send-Response $ctx ($snapshot | ConvertTo-Json -Compress -Depth 6) 'application/json; charset=utf-8'
             } else {
                 Send-Response $ctx $html 'text/html; charset=utf-8'
             }

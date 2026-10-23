@@ -15,6 +15,14 @@ called out under **Changed** or **Removed** with upgrade notes.
   transcoding vs direct play ("2 streams · 1 transcoding"), with who is watching what on hover.
   Read every 10 seconds from Plex's local API using the token from Plex's own settings (never
   stored, printed or sent to the page).
+- **Valheim activity** in a quiet line under the Valheim row: players online, status-query reply
+  time (amber over 250 ms) and CPU in whole cores, with player names on hover. Read every
+  10 seconds via Valve's A2S query on the new `ValheimPort` setting (default 2456) + 1. A server
+  that stops answering shows in amber; one that never answers (e.g. crossplay) shows quietly.
+
+### Fixed
+
+- `/stats` now declares UTF-8, so non-English names display correctly in every client.
 
 ### Changed
 
