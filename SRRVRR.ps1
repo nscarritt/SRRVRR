@@ -710,9 +710,10 @@ $slowChecks = {
                 $valheimAnswered = $true
             } catch {
                 # Stopping after it used to answer is a real warning sign. Never answering usually
-                # means the query is off (crossplay servers don't answer it), so say so quietly.
+                # means the query is off (servers started with -public 0, or crossplay servers,
+                # don't answer it), so say so quietly and name the fix.
                 $activity.Valheim = if ($valheimAnswered) { @{ error = 'stopped answering the status query'; alert = $true } }
-                                    else { @{ error = 'status query off, e.g. crossplay mode' } }
+                                    else { @{ error = 'status query off; start the server with -public 1 (crossplay servers never answer)' } }
             }
             $state.activity = $activity
         }
