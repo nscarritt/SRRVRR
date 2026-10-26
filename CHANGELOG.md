@@ -9,6 +9,10 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Added
+
+- README opens with a screenshot of a live dashboard (private share names blurred).
+
 ## [0.4.1] - 2026-10-23
 
 Storage polish and friendlier guidance.

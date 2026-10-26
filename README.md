@@ -1,5 +1,9 @@
 # SRRVRR
 
+![SRRVRR dashboard: CPU, memory, GPU and network graphs, a Processes table with Valheim and Plex activity, and a Storage card with drive health and read/write speed](docs/screenshot.png)
+
+*A live SRRVRR dashboard. Private share names are blurred.*
+
 A tiny live CPU / memory / GPU / network dashboard for Windows, in the spirit of
 Task Manager's Performance tab. Run it on one machine and watch it from any
 browser on your network.
