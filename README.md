@@ -171,8 +171,7 @@ warning listing the public IPs that are let in.
 Found a security problem? Please report it privately, as described in the
 [security policy](SECURITY.md), rather than in a public issue.
 
-**Safer alternative:** use a VPN to reach your home network instead of opening a port, for
-example [Tailscale](https://tailscale.com), [WireGuard](https://www.wireguard.com), or your
+**Safer alternative:** use a VPN to reach your home network instead of opening a port, or your
 router's built-in VPN. The page then stays on your local network.
 
 ### Disclaimer and limitation of liability
