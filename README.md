@@ -12,6 +12,23 @@ One PowerShell script. Nothing to install.
 
 Current version: **0.4.1**. See the [changelog](CHANGELOG.md) for what changed in each version.
 
+## Contents
+
+- [What it shows](#what-it-shows)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Settings](#settings)
+  - [Upgrading from an older version](#upgrading-from-an-older-version)
+  - [Command-line override](#command-line-override)
+  - [Firewall rules](#firewall-rules)
+- [Security warning: public IP addresses](#security-warning-public-ip-addresses)
+  - [Disclaimer and limitation of liability](#disclaimer-and-limitation-of-liability)
+- [Processes table](#processes-table)
+- [Administrator vs. not](#administrator-vs-not)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [License](#license)
+
 ## What it shows
 
 Updated every second, each with a 60-second graph:

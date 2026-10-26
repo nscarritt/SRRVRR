@@ -12,6 +12,7 @@ called out under **Changed** or **Removed** with upgrade notes.
 ### Added
 
 - README opens with a screenshot of a live dashboard (private share names blurred).
+- README table of contents linking every section.
 - **Security policy** (`SECURITY.md`): how to report a vulnerability privately through GitHub,
   what counts as one, and the known by-design limitations. Linked from the README security
   warning.
