@@ -48,8 +48,12 @@ A **Storage** card lists every local drive (1 GB or larger) with a usage bar, us
 the health Windows reports for the disk it's on (Healthy / Warning / Unhealthy, from the drive's
 own SMART self-monitoring). Bars turn amber at 85% full and red at 95%. Drives are re-checked
 every 30 seconds on a separate background thread, so the once-a-second graphs never stall. The
-last column shows each drive's live read and write speed ("R 12 MB/s · W 3 MB/s"), updated every
-second from Windows' per-drive disk counters.
+last column shows each drive's live read and write speed in fixed-width cells, in bytes per second
+scaled from B/s to GB/s, updated every second from Windows' per-drive disk counters. Each value is
+colored by how close it is to the drive's maximum speed: amber at 70%, red at 90%. Windows doesn't
+report a drive's maximum, so SRRVRR uses the typical ceiling for its connection and media type
+(NVMe SSD ~3,500 MB/s, SATA SSD ~550 MB/s, hard drive ~200 MB/s, USB ~400 MB/s, otherwise
+~500 MB/s), raised to the fastest speed actually seen on that drive if it ever goes faster.
 
 The header shows how long the server has been up (e.g. "Up 3 days, 4 hours") and an amber
 **Restart pending** badge when Windows has installed updates that are waiting for a restart
@@ -220,7 +224,8 @@ Under each running process, a quiet detail line says what it's doing:
   loads the GPU) versus direct play, e.g. "2 streams · 1 transcoding". Hover for who is watching
   what, on which device, and how it's played. Read every 10 seconds from Plex's local API (`/status/sessions`). The Plex token is read
   from Plex's own settings in the registry of the account Plex runs under; it is never stored in
-  the config, printed, or sent to the page.
+  the config, printed, or sent to the page. If Plex isn't running yet (for example, it starts
+  after SRRVRR at boot), SRRVRR looks again every minute until it finds the token.
 - **Valheim:** players online, how fast the server answers its status query, and its CPU use in
   whole cores, e.g. "3 players · responding in 4 ms · using 0.9 cores". Hover for player names and
   how long each has been on. Read every 10 seconds with Valve's A2S server query (UDP, on
