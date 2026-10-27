@@ -619,7 +619,67 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir)
+
+    # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
+    # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
+    # itself (AMD calls it Tctl), else its hottest core. Memory: each stick's own sensor ("DIMM
+    # #n"; DDR5 and some DDR4 sticks have one), hottest first. The other temperature readings
+    # (sensor limits, distance to the maximum) are left out.
+    function Read-Temperatures($computer) {
+        $cpu = @(); $cores = @(); $sticks = @()
+        foreach ($hw in $computer.Hardware) {
+            $hw.Update()
+            $temps = @($hw.Sensors | Where-Object { [string]$_.SensorType -eq 'Temperature' -and $null -ne $_.Value })
+            switch ([string]$hw.HardwareType) {
+                'Cpu' {
+                    $package = @($temps | Where-Object { $_.Name -match 'Package|Tctl' })
+                    if (-not $package) { $package = @($temps | Where-Object { $_.Name -match 'Tdie' }) }
+                    $each = @($temps | Where-Object { $_.Name -match 'Core #\d+$|^Core \d+$|CCD\d+' })
+                    $cpu += if ($package) { [double]$package[0].Value } elseif ($each) { ($each | Measure-Object Value -Maximum).Maximum }
+                    $cores += $each | ForEach-Object { @{ name = $_.Name; t = [math]::Round([double]$_.Value) } }
+                }
+                'Memory' {
+                    $sticks += $temps | Where-Object { $_.Name -match '^DIMM' } | ForEach-Object { @{ name = $_.Name; t = [math]::Round([double]$_.Value, 1) } }
+                }
+            }
+        }
+        @{
+            cpuTemp  = if ($cpu) { [math]::Round(($cpu | Measure-Object -Maximum).Maximum) } else { $null }
+            cpuTemps = $cores
+            memTemp  = if ($sticks) { ($sticks | ForEach-Object { $_.t } | Measure-Object -Maximum).Maximum } else { $null }
+            memTemps = @($sticks | Sort-Object { $_.t } -Descending)
+        }
+    }
+    # Opening the library scans the hardware and takes a few seconds, so it happens here
+    # rather than at startup. The C# part lets it find the files it needs in its own folder.
+    $sensors = $null
+    if ($sensorDir) {
+        try {
+            Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Reflection;
+public static class SrrvrrSensorLoader {
+    static string dir;
+    public static void Init(string folder) {
+        if (dir != null) return;
+        dir = folder;
+        AppDomain.CurrentDomain.AssemblyResolve += (s, e) => {
+            string path = Path.Combine(dir, new AssemblyName(e.Name).Name + ".dll");
+            return File.Exists(path) ? Assembly.LoadFrom(path) : null;
+        };
+    }
+}
+'@
+            [SrrvrrSensorLoader]::Init($sensorDir)
+            [void][Reflection.Assembly]::LoadFrom((Join-Path $sensorDir 'LibreHardwareMonitorLib.dll'))
+            $sensors = New-Object LibreHardwareMonitor.Hardware.Computer
+            $sensors.IsCpuEnabled = $true
+            $sensors.IsMemoryEnabled = $true
+            $sensors.Open()
+        } catch { $sensors = $null; $state.tempError = "the sensor library didn't start: $($_.Exception.Message)" }
+    }
 
     # Plex keeps its sign-in token in the registry of the Windows account it runs
     # under. That account's registry is only loaded while it is signed in or Plex is
@@ -680,6 +740,14 @@ $slowChecks = {
                 }
                 $state.gpuTemp = $temp
             } catch { $state.gpuTemp = $null }
+        }
+        # CPU and memory temperatures, every 5 seconds.
+        if ($sensors) {
+            try {
+                $r = Read-Temperatures $sensors
+                foreach ($k in $r.Keys) { $state[$k] = $r[$k] }
+                $state.tempError = if ($null -eq $r.cpuTemp) { 'the processor reported no temperature' } else { $null }
+            } catch { $state.cpuTemp = $null; $state.memTemp = $null; $state.tempError = "reading the sensors failed: $($_.Exception.Message)" }
         }
         # Drives, every 30 seconds: space per volume, health of the disk it's on.
         if ($tick % 6 -eq 0) {
@@ -838,8 +906,20 @@ $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
 $slowWorker.Runspace = $slowRunspace
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort)
+# CPU and memory temperatures need LibreHardwareMonitor's sensor library and its PawnIO
+# driver (Install-TemperatureSensors.ps1 sets up both), and administrator. When one is
+# missing, the page says so where the temperature would be.
+$sensorDir = Join-Path $PSScriptRoot 'lib\LibreHardwareMonitor'
+$tempError = $null
+$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not (Test-Path -LiteralPath (Join-Path $sensorDir 'LibreHardwareMonitorLib.dll'))) { $tempError = 'not set up; run Install-TemperatureSensors.ps1' }
+elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO')) { $tempError = 'the PawnIO driver is missing; run Install-TemperatureSensors.ps1' }
+elseif (-not $elevated) { $tempError = 'needs administrator' }
+if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
+
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
+Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
 if ($valheimQueryPort) { Write-Status "Every 10 seconds: Valheim players and response time (query port $valheimQueryPort)" }
 [void]$slowWorker.BeginInvoke()
@@ -960,9 +1040,9 @@ header{flex-wrap:wrap}
 <header><div><h1>SRRVRR</h1><span id="uptime"></span><span id="restart" hidden>Restart pending</span></div><div><span id="status">Connecting&hellip;</span><button id="sound" type="button" title="Play a soft ding with each alert"><svg class="ticon v-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg><svg class="ticon v-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"/><path d="m2 2 20 20"/><path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"/></svg><span>Sound off</span></button></div></header>
 <div id="toasts" aria-live="polite"></div>
 <main>
-  <section class="card"><div class="top"><span class="label"><span id="cpuIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><svg class="ticon brand v-amd" viewBox="106.4 0 33.32 33.33" aria-label="AMD"><polygon points="130.64 9.08 115.75 9.08 106.68 0 139.72 0 139.72 33.05 130.64 23.97 130.64 9.08"/><polygon points="115.74 23.98 115.74 10.9 106.4 20.24 106.4 33.33 119.48 33.33 128.82 23.98 115.74 23.98"/></svg><svg class="ticon brand v-intel" viewBox="4.7 2.2 357 150.4" aria-label="Intel"><rect x="4.7" y="5.2" width="28.1" height="28.1"/><path d="M32.1,151.6V50.3H5.4v101.2h26.7V151.6z M208.9,152.6v-24.8c-3.9,0-7.2-0.2-9.6-0.6c-2.8-0.4-4.9-1.4-6.3-2.8 c-1.4-1.4-2.3-3.4-2.8-6.1c-0.4-2.5-0.6-5.8-0.6-9.8V73.2h19.3V50.3h-19.3V10.9h-26.7v97.9c0,8.3,0.7,15.3,2.1,20.9 c1.4,5.5,3.8,10,7.1,13.4s7.7,5.8,13,7.3c5.4,1.5,12.2,2.2,20.3,2.2L208.9,152.6L208.9,152.6z M361.7,151.6V3.1H335v148.5H361.7z M137.2,60.3c-7.4-8-17.8-12-31-12c-6.4,0-12.3,1.3-17.5,3.9C83.4,54.8,79,58.4,75.4,63L74,64.9v-1.7V50.3H47.7v101.2h26.5V97.6v3.7 c0-0.6,0-1.2,0-1.8c0.3-9.5,2.6-16.5,7-21c4.7-4.8,10.4-7.2,16.9-7.2c7.7,0,13.6,2.4,17.5,7c3.8,4.6,5.8,11.1,5.8,19.4l0,0V98l0,0 l0,0v53.5h26.9V94.1C148.4,79.7,144.6,68.3,137.2,60.3z M321.2,100.8c0-7.3-1.3-14.1-3.8-20.5c-2.6-6.3-6.2-11.9-10.7-16.7 c-4.6-4.8-10.1-8.5-16.5-11.2s-13.5-4-21.2-4c-7.3,0-14.2,1.4-20.6,4.1c-6.4,2.8-12,6.5-16.7,11.2s-8.5,10.3-11.2,16.7 c-2.8,6.4-4.1,13.3-4.1,20.6c0,7.3,1.3,14.2,3.9,20.6c2.6,6.4,6.3,12,10.9,16.7c4.6,4.7,10.3,8.5,16.9,11.2 c6.6,2.8,13.9,4.2,21.7,4.2c22.6,0,36.6-10.3,45-19.9l-19.2-14.6c-4,4.8-13.6,11.3-25.6,11.3c-7.5,0-13.7-1.7-18.4-5.2 c-4.7-3.4-7.9-8.2-9.6-14.1l-0.3-0.9h79.5L321.2,100.8L321.2,100.8z M241.9,91.5c0-7.4,8.5-20.3,26.8-20.4 c18.3,0,26.9,12.9,26.9,20.3L241.9,91.5z"/></svg></span>CPU</span><span class="value" id="cpuV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><span id="cpuIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><svg class="ticon brand v-amd" viewBox="106.4 0 33.32 33.33" aria-label="AMD"><polygon points="130.64 9.08 115.75 9.08 106.68 0 139.72 0 139.72 33.05 130.64 23.97 130.64 9.08"/><polygon points="115.74 23.98 115.74 10.9 106.4 20.24 106.4 33.33 119.48 33.33 128.82 23.98 115.74 23.98"/></svg><svg class="ticon brand v-intel" viewBox="4.7 2.2 357 150.4" aria-label="Intel"><rect x="4.7" y="5.2" width="28.1" height="28.1"/><path d="M32.1,151.6V50.3H5.4v101.2h26.7V151.6z M208.9,152.6v-24.8c-3.9,0-7.2-0.2-9.6-0.6c-2.8-0.4-4.9-1.4-6.3-2.8 c-1.4-1.4-2.3-3.4-2.8-6.1c-0.4-2.5-0.6-5.8-0.6-9.8V73.2h19.3V50.3h-19.3V10.9h-26.7v97.9c0,8.3,0.7,15.3,2.1,20.9 c1.4,5.5,3.8,10,7.1,13.4s7.7,5.8,13,7.3c5.4,1.5,12.2,2.2,20.3,2.2L208.9,152.6L208.9,152.6z M361.7,151.6V3.1H335v148.5H361.7z M137.2,60.3c-7.4-8-17.8-12-31-12c-6.4,0-12.3,1.3-17.5,3.9C83.4,54.8,79,58.4,75.4,63L74,64.9v-1.7V50.3H47.7v101.2h26.5V97.6v3.7 c0-0.6,0-1.2,0-1.8c0.3-9.5,2.6-16.5,7-21c4.7-4.8,10.4-7.2,16.9-7.2c7.7,0,13.6,2.4,17.5,7c3.8,4.6,5.8,11.1,5.8,19.4l0,0V98l0,0 l0,0v53.5h26.9V94.1C148.4,79.7,144.6,68.3,137.2,60.3z M321.2,100.8c0-7.3-1.3-14.1-3.8-20.5c-2.6-6.3-6.2-11.9-10.7-16.7 c-4.6-4.8-10.1-8.5-16.5-11.2s-13.5-4-21.2-4c-7.3,0-14.2,1.4-20.6,4.1c-6.4,2.8-12,6.5-16.7,11.2s-8.5,10.3-11.2,16.7 c-2.8,6.4-4.1,13.3-4.1,20.6c0,7.3,1.3,14.2,3.9,20.6c2.6,6.4,6.3,12,10.9,16.7c4.6,4.7,10.3,8.5,16.9,11.2 c6.6,2.8,13.9,4.2,21.7,4.2c22.6,0,36.6-10.3,45-19.9l-19.2-14.6c-4,4.8-13.6,11.3-25.6,11.3c-7.5,0-13.7-1.7-18.4-5.2 c-4.7-3.4-7.9-8.2-9.6-14.1l-0.3-0.9h79.5L321.2,100.8L321.2,100.8z M241.9,91.5c0-7.4,8.5-20.3,26.8-20.4 c18.3,0,26.9,12.9,26.9,20.3L241.9,91.5z"/></svg></span>CPU</span><span class="value"><span class="temp" id="cpuTemp"></span><span id="cpuV">&ndash;</span></span></div>
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
-  <section class="card"><div class="top"><span class="label"><span id="memIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/></svg><i class="blogo" id="memLogo" aria-hidden="true"></i></span>Memory</span><span class="value" id="memV">&ndash;</span></div>
+  <section class="card"><div class="top"><span class="label"><span id="memIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z"/></svg><i class="blogo" id="memLogo" aria-hidden="true"></i></span>Memory</span><span class="value"><span class="temp" id="memTemp"></span><span id="memV">&ndash;</span></span></div>
     <div class="sub" id="memS">&nbsp;</div><canvas id="memC"></canvas></section>
   <section class="card"><div class="top"><span class="label"><span id="gpuIcon" data-v=""><svg class="ticon v-generic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21V3M2 5h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2.26M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3"/><circle cx="16" cy="11" r="2"/><circle cx="8" cy="11" r="2"/></svg><svg class="ticon brand v-nvidia" viewBox="0 0 271.5 179.7" aria-label="NVIDIA"><path d="M101.3,53.6V37.4c1.6-0.1,3.2-0.2,4.8-0.2c44.4-1.4,73.5,38.2,73.5,38.2S148.2,119,114.5,119c-4.5,0-8.9-0.7-13.1-2.1V67.7c17.3,2.1,20.8,9.7,31.1,27l23.1-19.4c0,0-16.9-22.1-45.3-22.1C107.3,53.1,104.3,53.3,101.3,53.6 M101.3,0v24.2c1.6-0.1,3.2-0.2,4.8-0.3c61.7-2.1,102,50.6,102,50.6s-46.2,56.2-94.3,56.2c-4.2,0-8.3-0.4-12.4-1.1v15c3.4,0.4,6.9,0.7,10.3,0.7c44.8,0,77.2-22.9,108.6-49.9c5.2,4.2,26.5,14.3,30.9,18.7c-29.8,25-99.3,45.1-138.7,45.1c-3.8,0-7.4-0.2-11-0.6v21.1h170.2V0L101.3,0z M101.3,116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22,52.9-25.6v14h-0.1c-17.3-2.1-30.9,14.1-30.9,14.1S78,109,101.3,116.9 M27.8,77.4c0,0,24.5-36.2,73.6-40V24.2C47,28.6,0,74.6,0,74.6s26.6,77,101.3,84v-14C46.5,137.8,27.8,77.4,27.8,77.4z"/></svg><svg class="ticon brand v-amd" viewBox="106.4 0 33.32 33.33" aria-label="AMD"><polygon points="130.64 9.08 115.75 9.08 106.68 0 139.72 0 139.72 33.05 130.64 23.97 130.64 9.08"/><polygon points="115.74 23.98 115.74 10.9 106.4 20.24 106.4 33.33 119.48 33.33 128.82 23.98 115.74 23.98"/></svg><svg class="ticon brand v-intel" viewBox="4.7 2.2 357 150.4" aria-label="Intel"><rect x="4.7" y="5.2" width="28.1" height="28.1"/><path d="M32.1,151.6V50.3H5.4v101.2h26.7V151.6z M208.9,152.6v-24.8c-3.9,0-7.2-0.2-9.6-0.6c-2.8-0.4-4.9-1.4-6.3-2.8 c-1.4-1.4-2.3-3.4-2.8-6.1c-0.4-2.5-0.6-5.8-0.6-9.8V73.2h19.3V50.3h-19.3V10.9h-26.7v97.9c0,8.3,0.7,15.3,2.1,20.9 c1.4,5.5,3.8,10,7.1,13.4s7.7,5.8,13,7.3c5.4,1.5,12.2,2.2,20.3,2.2L208.9,152.6L208.9,152.6z M361.7,151.6V3.1H335v148.5H361.7z M137.2,60.3c-7.4-8-17.8-12-31-12c-6.4,0-12.3,1.3-17.5,3.9C83.4,54.8,79,58.4,75.4,63L74,64.9v-1.7V50.3H47.7v101.2h26.5V97.6v3.7 c0-0.6,0-1.2,0-1.8c0.3-9.5,2.6-16.5,7-21c4.7-4.8,10.4-7.2,16.9-7.2c7.7,0,13.6,2.4,17.5,7c3.8,4.6,5.8,11.1,5.8,19.4l0,0V98l0,0 l0,0v53.5h26.9V94.1C148.4,79.7,144.6,68.3,137.2,60.3z M321.2,100.8c0-7.3-1.3-14.1-3.8-20.5c-2.6-6.3-6.2-11.9-10.7-16.7 c-4.6-4.8-10.1-8.5-16.5-11.2s-13.5-4-21.2-4c-7.3,0-14.2,1.4-20.6,4.1c-6.4,2.8-12,6.5-16.7,11.2s-8.5,10.3-11.2,16.7 c-2.8,6.4-4.1,13.3-4.1,20.6c0,7.3,1.3,14.2,3.9,20.6c2.6,6.4,6.3,12,10.9,16.7c4.6,4.7,10.3,8.5,16.9,11.2 c6.6,2.8,13.9,4.2,21.7,4.2c22.6,0,36.6-10.3,45-19.9l-19.2-14.6c-4,4.8-13.6,11.3-25.6,11.3c-7.5,0-13.7-1.7-18.4-5.2 c-4.7-3.4-7.9-8.2-9.6-14.1l-0.3-0.9h79.5L321.2,100.8L321.2,100.8z M241.9,91.5c0-7.4,8.5-20.3,26.8-20.4 c18.3,0,26.9,12.9,26.9,20.3L241.9,91.5z"/></svg></span>GPU</span><span class="value"><span class="temp" id="gpuTemp"></span><span id="gpuV">&ndash;</span></span></div>
     <div class="sub" id="gpuS">&nbsp;</div><canvas id="gpuC"></canvas></section>
@@ -1019,8 +1099,18 @@ function since(sec) {               // 273600 -> "3 days, 4 hours"
   const unit = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
   return d ? unit(d, 'day') + ', ' + unit(h, 'hour') : h ? unit(h, 'hour') + ', ' + unit(m, 'minute') : unit(m, 'minute');
 }
+// A tile's temperature: amber from `warn`, red from `hot`. When temperatures can't be read,
+// an amber "Temp n/a" with the reason on hover; a tile with no sensor (e.g. most DDR4) shows none.
+function showTemp(id, t, warn, hot, error, each) {
+  const el = $(id), deg = String.fromCharCode(176) + 'C';
+  el.textContent = t != null ? Math.round(t) + deg : error ? 'Temp n/a' : '';
+  el.className = 'temp' + (t != null ? (t >= hot ? ' hot' : t >= warn ? ' warn' : '') : error ? ' warn' : '');
+  el.title = t == null && error ? 'Temperature unavailable: ' + error : (each || []).map(x => x.name + ': ' + x.t + deg).join('\n');
+}
 function render(s) {
   if (s.uptime != null) $('uptime').textContent = 'Up ' + since(s.uptime);
+  showTemp('cpuTemp', s.cpuTemp, 80, 90, s.tempError, s.cpuTemps);       // CPU package: amber at 80, red at 90
+  showTemp('memTemp', s.memTemp, 70, 80, s.tempError, s.memTemps);       // hottest stick: amber at 70, red at 80
   $('restart').hidden = !s.restartPending;
   $('restart').title = s.restartReason ? 'Waiting on: ' + s.restartReason : '';
   $('cpuV').textContent = s.cpu.toFixed(0) + '%';

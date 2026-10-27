@@ -16,6 +16,12 @@ called out under **Changed** or **Removed** with upgrade notes.
   "Mixed") and shows the maker's logo for the seven biggest memory makers: Samsung, SK hynix,
   Micron (and Crucial), Kingston, Corsair, G.Skill and ADATA. Hover the memory line for each
   stick's slot, part number, size and current speed.
+- **CPU and memory temperatures** on their tiles, every 5 seconds, styled like the GPU's: the CPU
+  package temperature (amber at 80 °C, red at 90 °C) and the hottest memory stick (amber at
+  70 °C, red at 80 °C), each core or stick on hover. Read through LibreHardwareMonitor's sensor
+  library and the PawnIO driver, which the new `Install-TemperatureSensors.ps1` downloads
+  (pinned versions, SHA-256 and signature checked) and sets up. When they can't be read, the
+  tile shows an amber "Temp n/a" with the reason on hover.
 
 ## [0.5.0] - 2026-10-27
 
