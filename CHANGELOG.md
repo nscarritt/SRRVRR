@@ -16,6 +16,9 @@ called out under **Changed** or **Removed** with upgrade notes.
 - **Alerts:** a banner slides down from the top of the page when a Valheim player joins or
   leaves ("Ivar joined Valheim · 2 players online"), and closes by itself or with ×. A
   **Sound** button in the header turns on a soft ding with each alert, remembered per browser.
+- **Plex stream alerts:** a banner when a stream starts, with the title, who, the device and app,
+  and how it plays (direct play, direct stream, or transcoding from one quality to another on
+  the GPU or CPU), plus its bitrate. The Plex hover now also names the device.
 - **Security policy** (`SECURITY.md`): how to report a vulnerability privately through GitHub,
   what counts as one, and the known by-design limitations. Linked from the README security
   warning.
