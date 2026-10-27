@@ -19,6 +19,7 @@ Current version: **0.5.0**. See the [changelog](CHANGELOG.md) for what changed i
 - [Quick start](#quick-start)
 - [Settings](#settings)
   - [Upgrading from an older version](#upgrading-from-an-older-version)
+  - [CPU and memory temperatures](#cpu-and-memory-temperatures)
   - [Command-line override](#command-line-override)
   - [Firewall rules](#firewall-rules)
 - [Security warning: public IP addresses](#security-warning-public-ip-addresses)
@@ -63,6 +64,20 @@ For NVIDIA cards, the GPU tile also shows the card's temperature next to its usa
 `nvidia-smi` (installed with NVIDIA's driver), updated every 5 seconds. It turns amber at 80 °C
 and red at 90 °C. AMD and Intel have no built-in equivalent, so their cards show no temperature.
 
+The CPU and Memory tiles show a temperature the same way, updated every 5 seconds, once
+[temperature sensors are set up](#cpu-and-memory-temperatures):
+
+- **CPU:** the package temperature, the overall reading the processor reports for itself (AMD
+  calls it Tctl). An average across cores could hide one hot core. Amber at 80 °C, red at 90 °C;
+  most current desktop processors throttle at 95–105 °C. Hover for each core.
+- **Memory:** the hottest stick, read from each stick's own sensor, since one overheating stick is
+  what causes errors. Amber at 70 °C, red at 80 °C; memory is specified to 85 °C. Hover for each
+  stick. DDR5 sticks have a sensor; most DDR4 sticks don't, and then the tile shows no
+  temperature.
+
+When temperatures can't be read (not set up, not running as administrator, or the sensors don't
+answer), the tiles show an amber **Temp n/a**; hover for the reason.
+
 The page follows your system's light/dark theme and works on phones.
 
 ## Requirements
@@ -83,13 +98,35 @@ something doesn't show up on another language, please open an issue.
    - `SRRVRR.ps1`
    - `Start SRRVRR.bat`
    - `SRRVRR.config.example.psd1`
+   - `Install-TemperatureSensors.ps1` (optional, for CPU and memory temperatures)
 2. Copy `SRRVRR.config.example.psd1` to `SRRVRR.config.psd1` and edit it
    (see [Settings](#settings)). Without it, the defaults below are used.
-3. Right-click `Start SRRVRR.bat` > **Run as administrator**.
-4. Open the address the window shows, e.g. `http://<that-machine>:8099` or
+3. Optional: right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell** once (see
+   [CPU and memory temperatures](#cpu-and-memory-temperatures)).
+4. Right-click `Start SRRVRR.bat` > **Run as administrator**.
+5. Open the address the window shows, e.g. `http://<that-machine>:8099` or
    `http://<its-IP>:8099`, from any browser on your network.
 
 Leave the window open while you want monitoring. Close it (or press Ctrl+C) to stop.
+
+### CPU and memory temperatures
+
+Windows has no built-in way to read the processor's or memory's temperature, so SRRVRR uses two
+free components, which `Install-TemperatureSensors.ps1` downloads and sets up:
+
+- **[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)'s sensor
+  library** (MPL-2.0), copied to `lib\LibreHardwareMonitor` next to `SRRVRR.ps1`. Only the
+  library and the files it needs are kept, not the app.
+- **The [PawnIO](https://github.com/namazso/PawnIO.Setup) driver**, signed by its author, which the library uses to
+  read the sensors. It replaces the old WinRing0 driver that antivirus software flags.
+
+Close SRRVRR, right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell**, and accept
+the administrator prompt. Both downloads are pinned to one version and checked against a known
+SHA-256 hash, and the PawnIO installer's signature is checked too; anything that doesn't match is
+refused. At the end it reads the temperatures once, so you can see they work. Then start SRRVRR
+again. Running it again is safe: it replaces the library and installs PawnIO only when it's
+missing or older. To remove it all: delete the `lib` folder, and uninstall PawnIO from
+**Settings > Apps**.
 
 ## Settings
 
@@ -98,7 +135,8 @@ monitor after changing it.
 
 That file is listed in `.gitignore`, so it is never committed to the repository and pulling or
 copying a new version of the code never overwrites it. When updating, replace only
-`SRRVRR.ps1`, `Start SRRVRR.bat` and `SRRVRR.config.example.psd1`.
+`SRRVRR.ps1`, `Start SRRVRR.bat`, `SRRVRR.config.example.psd1` and
+`Install-TemperatureSensors.ps1` (the `lib` folder it creates stays as it is).
 
 | Setting | Default | Values |
 |---------|---------|--------|
@@ -264,9 +302,9 @@ to a minute late.
 ## Administrator vs. not
 
 - **As administrator:** the page is reachable from other devices on your network, the firewall
-  rule is managed, and per-process network works.
+  rule is managed, and per-process network and CPU/memory temperatures work.
 - **Not as administrator:** it still runs, but only `http://localhost:<port>` on that machine
-  works and per-process network shows "n/a".
+  works, per-process network shows "n/a", and the CPU and memory temperatures show "Temp n/a".
 
 ## Troubleshooting
 
@@ -277,6 +315,9 @@ to a minute late.
 - **GPU tile says "... not found, showing ...":** `PreferredGpu` doesn't exactly match any card's
   name. The startup message lists the names Windows reports; copy one into the config.
 - **GPU shows N/A:** the machine has no GPU performance counters (e.g. no GPU or a basic display driver).
+- **CPU or memory shows "Temp n/a":** hover it for the reason. "Not set up" or "the PawnIO driver
+  is missing": run `Install-TemperatureSensors.ps1`. "Needs administrator": start SRRVRR as
+  administrator. A memory tile with no temperature at all means the sticks have no sensor.
 - **Script won't run (execution policy):** use the `.bat` launcher, or run
   `powershell -ExecutionPolicy Bypass -File .\SRRVRR.ps1`.
 
@@ -328,3 +369,5 @@ Valheim, Plex, NVIDIA, AMD, Intel, Samsung, SK hynix, Micron, Kingston, Corsair,
 ADATA logos are trademarks of their respective owners and are
 used only to identify those products; they are not covered by this license. The CPU, memory,
 network, GPU, storage and bell icons are from [Lucide](https://lucide.dev) (ISC license).
+`Install-TemperatureSensors.ps1` downloads LibreHardwareMonitor's library (MPL-2.0) and the
+PawnIO driver from their own GitHub releases; neither is part of this repository.

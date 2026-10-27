@@ -2,3 +2,5 @@
 SRRVRR.config.psd1
 # The same file's name before the rename to SRRVRR.
 SystemMonitor.config.psd1
+# Downloaded by Install-TemperatureSensors.ps1 (LibreHardwareMonitor's sensor library).
+lib/
