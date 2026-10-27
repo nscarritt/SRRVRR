@@ -9,31 +9,40 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-27
+
+Alerts: know when someone joins Valheim or starts a Plex stream, with an optional soft ding.
+
 ### Added
 
-- README opens with a screenshot of a live dashboard (private share names blurred).
-- README table of contents linking every section.
 - **Alerts:** a banner slides down from the top of the page when a Valheim player joins or
   leaves ("Ivar joined Valheim · 2 players online"), and closes by itself or with ×. A
   **Sound** button in the header turns on a soft ding with each alert, remembered per browser.
+  ([#33](https://github.com/nscarritt/SRRVRR/pull/33))
 - **Plex stream alerts:** a banner when a stream starts, with the title, who, the device and app,
   and how it plays (direct play, direct stream, or transcoding from one quality to another on
   the GPU or CPU), plus its bitrate. The Plex hover now also names the device.
+  ([#34](https://github.com/nscarritt/SRRVRR/pull/34))
+- README opens with a screenshot of a live dashboard (private share names blurred), and has a
+  table of contents linking every section. ([#27](https://github.com/nscarritt/SRRVRR/pull/27),
+  [#31](https://github.com/nscarritt/SRRVRR/pull/31))
 - **Security policy** (`SECURITY.md`): how to report a vulnerability privately through GitHub,
   what counts as one, and the known by-design limitations. Linked from the README security
-  warning.
+  warning. ([#28](https://github.com/nscarritt/SRRVRR/pull/28))
 
 ### Changed
 
 - **Drive read/write column**: fixed-width cells that don't shift as numbers change, units that
   scale from B/s to GB/s, and colors by load: amber at 70% and red at 90% of the drive's typical
   maximum for its type (NVMe, SATA SSD, hard drive, USB), raised to the fastest speed seen.
+  ([#29](https://github.com/nscarritt/SRRVRR/pull/29))
 
 ### Fixed
 
 - **Plex details appear even when Plex starts after SRRVRR.** The Plex token used to be looked up
   once, at startup; if Plex wasn't running yet under its own Windows account, stream details stayed
   unavailable until SRRVRR was restarted. SRRVRR now looks again every minute until it finds it.
+  ([#32](https://github.com/nscarritt/SRRVRR/pull/32))
 
 ## [0.4.1] - 2026-10-23
 
@@ -200,7 +209,8 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nscarritt/SRRVRR/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/nscarritt/SRRVRR/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nscarritt/SRRVRR/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nscarritt/SRRVRR/compare/v0.2.0...v0.3.0
