@@ -2,7 +2,8 @@
   SRRVRR.ps1 - a tiny live CPU / memory / GPU / network monitor for the SRRVRR server.
 
   Run it on the machine you want to watch, then open http://<that-machine>:8099
-  in any browser. Press Ctrl+C in this window to stop it.
+  in any browser. Press Ctrl+C in this window to stop it, or run Stop SRRVRR.bat
+  (SRRVRR.ps1 -Stop) from anywhere on the machine.
 
   Settings (port, firewall, GPU, processes) live in SRRVRR.config.psd1 next to
   this script; copy SRRVRR.config.example.psd1 to create it.
@@ -10,10 +11,45 @@
   can be managed.
 #>
 param(
-    [int]$Port    # overrides Port from the config file
+    [int]$Port,   # overrides Port from the config file
+    [switch]$Stop # stop a running SRRVRR (the live or the test copy) instead of starting one
 )
 
 $ErrorActionPreference = 'Stop'
+
+# --- Stop ---------------------------------------------------------------------
+# -Stop (what Stop SRRVRR.bat runs) ends whichever SRRVRR is running, the live
+# SRRVRR.ps1 or "SRRVRR - test.ps1", and closes its Start SRRVRR window. Windows
+# hides an administrator process's command line from programs that aren't, so when
+# nothing is found without administrator, this asks for it and looks again. Ending
+# the process skips SRRVRR's own cleanup, so this also stops its network-event
+# session (the next start would clear it anyway).
+if ($Stop) {
+    $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $running = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object {
+        $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)-File\s+"?[^"]*\bSRRVRR( - test)?\.ps1"?' -and $_.CommandLine -notmatch '(?i)\s-Stop\b'
+    })
+    if (-not $running -and -not $elevated) {
+        Write-Host 'Looking for an SRRVRR started as administrator; Windows will ask for administrator.'
+        try { Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Stop" }
+        catch { Write-Host 'Not stopped: the administrator prompt was declined.'; exit 1 }
+        exit 0
+    }
+    if (-not $running) { Write-Host 'SRRVRR is not running.' }
+    foreach ($p in $running) {
+        $which = if ($p.CommandLine -match '(?i)SRRVRR - test\.ps1') { 'test version' } else { 'live version' }
+        $window = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)" -ErrorAction SilentlyContinue
+        try {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+            # The Start SRRVRR window would otherwise wait at "Press any key".
+            if ($window -and $window.Name -eq 'cmd.exe' -and $window.CommandLine -match '(?i)Start SRRVRR.*\.bat') { Stop-Process -Id $window.ProcessId -Force -ErrorAction SilentlyContinue }
+            Write-Host "Stopped the SRRVRR $which (process $($p.ProcessId))."
+        } catch { Write-Host "Couldn't stop the SRRVRR $which (process $($p.ProcessId)): $($_.Exception.Message)" }
+    }
+    if ($running -and $elevated) { & logman.exe stop SRRVRRNet -ets *> $null }
+    if (-not [Console]::IsOutputRedirected) { Start-Sleep -Seconds 4 }   # time to read the result before the window closes
+    exit 0
+}
 
 # --- Startup steps ------------------------------------------------------------
 # Each startup step prints its own numbered line, with anything it finds on the
