@@ -17,6 +17,12 @@ called out under **Changed** or **Removed** with upgrade notes.
   what counts as one, and the known by-design limitations. Linked from the README security
   warning.
 
+### Changed
+
+- **Drive read/write column**: fixed-width cells that don't shift as numbers change, units that
+  scale from B/s to GB/s, and colors by load: amber at 70% and red at 90% of the drive's typical
+  maximum for its type (NVMe, SATA SSD, hard drive, USB), raised to the fastest speed seen.
+
 ## [0.4.1] - 2026-10-23
 
 Storage polish and friendlier guidance.
