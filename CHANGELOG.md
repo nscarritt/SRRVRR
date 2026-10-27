@@ -13,6 +13,9 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 - README opens with a screenshot of a live dashboard (private share names blurred).
 - README table of contents linking every section.
+- **Alerts:** a banner slides down from the top of the page when a Valheim player joins or
+  leaves ("Ivar joined Valheim · 2 players online"), and closes by itself or with ×. A
+  **Sound** button in the header turns on a soft ding with each alert, remembered per browser.
 - **Security policy** (`SECURITY.md`): how to report a vulnerability privately through GitHub,
   what counts as one, and the known by-design limitations. Linked from the README security
   warning.
