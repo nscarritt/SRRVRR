@@ -692,10 +692,23 @@ $slowChecks = {
                 $items = @()
                 foreach ($s in @($xml.MediaContainer.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })) {
                     $ts = $s.TranscodeSession
+                    $transcoding = [bool]($ts -and ($ts.videoDecision -eq 'transcode' -or $ts.audioDecision -eq 'transcode'))
+                    # A title can have several versions (e.g. 4K and 1080p); the one playing is marked selected.
+                    $media = @($s.Media | Where-Object { $_.selected -eq '1' })[0]
+                    if (-not $media) { $media = @($s.Media)[0] }
                     $items += @{
+                        key         = if ($s.Session.id) { [string]$s.Session.id } else { [string]$s.sessionKey }   # tells streams apart
                         user        = [string]$s.User.title
                         title       = if ($s.grandparentTitle) { "$($s.grandparentTitle) - $($s.title)" } else { [string]$s.title }
-                        transcoding = [bool]($ts -and ($ts.videoDecision -eq 'transcode' -or $ts.audioDecision -eq 'transcode'))
+                        transcoding = $transcoding
+                        device      = [string]$s.Player.title     # e.g. "Living Room TV"
+                        app         = [string]$s.Player.product   # e.g. "Plex for Roku"
+                        # Direct play sends the file as is; direct stream only repackages it; transcode re-encodes it.
+                        playback    = if ($transcoding) { 'transcode' } elseif ($ts) { 'direct stream' } else { 'direct play' }
+                        source      = if ($media.videoResolution) { [string]$media.videoResolution } else { ([string]$media.audioCodec).ToUpper() }   # "1080", "4k"; music: "FLAC"
+                        target      = if ($ts -and $ts.videoDecision -eq 'transcode') { [string]$ts.height } else { '' }   # transcoded height, e.g. "720"
+                        hardware    = [bool]($ts -and $ts.transcodeHwEncoding)   # encoding on the GPU (e.g. NVENC) rather than the CPU
+                        kbps        = [int]$s.Session.bandwidth
                     }
                 }
                 $activity.Plex = @{ streams = $items.Count; transcoding = @($items | Where-Object { $_.transcoding }).Count; items = $items }
@@ -967,6 +980,7 @@ function render(s) {
   renderProcs(s);
   renderDrives(s);
   watchValheim(s);
+  watchPlex(s);
 }
 function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
   const TB = 1099511627776, GB = 1073741824;
@@ -1034,7 +1048,7 @@ function detail(p, a) {
   else if (p.name === 'Plex') {
     text = a.streams ? plural(a.streams, 'stream') + ' &middot; ' +
       (a.transcoding ? a.transcoding + ' transcoding' : 'direct play') : 'No one watching';
-    hover = (a.items || []).map(i => i.user + ': ' + i.title + (i.transcoding ? ' (transcoding)' : ' (direct play)'));
+    hover = (a.items || []).map(i => i.user + ': ' + i.title + (plexDevice(i) ? ' on ' + plexDevice(i) : '') + ' (' + (i.playback || 'direct play') + ')');
   }
   if (!text) return '';
   return '<tr class="detail"><td colspan="6" title="' + hover.map(esc).join('&#10;') + '">' + text + '</td></tr>';
@@ -1122,6 +1136,25 @@ function watchValheim(s) {
       [(a.players ? plural(a.players, 'player') : 'No players') + ' online']);
   }
   lastValheim = {players: a.players, names: names};
+}
+// Plex: a banner for each new stream, told apart by Plex's session ID, so pausing and
+// resuming doesn't count. Says what, who, on which device, and how it's being played.
+const plexDevice = i => !i.device ? i.app || '' : i.app && i.app !== i.device ? i.device + ' (' + i.app + ')' : i.device;
+const plexRes = r => /^\d+$/.test(r || '') ? r + 'p' : r === '4k' ? '4K' : String(r || '').toUpperCase();
+let plexKeys = null;
+function watchPlex(s) {
+  const a = (s.activity || {}).Plex;
+  if (!a || a.error) return;
+  const items = a.items || [];
+  if (plexKeys) items.filter(i => i.key && !plexKeys.includes(i.key)).forEach(i => {
+    const arrow = ' ' + String.fromCharCode(8594) + ' ';
+    const how = i.playback === 'transcode'
+      ? 'Transcoding ' + plexRes(i.source) + (i.target ? arrow + plexRes(i.target) : '') + (i.hardware ? ' on the GPU' : ' on the CPU')
+      : (i.playback === 'direct stream' ? 'Direct stream' : 'Direct play') + (i.source ? ' ' + String.fromCharCode(183) + ' ' + plexRes(i.source) : '');
+    const rate = i.kbps ? ' ' + String.fromCharCode(183) + ' ' + (i.kbps >= 1000 ? (i.kbps / 1000).toFixed(1) + ' Mbps' : i.kbps + ' Kbps') : '';
+    notify('plex', 'Plex: ' + i.title, [(i.user || 'Someone') + (plexDevice(i) ? ' on ' + plexDevice(i) : ''), how + rate]);
+  });
+  plexKeys = items.map(i => i.key);
 }
 async function tick() {
   try {
