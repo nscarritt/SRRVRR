@@ -9,6 +9,14 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Processor and memory names:** the CPU tile names the processor ("Intel Core i7-13700K") and
+  shows the Intel or AMD logo; the Memory tile names the maker and type ("G.Skill DDR5", or
+  "Mixed") and shows the maker's logo for the seven biggest memory makers: Samsung, SK hynix,
+  Micron (and Crucial), Kingston, Corsair, G.Skill and ADATA. Hover the memory line for each
+  stick's slot, part number, size and current speed.
+
 ## [0.5.0] - 2026-10-27
 
 Alerts: know when someone joins Valheim or starts a Plex stream, with an optional soft ding.
