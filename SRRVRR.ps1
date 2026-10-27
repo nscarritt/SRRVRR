@@ -558,7 +558,20 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexToken, $plexUrl, $valheimQueryPort)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort)
+
+    # Plex keeps its sign-in token in the registry of the Windows account it runs
+    # under. That account's registry is only loaded while it is signed in or Plex is
+    # running, so the loop below keeps looking until it's found. The token is only
+    # ever sent to Plex itself on this machine, never printed or shown on the page.
+    function Find-PlexToken {
+        $hives = @('HKCU:') + @(Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue | ForEach-Object { "Registry::HKEY_USERS\$($_.PSChildName)" })
+        foreach ($h in $hives) {
+            try { $t = (Get-ItemProperty -LiteralPath "$h\Software\Plex, Inc.\Plex Media Server" -Name PlexOnlineToken -ErrorAction Stop).PlexOnlineToken } catch { $t = $null }
+            if ($t) { return $t }
+        }
+        $null
+    }
 
     # Valve's A2S server query over UDP, which Valheim answers on its game port + 1.
     # Sends one request and returns the reply bytes; when the server answers with a
@@ -591,7 +604,7 @@ $slowChecks = {
     }
     $activity = @{}   # process name -> what it's doing (players, streams); published as $state.activity
     $valheimAnswered = $false
-    if ($plexUrl -and -not $plexToken) { $activity.Plex = @{ error = 'no Plex token found' }; $state.activity = $activity }
+    $plexToken = $null
     $ProgressPreference = 'SilentlyContinue'   # no window to show progress in; don't let records pile up in memory
     $tick = 0
     while ($true) {
@@ -616,11 +629,22 @@ $slowChecks = {
                 }
                 # Physical disks report SMART-based health; Get-Disk also covers
                 # virtual disks such as Storage Spaces.
-                $health = @{}   # disk number -> @{ name; health }
-                foreach ($d in Get-Disk -ErrorAction SilentlyContinue) { $health[[int]$d.Number] = @{ name = $d.FriendlyName; health = [string]$d.HealthStatus } }
+                $health = @{}   # disk number -> @{ name; health; bus; media }
+                foreach ($d in Get-Disk -ErrorAction SilentlyContinue) { $health[[int]$d.Number] = @{ name = $d.FriendlyName; health = [string]$d.HealthStatus; bus = [string]$d.BusType; media = '' } }
                 foreach ($d in Get-PhysicalDisk -ErrorAction SilentlyContinue) {
                     $n = 0
-                    if ([int]::TryParse($d.DeviceId, [ref]$n)) { $health[$n] = @{ name = $d.FriendlyName; health = [string]$d.HealthStatus } }
+                    if ([int]::TryParse($d.DeviceId, [ref]$n)) { $health[$n] = @{ name = $d.FriendlyName; health = [string]$d.HealthStatus; bus = [string]$d.BusType; media = [string]$d.MediaType } }
+                }
+                # Windows doesn't report a drive's maximum speed, so use the typical ceiling
+                # for its connection and media type (decimal MB/s, as drive makers quote them).
+                function Get-DriveCeiling($bus, $media) {
+                    if ($media -eq 'HDD')  { return @{ bytes = 200e6;  kind = 'hard drive' } }    # spinning disks top out near 200 MB/s
+                    switch -Regex ($bus) {
+                        '^NVMe$'          { return @{ bytes = 3500e6; kind = 'NVMe SSD' } }
+                        '^(SATA|ATA|SAS)$' { return @{ bytes = 550e6; kind = 'SATA SSD' } }       # the SATA III link limit
+                        '^USB$'           { return @{ bytes = 400e6;  kind = 'USB drive' } }
+                    }
+                    @{ bytes = 500e6; kind = 'drive' }                                            # unknown or virtual: a middle estimate
                 }
                 $drives = @()
                 foreach ($v in Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Sort-Object DeviceID) {
@@ -628,7 +652,10 @@ $slowChecks = {
                     $disk = $null
                     $letter = $v.DeviceID.TrimEnd(':')
                     if ($diskOf.ContainsKey($letter)) { $disk = $health[$diskOf[$letter]] }
+                    $ceiling = if ($disk) { Get-DriveCeiling $disk.bus $disk.media } else { Get-DriveCeiling '' '' }
                     $drives += @{
+                        ceiling = $ceiling.bytes
+                        kind   = $ceiling.kind
                         letter = $v.DeviceID
                         label  = $v.VolumeName
                         size   = [double]$v.Size
@@ -649,6 +676,11 @@ $slowChecks = {
             if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $reasons += 'Windows component servicing' }
             $state.restartPending = [bool]$reasons
             $state.restartReason = $reasons -join ', '
+        }
+        # Plex token, every 60 seconds until found (and right away at start).
+        if ($plexUrl -and -not $plexToken -and $tick % 12 -eq 0) {
+            $plexToken = Find-PlexToken
+            if (-not $plexToken) { $activity.Plex = @{ error = 'no Plex token found yet (checking every minute)' }; $state.activity = $activity }
         }
         # Plex activity, every 10 seconds: who is watching and whether Plex has to
         # transcode (re-encode on the fly, which is what loads the GPU) or can play
@@ -721,19 +753,10 @@ $slowChecks = {
         Start-Sleep -Seconds 5
     }
 }
-# Plex keeps its sign-in token in the registry of the Windows account it runs
-# under. Read it from there so it never has to be typed into a config file; it is
-# only sent to Plex itself on this machine, never printed or shown on the page.
-$plexUrl = $null; $plexToken = $null
-if ($services | Where-Object { $_.name -eq 'Plex' }) {
-    $plexUrl = 'http://127.0.0.1:32400'
-    $hives = @('HKCU:') + @(Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue | ForEach-Object { "Registry::HKEY_USERS\$($_.PSChildName)" })
-    foreach ($h in $hives) {
-        try { $plexToken = (Get-ItemProperty -LiteralPath "$h\Software\Plex, Inc.\Plex Media Server" -Name PlexOnlineToken -ErrorAction Stop).PlexOnlineToken } catch { }
-        if ($plexToken) { break }
-    }
-    Write-Status $(if ($plexToken) { "Plex token found in Plex's own settings" } else { 'No Plex token found, so Plex stream details are unavailable' })
-}
+# Plex's sign-in token is looked up by the slow sampler (Find-PlexToken), so it is
+# found even when Plex starts after SRRVRR.
+$plexUrl = $null
+if ($services | Where-Object { $_.name -eq 'Plex' }) { $plexUrl = 'http://127.0.0.1:32400' }
 
 $valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $settings.ValheimPort + 1 } else { $null }
 
@@ -741,9 +764,9 @@ $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
 $slowWorker.Runspace = $slowRunspace
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexToken).AddArgument($plexUrl).AddArgument($valheimQueryPort)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
-if ($plexToken) { Write-Status 'Every 10 seconds: Plex streams and transcodes' }
+if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
 if ($valheimQueryPort) { Write-Status "Every 10 seconds: Valheim players and response time (query port $valheimQueryPort)" }
 [void]$slowWorker.BeginInvoke()
 Write-Status 'Every 30 seconds: drive space and drive health'
@@ -809,7 +832,7 @@ tr.detail td{border-top:none;padding:0 0 9px calc(1.15em + 7px);font-size:12.5px
 tr.detail .warn{color:var(--warn)}
 #procNote{color:var(--muted);font-size:12.5px;margin-top:6px}
 /* Storage: one row per drive - name, usage bar, used/total, disk health, read/write speed */
-.drive{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 9.5em 7.5em 12.5em;gap:14px;align-items:center;padding:9px 0;font-variant-numeric:tabular-nums}
+.drive{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 9.5em 7.5em 14.8em;gap:14px;align-items:center;padding:9px 0;font-variant-numeric:tabular-nums}
 .drive+.drive{border-top:1px solid var(--border)}
 .drive b{font-weight:600}
 .drive .dname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -820,7 +843,11 @@ tr.detail .warn{color:var(--warn)}
 .dsize{text-align:right;white-space:nowrap}
 .dhealth{text-align:right;white-space:nowrap;font-weight:600}
 .dhealth.ok{color:var(--ok)} .dhealth.warn{color:var(--warn)} .dhealth.bad{color:var(--bad)} .dhealth.unknown{color:var(--muted);font-weight:400}
-.dio{text-align:right;white-space:nowrap;color:var(--muted)}
+/* Read/write: two fixed-width cells so the column never shifts as numbers change */
+.dio{display:flex;justify-content:flex-end;gap:10px;white-space:nowrap;color:var(--muted)}
+.dio span{display:inline-block;width:6.9em;text-align:right}
+.dio i{font-style:normal;opacity:.7;margin-right:.35em}
+.dio .ioact{color:var(--text)} .dio .iobusy{color:var(--warn)} .dio .iohot{color:var(--bad)}
 @media (max-width:700px){.drive{grid-template-columns:1fr auto;grid-template-areas:"name health" "bar bar" "size io";gap:6px 10px}
   .drive .dname{grid-area:name} .drive .bar{grid-area:bar} .drive .dsize{grid-area:size;text-align:left;color:var(--muted)} .drive .dhealth{grid-area:health} .drive .dio{grid-area:io}}
 @media (max-width:700px){th,td{padding-left:5px;padding-right:5px}td{font-size:14px}}
@@ -945,11 +972,28 @@ function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 
   const TB = 1099511627776, GB = 1073741824;
   return b >= TB ? (b / TB).toFixed(1) + ' TB' : (b / GB).toFixed(0) + ' GB';
 }
-function speed(b) {                 // bytes per second -> "12 MB/s", or "0" when idle
-  if (!b) return '0';
+// Disk speeds are in bytes per second (the convention for storage; network speeds use bits).
+function speed(b) {                 // bytes per second -> "0 B/s", "812 KB/s", "12.3 MB/s"
   const u = ['B/s', 'KB/s', 'MB/s', 'GB/s']; let i = 0;
+  b = b || 0;
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
-  return (b < 10 && i ? b.toFixed(1) : b.toFixed(0)) + ' ' + u[i];
+  return (i && b < 100 ? b.toFixed(1) : b.toFixed(0)) + ' ' + u[i];
+}
+const ioPeak = {};                  // fastest speed seen per drive this session; raises the ceiling if needed
+// One fixed-width cell: label, value, and a color for how close it is to the drive's ceiling.
+function ioCell(label, b, ceiling) {
+  const share = b / ceiling;
+  const cls = share >= 0.9 ? 'iohot' : share >= 0.7 ? 'iobusy' : b > 0 ? 'ioact' : '';   // red at 90%, amber at 70%
+  return '<span class="' + cls + '"><i>' + label + '</i>' + speed(b) + '</span>';
+}
+function ioCells(d, x) {
+  if (!x) return '<div class="dio"></div>';
+  ioPeak[d.letter] = Math.max(ioPeak[d.letter] || 0, x.r, x.w);
+  const ceiling = Math.max(d.ceiling || 500e6, ioPeak[d.letter]);
+  const hover = 'Read ' + speed(x.r) + ', write ' + speed(x.w) + '. Colors compare against about ' +
+    Math.round(ceiling / 1e6) + ' MB/s, ' + (ceiling > (d.ceiling || 0) ? 'the fastest seen on this drive' :
+    'typical for a ' + (d.kind || 'drive')) + ': amber at 70%, red at 90%.';
+  return '<div class="dio" title="' + hover + '">' + ioCell('R', x.r, ceiling) + ioCell('W', x.w, ceiling) + '</div>';
 }
 function renderDrives(s) {
   const drives = s.drives || [], io = s.diskIO || {};
@@ -963,8 +1007,7 @@ function renderDrives(s) {
       '<div class="bar ' + level + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
       '<div class="dsize">' + size(used) + ' / ' + size(d.size) + ' &middot; ' + pct.toFixed(0) + '%</div>' +
       '<div class="dhealth ' + cls + '" title="' + title + '">' + (h || 'Unknown') + '</div>' +
-      '<div class="dio" title="Read and write speed right now">' +
-      (io[d.letter] ? 'R ' + speed(io[d.letter].r) + ' &middot; W ' + speed(io[d.letter].w) : '') + '</div></div>';
+      ioCells(d, io[d.letter]) + '</div>';
   }).join('');
 }
 // Text from other programs (show titles, player names) is escaped before it goes into the page.

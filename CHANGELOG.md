@@ -20,6 +20,18 @@ called out under **Changed** or **Removed** with upgrade notes.
   what counts as one, and the known by-design limitations. Linked from the README security
   warning.
 
+### Changed
+
+- **Drive read/write column**: fixed-width cells that don't shift as numbers change, units that
+  scale from B/s to GB/s, and colors by load: amber at 70% and red at 90% of the drive's typical
+  maximum for its type (NVMe, SATA SSD, hard drive, USB), raised to the fastest speed seen.
+
+### Fixed
+
+- **Plex details appear even when Plex starts after SRRVRR.** The Plex token used to be looked up
+  once, at startup; if Plex wasn't running yet under its own Windows account, stream details stayed
+  unavailable until SRRVRR was restarted. SRRVRR now looks again every minute until it finds it.
+
 ## [0.4.1] - 2026-10-23
 
 Storage polish and friendlier guidance.
