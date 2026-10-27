@@ -851,10 +851,29 @@ tr.detail .warn{color:var(--warn)}
 @media (max-width:700px){.drive{grid-template-columns:1fr auto;grid-template-areas:"name health" "bar bar" "size io";gap:6px 10px}
   .drive .dname{grid-area:name} .drive .bar{grid-area:bar} .drive .dsize{grid-area:size;text-align:left;color:var(--muted)} .drive .dhealth{grid-area:health} .drive .dio{grid-area:io}}
 @media (max-width:700px){th,td{padding-left:5px;padding-right:5px}td{font-size:14px}}
+/* Sound on/off for alerts (bell icons from Lucide) */
+#sound{font:inherit;font-size:12.5px;color:var(--muted);background:none;border:1px solid var(--border);border-radius:999px;padding:1px 9px;margin-left:10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+#sound:hover,#sound[data-on="1"]{color:var(--text)}
+#sound .ticon{width:13px;height:13px}
+header{flex-wrap:wrap}
+#sound .v-on,#sound[data-on="1"] .v-off{display:none}
+#sound[data-on="1"] .v-on{display:block}
+/* Alerts: banners that slide down from the top, newest first */
+#toasts{position:fixed;top:0;left:50%;transform:translateX(-50%);width:min(460px,calc(100% - 32px));z-index:10;display:flex;flex-direction:column;gap:8px;padding-top:12px;pointer-events:none}
+.toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);transform:translateY(-150%);opacity:0;transition:transform .35s ease,opacity .35s ease}
+.toast.show{transform:none;opacity:1}
+.toast .plogo{flex:none;margin:1px 0 0}
+.toast div{flex:1;min-width:0}
+.toast b{display:block;font-weight:600}
+.toast small{display:block;color:var(--muted);font-size:12.5px}
+.toast button{flex:none;font:inherit;font-size:20px;line-height:1;color:var(--muted);background:none;border:0;cursor:pointer;padding:0 2px}
+.toast button:hover{color:var(--text)}
+@media (prefers-reduced-motion:reduce){.toast{transform:none;transition:opacity .2s}}
 </style>
 </head>
 <body>
-<header><div><h1>SRRVRR</h1><span id="uptime"></span><span id="restart" hidden>Restart pending</span></div><span id="status">Connecting&hellip;</span></header>
+<header><div><h1>SRRVRR</h1><span id="uptime"></span><span id="restart" hidden>Restart pending</span></div><div><span id="status">Connecting&hellip;</span><button id="sound" type="button" title="Play a soft ding with each alert"><svg class="ticon v-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg><svg class="ticon v-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"/><path d="m2 2 20 20"/><path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"/></svg><span>Sound off</span></button></div></header>
+<div id="toasts" aria-live="polite"></div>
 <main>
   <section class="card"><div class="top"><span class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>CPU</span><span class="value" id="cpuV">&ndash;</span></div>
     <div class="sub" id="cpuS">&nbsp;</div><canvas id="cpuC"></canvas></section>
@@ -947,6 +966,7 @@ function render(s) {
   draw('netC', [{data: hist.rx, color: css('--rx'), fill: true}, {data: hist.tx, color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax));
   renderProcs(s);
   renderDrives(s);
+  watchValheim(s);
 }
 function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
   const TB = 1099511627776, GB = 1073741824;
@@ -1031,6 +1051,77 @@ function renderProcs(s) {
   $('procCard').hidden = !(s.services || []).length;   // every process turned off in the config
   $('procNote').hidden = !s.netError;
   $('procNote').textContent = s.netError ? 'Per-process network unavailable: ' + s.netError + '.' : '';
+}
+// --- Alerts: a banner that slides down from the top, and a soft ding when sound is on.
+// Browsers only play sound after someone has clicked or tapped the page, so the header
+// button turns sound on (remembered in this browser), and after a reload one click
+// anywhere on the page allows it again.
+let audio = null, soundOn = false, lastDing = 0;
+try { soundOn = localStorage.getItem('srrvrr.sound') === '1'; } catch (e) {}
+const soundAllowed = () => !navigator.userActivation || navigator.userActivation.hasBeenActive;
+function ding() {
+  if (!soundOn || !soundAllowed() || Date.now() - lastDing < 500) return;   // several alerts at once: one ding
+  lastDing = Date.now();
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+    // One sine tone at 880 Hz that starts at once and fades out over about a second.
+    const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+    o.type = 'sine'; o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.15, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+    o.connect(g); g.connect(audio.destination);
+    o.start(t); o.stop(t + 1.2);
+  } catch (e) {}
+}
+let armed = soundAllowed();          // false after a reload, until the page is clicked
+function showSound() {
+  $('sound').dataset.on = soundOn ? '1' : '';
+  $('sound').lastChild.textContent = !soundOn ? 'Sound off' : armed ? 'Sound on' : 'Sound on: tap to allow';
+}
+$('sound').onclick = () => {
+  if (!(soundOn && !armed)) {        // when sound is on but not yet allowed, this click only allows it
+    soundOn = !soundOn;
+    try { localStorage.setItem('srrvrr.sound', soundOn ? '1' : '0'); } catch (e) {}
+  }
+  armed = true; showSound(); ding(); // a sample ding
+};
+document.addEventListener('click', () => { if (!armed) { armed = true; showSound(); } });
+showSound();
+// A banner: title, a line or two of detail, and a close button. It closes by itself
+// after 15 seconds of the page being on screen, so alerts that arrive in a background
+// tab are still there when you come back.
+function notify(icon, title, lines) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = (icon ? '<i class="plogo plogo-' + icon + '"></i>' : '') + '<div><b>' + esc(title) + '</b>' +
+    lines.filter(Boolean).map(l => '<small>' + esc(l) + '</small>').join('') +
+    '</div><button type="button" title="Dismiss" aria-label="Dismiss">&times;</button>';
+  let left = 15;
+  const timer = setInterval(() => { if (!document.hidden && --left <= 0) close(); }, 1000);
+  function close() { clearInterval(timer); el.classList.remove('show'); setTimeout(() => el.remove(), 400); }
+  el.lastChild.onclick = close;
+  $('toasts').prepend(el);
+  while ($('toasts').children.length > 4) $('toasts').lastChild.remove();
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+  ding();
+}
+// Valheim: compare each new answer from the server (every 10 seconds) with the last one.
+// The first answer after the page opens only sets the starting point, so nothing old
+// pops up. Names are used when the server reports them.
+let lastValheim = null;
+function watchValheim(s) {
+  const a = (s.activity || {}).Valheim;
+  if (!a || a.error || a.players == null) return;
+  const names = (a.names || []).map(n => n.name);
+  if (lastValheim && a.players !== lastValheim.players) {
+    const up = a.players > lastValheim.players, n = Math.abs(a.players - lastValheim.players);
+    const who = up ? names.filter(x => !lastValheim.names.includes(x)) : lastValheim.names.filter(x => !names.includes(x));
+    notify('valheim', (who.length ? who.join(', ') : n === 1 ? 'A player' : n + ' players') + (up ? ' joined' : ' left') + ' Valheim',
+      [(a.players ? plural(a.players, 'player') : 'No players') + ' online']);
+  }
+  lastValheim = {players: a.players, names: names};
 }
 async function tick() {
   try {
