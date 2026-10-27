@@ -99,6 +99,7 @@ something doesn't show up on another language, please open an issue.
    - `Start SRRVRR.bat`
    - `SRRVRR.config.example.psd1`
    - `Install-TemperatureSensors.ps1` (optional, for CPU and memory temperatures)
+   - `Stop SRRVRR.bat` (optional, to stop it from anywhere)
 2. Copy `SRRVRR.config.example.psd1` to `SRRVRR.config.psd1` and edit it
    (see [Settings](#settings)). Without it, the defaults below are used.
 3. Optional: right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell** once (see
@@ -107,7 +108,12 @@ something doesn't show up on another language, please open an issue.
 5. Open the address the window shows, e.g. `http://<that-machine>:8099` or
    `http://<its-IP>:8099`, from any browser on your network.
 
-Leave the window open while you want monitoring. Close it (or press Ctrl+C) to stop.
+Leave the window open while you want monitoring. To stop it, close the window (or press Ctrl+C),
+or double-click **`Stop SRRVRR.bat`**. That stops whichever SRRVRR is running, the live
+`SRRVRR.ps1` or a `SRRVRR - test.ps1` copy (both, if both are), closes its window, and says what
+it stopped. When SRRVRR was started as administrator, it asks for administrator too, since Windows
+hides administrator programs from programs that aren't. It runs `SRRVRR.ps1 -Stop`, which you can
+also run yourself.
 
 ### CPU and memory temperatures
 
@@ -135,7 +141,7 @@ monitor after changing it.
 
 That file is listed in `.gitignore`, so it is never committed to the repository and pulling or
 copying a new version of the code never overwrites it. When updating, replace only
-`SRRVRR.ps1`, `Start SRRVRR.bat`, `SRRVRR.config.example.psd1` and
+`SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.example.psd1` and
 `Install-TemperatureSensors.ps1` (the `lib` folder it creates stays as it is).
 
 | Setting | Default | Values |

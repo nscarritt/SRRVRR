@@ -11,6 +11,9 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Added
 
+- **`Stop SRRVRR.bat`** (and `SRRVRR.ps1 -Stop`): stops whichever SRRVRR is running, the live
+  or the test version, closes its window, and says what it stopped. It asks for administrator
+  only when SRRVRR was started as administrator.
 - **Processor and memory names:** the CPU tile names the processor ("Intel Core i7-13700K") and
   shows the Intel or AMD logo; the Memory tile names the maker and type ("G.Skill DDR5", or
   "Mixed") and shows the maker's logo for the seven biggest memory makers: Samsung, SK hynix,
