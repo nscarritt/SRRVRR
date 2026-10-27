@@ -219,7 +219,8 @@ Under each running process, a quiet detail line says what it's doing:
   loads the GPU) versus direct play, e.g. "2 streams · 1 transcoding". Hover for who is watching
   what. Read every 10 seconds from Plex's local API (`/status/sessions`). The Plex token is read
   from Plex's own settings in the registry of the account Plex runs under; it is never stored in
-  the config, printed, or sent to the page.
+  the config, printed, or sent to the page. If Plex isn't running yet (for example, it starts
+  after SRRVRR at boot), SRRVRR looks again every minute until it finds the token.
 - **Valheim:** players online, how fast the server answers its status query, and its CPU use in
   whole cores, e.g. "3 players · responding in 4 ms · using 0.9 cores". Hover for player names and
   how long each has been on. Read every 10 seconds with Valve's A2S server query (UDP, on

@@ -558,7 +558,20 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexToken, $plexUrl, $valheimQueryPort)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort)
+
+    # Plex keeps its sign-in token in the registry of the Windows account it runs
+    # under. That account's registry is only loaded while it is signed in or Plex is
+    # running, so the loop below keeps looking until it's found. The token is only
+    # ever sent to Plex itself on this machine, never printed or shown on the page.
+    function Find-PlexToken {
+        $hives = @('HKCU:') + @(Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue | ForEach-Object { "Registry::HKEY_USERS\$($_.PSChildName)" })
+        foreach ($h in $hives) {
+            try { $t = (Get-ItemProperty -LiteralPath "$h\Software\Plex, Inc.\Plex Media Server" -Name PlexOnlineToken -ErrorAction Stop).PlexOnlineToken } catch { $t = $null }
+            if ($t) { return $t }
+        }
+        $null
+    }
 
     # Valve's A2S server query over UDP, which Valheim answers on its game port + 1.
     # Sends one request and returns the reply bytes; when the server answers with a
@@ -591,7 +604,7 @@ $slowChecks = {
     }
     $activity = @{}   # process name -> what it's doing (players, streams); published as $state.activity
     $valheimAnswered = $false
-    if ($plexUrl -and -not $plexToken) { $activity.Plex = @{ error = 'no Plex token found' }; $state.activity = $activity }
+    $plexToken = $null
     $ProgressPreference = 'SilentlyContinue'   # no window to show progress in; don't let records pile up in memory
     $tick = 0
     while ($true) {
@@ -649,6 +662,11 @@ $slowChecks = {
             if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $reasons += 'Windows component servicing' }
             $state.restartPending = [bool]$reasons
             $state.restartReason = $reasons -join ', '
+        }
+        # Plex token, every 60 seconds until found (and right away at start).
+        if ($plexUrl -and -not $plexToken -and $tick % 12 -eq 0) {
+            $plexToken = Find-PlexToken
+            if (-not $plexToken) { $activity.Plex = @{ error = 'no Plex token found yet (checking every minute)' }; $state.activity = $activity }
         }
         # Plex activity, every 10 seconds: who is watching and whether Plex has to
         # transcode (re-encode on the fly, which is what loads the GPU) or can play
@@ -721,19 +739,10 @@ $slowChecks = {
         Start-Sleep -Seconds 5
     }
 }
-# Plex keeps its sign-in token in the registry of the Windows account it runs
-# under. Read it from there so it never has to be typed into a config file; it is
-# only sent to Plex itself on this machine, never printed or shown on the page.
-$plexUrl = $null; $plexToken = $null
-if ($services | Where-Object { $_.name -eq 'Plex' }) {
-    $plexUrl = 'http://127.0.0.1:32400'
-    $hives = @('HKCU:') + @(Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue | ForEach-Object { "Registry::HKEY_USERS\$($_.PSChildName)" })
-    foreach ($h in $hives) {
-        try { $plexToken = (Get-ItemProperty -LiteralPath "$h\Software\Plex, Inc.\Plex Media Server" -Name PlexOnlineToken -ErrorAction Stop).PlexOnlineToken } catch { }
-        if ($plexToken) { break }
-    }
-    Write-Status $(if ($plexToken) { "Plex token found in Plex's own settings" } else { 'No Plex token found, so Plex stream details are unavailable' })
-}
+# Plex's sign-in token is looked up by the slow sampler (Find-PlexToken), so it is
+# found even when Plex starts after SRRVRR.
+$plexUrl = $null
+if ($services | Where-Object { $_.name -eq 'Plex' }) { $plexUrl = 'http://127.0.0.1:32400' }
 
 $valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $settings.ValheimPort + 1 } else { $null }
 
@@ -741,9 +750,9 @@ $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
 $slowWorker.Runspace = $slowRunspace
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexToken).AddArgument($plexUrl).AddArgument($valheimQueryPort)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
-if ($plexToken) { Write-Status 'Every 10 seconds: Plex streams and transcodes' }
+if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
 if ($valheimQueryPort) { Write-Status "Every 10 seconds: Valheim players and response time (query port $valheimQueryPort)" }
 [void]$slowWorker.BeginInvoke()
 Write-Status 'Every 30 seconds: drive space and drive health'
