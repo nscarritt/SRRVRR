@@ -109,6 +109,7 @@ $settings = @{
     PreferredGpu      = ''
     Processes         = @{}
     ValheimPort       = 2456
+    QBittorrentPort   = 8080
 }
 # Settings from older versions, now handled automatically.
 $retired = @{
@@ -138,6 +139,9 @@ if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
 
 if ($settings.ValheimPort -isnot [int] -or $settings.ValheimPort -lt 1 -or $settings.ValheimPort -gt 65534) {
     throw "ValheimPort must be the Valheim server's game port, a number from 1 to 65534 (default 2456)."
+}
+if ($settings.QBittorrentPort -isnot [int] -or $settings.QBittorrentPort -lt 1 -or $settings.QBittorrentPort -gt 65535) {
+    throw "QBittorrentPort must be qBittorrent's Web UI port, a number from 1 to 65535 (default 8080)."
 }
 $scopes = 'LocalSubnet', 'Allowlist', 'Blocklist'
 if ($settings.FirewallScope -notin $scopes) { throw "FirewallScope must be one of: $($scopes -join ', ')" }
@@ -198,6 +202,7 @@ if ($settings.FirewallScope -ne 'LocalSubnet' -and $public) {
 $services = @(
     @{ name = 'Valheim'; main = 'valheim_server';    match = 'valheim_server'; icon = 'valheim' }
     @{ name = 'Plex';    main = 'Plex Media Server'; match = 'Plex*';          icon = 'plex' }   # includes Plex Transcoder etc.
+    @{ name = 'qBittorrent'; main = 'qbittorrent';   match = 'qbittorrent';    icon = 'qbittorrent' }
 ) | Where-Object { $settings.Processes[$_.name] -ne $false }
 $services = @($services)
 
@@ -558,7 +563,7 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexToken, $plexUrl, $valheimQueryPort)
+    param($state, $smiPath, $gpuName, $plexToken, $plexUrl, $valheimQueryPort, $qbUrl)
 
     # Valve's A2S server query over UDP, which Valheim answers on its game port + 1.
     # Sends one request and returns the reply bytes; when the server answers with a
@@ -730,6 +735,33 @@ $slowChecks = {
             }
             $state.activity = $activity
         }
+        # qBittorrent activity, every 10 seconds, from its Web UI API on this machine: how
+        # many torrents are downloading and seeding (the same counts as qBittorrent's own
+        # sidebar), current speeds, and the data moved since qBittorrent started. Needs the
+        # Web UI on, with "Bypass authentication for clients on localhost" ticked, since
+        # SRRVRR keeps no passwords.
+        if ($tick % 2 -eq 0 -and $qbUrl) {
+            try {
+                $transfer = Invoke-RestMethod -Uri "$qbUrl/api/v2/transfer/info" -TimeoutSec 3 -UseBasicParsing
+                # (the lists come back as one array object; piping it counts its torrents)
+                $downloading = Invoke-RestMethod -Uri "$qbUrl/api/v2/torrents/info?filter=downloading" -TimeoutSec 3 -UseBasicParsing
+                $seeding = Invoke-RestMethod -Uri "$qbUrl/api/v2/torrents/info?filter=seeding" -TimeoutSec 3 -UseBasicParsing
+                $activity.qBittorrent = @{
+                    downloading = ($downloading | Measure-Object).Count
+                    seeding     = ($seeding | Measure-Object).Count
+                    downSpeed   = [double]$transfer.dl_info_speed   # bytes per second, all torrents
+                    upSpeed     = [double]$transfer.up_info_speed
+                    downTotal   = [double]$transfer.dl_info_data    # bytes since qBittorrent started
+                    upTotal     = [double]$transfer.up_info_data
+                }
+            } catch {
+                $code = 0
+                try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+                $activity.qBittorrent = @{ error = if ($code -eq 403) { "Web UI asks for a password; tick 'Bypass authentication for clients on localhost' in its Web UI options" }
+                                                   else { "Web UI not answering on port $(([Uri]$qbUrl).Port); turn it on in Tools > Options > Web UI" } }
+            }
+            $state.activity = $activity
+        }
         $tick++
         Start-Sleep -Seconds 5
     }
@@ -749,15 +781,17 @@ if ($services | Where-Object { $_.name -eq 'Plex' }) {
 }
 
 $valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $settings.ValheimPort + 1 } else { $null }
+$qbUrl = if ($services | Where-Object { $_.name -eq 'qBittorrent' }) { "http://127.0.0.1:$($settings.QBittorrentPort)" } else { $null }
 
 $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
 $slowWorker.Runspace = $slowRunspace
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexToken).AddArgument($plexUrl).AddArgument($valheimQueryPort)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexToken).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($qbUrl)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 if ($plexToken) { Write-Status 'Every 10 seconds: Plex streams and transcodes' }
 if ($valheimQueryPort) { Write-Status "Every 10 seconds: Valheim players and response time (query port $valheimQueryPort)" }
+if ($qbUrl) { Write-Status "Every 10 seconds: qBittorrent torrents and traffic (Web UI port $($settings.QBittorrentPort))" }
 [void]$slowWorker.BeginInvoke()
 Write-Status 'Every 30 seconds: drive space and drive health'
 Write-Status 'Every 60 seconds: whether Windows is waiting to restart for updates'
@@ -813,9 +847,10 @@ tr+tr td{border-top:1px solid var(--border)}
 th:first-child,td:first-child{text-align:left;padding-left:0;font-weight:600}
 td.offline{text-align:left;color:var(--muted)}
 .plogo{display:inline-block;width:1.15em;height:1.15em;vertical-align:-.2em;margin-right:7px;border-radius:4px;background:center/contain no-repeat}
-/* Logos: Valheim emblem (valheimgame.com), Plex chevron (Plex Media Server web app) */
+/* Logos: Valheim emblem (valheimgame.com), Plex chevron (Plex Media Server web app), qBittorrent (its Web UI icon) */
 .plogo-valheim{background-image:url(data:image/png;base64,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)}
 .plogo-plex{background-image:url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3MiA3MiI+PGRlZnM+PHJhZGlhbEdyYWRpZW50IGlkPSJnIiBjeD0iLjYyIiBjeT0iLjU1IiByPSIuNjIiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2Y5YmUyMCIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2NjN2MxOSIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHdpZHRoPSI3MiIgaGVpZ2h0PSI3MiIgZmlsbD0iIzFmMWYxZiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuOSA3LjkpIHNjYWxlKC43OCkiIGZpbGw9InVybCgjZykiIGQ9Ik0xNC4wMyAwIDM3LjA5IDM2IDE0LjAzIDcyaDIwLjg4TDU3Ljk3IDM2IDM0LjkxIDB6Ii8+PC9zdmc+)}
+.plogo-qbittorrent{background-image:url(data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxsaW5lYXJHcmFkaWVudCBpZD0iYSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiIHgxPSIzNDguMjgyOSIgeDI9Ijc4Mi4wNTk1MSIgeTE9IjAiIHkyPSI3ODYuNDgzMjIiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzcyYjRmNSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzM1NmViZiIvPjwvbGluZWFyR3JhZGllbnQ+PGcgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIiB0cmFuc2Zvcm09Im1hdHJpeCguOTc2NTYyNjggMCAwIC45NzY1NjI0IDExLjk5OTkwOCAxMi4wMDAwNTEpIj48Y2lyY2xlIGN4PSI1MTIiIGN5PSI1MTIiIGZpbGw9InVybCgjYSkiIHI9IjQ5NiIgc3Ryb2tlPSIjZGFlZmZmIiBzdHJva2Utd2lkdGg9IjMyIi8+PHBhdGggZD0ibTcxMi44OTggMzMyLjM5OXE2Ni42NTcgMCAxMDMuMzggNDUuNjcxIDM3LjAzIDQ1LjM2NCAzNy4wMyAxMjguNjg0IDAgODMuMzItMzcuMzQgMTI5LjYxLTM3LjAzIDQ1Ljk4LTEwMy4wNyA0NS45OC0zMy4wMiAwLTYwLjQ4NC0xMi4wMzUtMjcuMTU2LTEyLjM0NC00NS42NzItMzcuNjQ5aC0zLjcwM2wtMTAuOCA0My41MTJoLTM2LjcyNHYtNDgwLjE3Mmg1MS4yMjd2MTE2LjY1cTAgMzkuMTkxLTIuNDY5IDcwLjM1OWgyLjQ3cTM1Ljc5Ni01MC42MSAxMDYuMTU1LTUwLjYxem0tNy40MDYgNDIuODk0cS01Mi40NiAwLTc1LjYwNSAzMC4yNDItMjMuMTQ1IDI5LjkzNC0yMy4xNDUgMTAxLjIxOSAwIDcxLjI4NSAyMy43NjIgMTAyLjE0NSAyMy43NjEgMzAuNTUgNzYuMjIyIDMwLjU1IDQ3LjIxNSAwIDcwLjM2LTM0LjI1NCAyMy4xNDQtMzQuNTYyIDIzLjE0NC05OS4wNTggMC02Ni4wNC0yMy4xNDQtOTguNDQyLTIzLjE0NS0zMi40MDItNzEuNTk0LTMyLjQwMnoiIGZpbGw9IiNmZmYiLz48cGF0aCBkPSJtMzE3LjI3MyA2MzkuNDVxNTEuMjI3IDAgNzQuNjgtMjcuNDY2IDIzLjQ1My0yNy40NjQgMjQuOTk2LTkyLjU3OHYtMTEuNDE4cTAtNzAuOTc2LTI0LjA3LTEwMi4xNDQtMjQuMDctMzEuMTY4LTc2LjIyMy0zMS4xNjgtNDUuMDU1IDAtNjkuMTI1IDM1LjE4LTIzLjc2MiAzNC44Ny0yMy43NjIgOTguNzUgMCA2My44NzkgMjMuNDU0IDk3LjUxNSAyMy43NjEgMzMuMzI4IDcwLjA1IDMzLjMyOHptLTcuNzE1IDQyLjg5NHEtNjUuNDIxIDAtMTAyLjE0NC00NS45OC0zNi43MjMtNDUuOTgxLTM2LjcyMy0xMjguMzc2IDAtODMuMDExIDM3LjAzMi0xMjkuNjA5IDM3LjAzLTQ2LjU5OCAxMDMuMDctNDYuNTk4IDY5LjQzMyAwIDEwNi43NzMgNTIuNDYxaDIuNzc4bDcuNDA2LTQ2LjI4OWg0MC40MjZ2NDkwLjA0N2gtNTEuMjI3di0xNDQuNzNxMC0zMC44NiAzLjM5NS01Mi40NjFoLTQuMDEycS0zNS40ODggNTEuNTM1LTEwNi43NzQgNTEuNTM1eiIgZmlsbD0iI2M4ZThmZiIvPjwvZz48L3N2Zz4=)}
 td.up{color:var(--tx)} td.down{color:var(--rx)}
 /* Quiet detail line under a process row: what it's doing (streams, players) */
 tr.detail td{border-top:none;padding:0 0 9px calc(1.15em + 7px);font-size:12.5px;font-weight:400;color:var(--muted);text-align:left;white-space:normal}
@@ -984,6 +1019,11 @@ function renderDrives(s) {
 // Text from other programs (show titles, player names) is escaped before it goes into the page.
 const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
 const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+function amount(b) {                // bytes -> "740 MB" / "41.2 GB", counted in 1024s
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (b < 100 && i ? b.toFixed(1) : b.toFixed(0)) + ' ' + u[i];
+}
 // One muted line under a running process: a short summary, details on hover.
 function detail(p, a) {
   if (!a) return '';
@@ -1006,6 +1046,11 @@ function detail(p, a) {
     text = a.streams ? plural(a.streams, 'stream') + ' &middot; ' +
       (a.transcoding ? a.transcoding + ' transcoding' : 'direct play') : 'No one watching';
     hover = (a.items || []).map(i => i.user + ': ' + i.title + (plexDevice(i) ? ' on ' + plexDevice(i) : '') + ' (' + (i.playback || 'direct play') + ')');
+  }
+  else if (p.name === 'qBittorrent') {
+    text = a.downloading + ' downloading &middot; ' + a.seeding + ' seeding &middot; ' +
+      amount(a.downTotal) + ' down, ' + amount(a.upTotal) + ' up since qBittorrent started';
+    hover = ['All torrents right now: download ' + speed(a.downSpeed) + ', upload ' + speed(a.upSpeed)];
   }
   if (!text) return '';
   return '<tr class="detail"><td colspan="6" title="' + hover.map(esc).join('&#10;') + '">' + text + '</td></tr>';

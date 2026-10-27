@@ -19,6 +19,10 @@ called out under **Changed** or **Removed** with upgrade notes.
 - **Plex stream alerts:** a banner when a stream starts, with the title, who, the device and app,
   and how it plays (direct play, direct stream, or transcoding from one quality to another on
   the GPU or CPU), plus its bitrate. The Plex hover now also names the device.
+- **qBittorrent row** in the Processes table, with its logo, and a detail line with torrents
+  downloading and seeding and the data moved since qBittorrent started (current speeds on
+  hover). Read every 10 seconds from qBittorrent's Web UI on the new `QBittorrentPort` setting
+  (default 8080), which needs "Bypass authentication for clients on localhost".
 - **Security policy** (`SECURITY.md`): how to report a vulnerability privately through GitHub,
   what counts as one, and the known by-design limitations. Linked from the README security
   warning.

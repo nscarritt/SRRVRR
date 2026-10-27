@@ -54,11 +54,17 @@
     # Built-in rows under the graphs. Set one to $false to hide it.
     # The table disappears when every row is hidden.
     Processes = @{
-        Valheim = $true
-        Plex    = $true
+        Valheim     = $true
+        Plex        = $true
+        qBittorrent = $true
     }
 
     # The Valheim server's game port (the one players connect to). The player
     # count comes from the server's status query on the next port up.
     ValheimPort = 2456
+
+    # qBittorrent's Web UI port (Tools > Options > Web UI). Torrent counts and
+    # traffic come from its Web UI on this machine, which needs "Bypass
+    # authentication for clients on localhost" ticked there.
+    QBittorrentPort = 8080
 }
