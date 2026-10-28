@@ -72,8 +72,8 @@ The CPU and Memory tiles show a temperature the same way, updated every 5 second
   most current desktop processors throttle at 95–105 °C. Hover for each core.
 - **Memory:** the hottest stick, read from each stick's own sensor, since one overheating stick is
   what causes errors. Amber at 70 °C, red at 80 °C; memory is specified to 85 °C. Hover for each
-  stick. DDR5 sticks have a sensor; most DDR4 sticks don't, and then the tile shows no
-  temperature.
+  stick. DDR5 sticks have a sensor; most DDR4 sticks don't, and then the tile shows a gray
+  **No sensor** (hover names the sticks).
 
 When temperatures can't be read (not set up, not running as administrator, or the sensors don't
 answer), the tiles show an amber **Temp n/a**; hover for the reason.
@@ -331,7 +331,8 @@ to a minute late.
 - **GPU shows N/A:** the machine has no GPU performance counters (e.g. no GPU or a basic display driver).
 - **CPU or memory shows "Temp n/a":** hover it for the reason. "Not set up" or "the PawnIO driver
   is missing": run `Install Temperature Sensors.bat`. "Needs administrator": start SRRVRR as
-  administrator. A memory tile with no temperature at all means the sticks have no sensor.
+  administrator. A gray "No sensor" on the Memory tile means the sticks have no
+  temperature sensor (most DDR4); nothing is wrong.
 - **Script won't run (execution policy):** use the `.bat` launcher, or run
   `powershell -ExecutionPolicy Bypass -File .\SRRVRR.ps1`.
 
