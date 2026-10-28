@@ -128,7 +128,10 @@ free components, which `Install-TemperatureSensors.ps1` downloads and sets up:
   read the sensors. It replaces the old WinRing0 driver that antivirus software flags.
 
 Close SRRVRR, right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell**, and accept
-the administrator prompt. Both downloads are pinned to one version and checked against a known
+the administrator prompt. The setup runs in a second, administrator window, which stays open
+until you press Enter; the first window waits for it. If that second window can't start the setup
+(it closes by itself), the first window says so and shows the command to run from an
+administrator PowerShell window instead. Both downloads are pinned to one version and checked against a known
 SHA-256 hash, and the PawnIO installer's signature is checked too; anything that doesn't match is
 refused. At the end it reads the temperatures once, so you can see they work. Then start SRRVRR
 again. Running it again is safe: it replaces the library and installs PawnIO only when it's

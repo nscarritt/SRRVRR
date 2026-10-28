@@ -33,6 +33,13 @@ called out under **Changed** or **Removed** with upgrade notes.
   Before, a double-click quietly started the local-only version, and other PCs got "Bad
   Request - Invalid Hostname".
 
+### Fixed
+
+- **`Install-TemperatureSensors.ps1` no longer flashes and vanishes.** Its first window now waits
+  for the administrator window and stays open when something went wrong: a declined prompt, or an
+  administrator window that couldn't start the setup. Started from a mapped drive, it now gives the
+  administrator window the network path, since administrator windows don't see mapped drives.
+
 ## [0.5.0] - 2026-10-27
 
 Alerts: know when someone joins Valheim or starts a Plex stream, with an optional soft ding.
