@@ -9,6 +9,12 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Memory sticks without a temperature sensor now say so.** The Memory tile shows a gray "No
+  sensor" (hover names the sticks) instead of leaving the temperature blank, which looked broken.
+  Most DDR4 has no sensor; DDR5 does.
+
 ## [0.6.0] - 2026-10-28
 
 Hardware identity and temperatures: the CPU and Memory tiles name the parts, show the maker's

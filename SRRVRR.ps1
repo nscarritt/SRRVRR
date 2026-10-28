@@ -999,7 +999,7 @@ main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-wid
 #gpuIcon[data-v=""] .v-generic,#gpuIcon[data-v="nvidia"] .v-nvidia,#gpuIcon[data-v="amd"] .v-amd,#gpuIcon[data-v="intel"] .v-intel{display:block}
 .value{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .temp{font-size:16px;color:var(--muted);margin-right:10px}
-.temp.warn{color:var(--warn)} .temp.hot{color:var(--bad)}
+.temp.warn{color:var(--warn)} .temp.hot{color:var(--bad)} .temp.none{font-size:13px;cursor:help}
 .sub{color:var(--muted);font-size:12.5px;min-height:18px;font-variant-numeric:tabular-nums}
 canvas{display:block;width:100%;height:120px;margin-top:8px}
 .key{display:inline-flex;align-items:center;gap:5px;margin-right:12px}
@@ -1137,16 +1137,24 @@ function since(sec) {               // 273600 -> "3 days, 4 hours"
 }
 // A tile's temperature: amber from `warn`, red from `hot`. When temperatures can't be read,
 // an amber "Temp n/a" with the reason on hover; a tile with no sensor (e.g. most DDR4) shows none.
-function showTemp(id, t, warn, hot, error, each) {
+// none: hover text for "No sensor", shown when the sensors were read but this part has none.
+function showTemp(id, t, warn, hot, error, each, none) {
   const el = $(id), deg = String.fromCharCode(176) + 'C';
-  el.textContent = t != null ? Math.round(t) + deg : error ? 'Temp n/a' : '';
-  el.className = 'temp' + (t != null ? (t >= hot ? ' hot' : t >= warn ? ' warn' : '') : error ? ' warn' : '');
-  el.title = t == null && error ? 'Temperature unavailable: ' + error : (each || []).map(x => x.name + ': ' + x.t + deg).join('\n');
+  el.textContent = t != null ? Math.round(t) + deg : error ? 'Temp n/a' : none ? 'No sensor' : '';
+  el.className = 'temp' + (t != null ? (t >= hot ? ' hot' : t >= warn ? ' warn' : '') : error ? ' warn' : none ? ' none' : '');
+  el.title = t == null && error ? 'Temperature unavailable: ' + error : t == null && none ? none : (each || []).map(x => x.name + ': ' + x.t + deg).join('\n');
+}
+// The sensors were read (the CPU answered) but no memory stick reported a temperature.
+function memNoSensor(s) {
+  if (s.memTemp != null || s.cpuTemp == null || s.tempError) return '';
+  const parts = [...new Set((s.memSticks || []).map(x => [x.maker, x.part].filter(Boolean).join(' ')).filter(Boolean))];
+  return 'These memory sticks don\'t report a temperature' + (parts.length ? ' (' + parts.join(', ') + ')' : '') +
+    '. Most DDR4 has no sensor; DDR5 does.';
 }
 function render(s) {
   if (s.uptime != null) $('uptime').textContent = 'Up ' + since(s.uptime);
   showTemp('cpuTemp', s.cpuTemp, 80, 90, s.tempError, s.cpuTemps);       // CPU package: amber at 80, red at 90
-  showTemp('memTemp', s.memTemp, 70, 80, s.tempError, s.memTemps);       // hottest stick: amber at 70, red at 80
+  showTemp('memTemp', s.memTemp, 70, 80, s.tempError, s.memTemps, memNoSensor(s)); // hottest stick: amber at 70, red at 80
   $('restart').hidden = !s.restartPending;
   $('restart').title = s.restartReason ? 'Waiting on: ' + s.restartReason : '';
   $('cpuV').textContent = s.cpu.toFixed(0) + '%';
