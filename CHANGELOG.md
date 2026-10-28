@@ -9,40 +9,50 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
+Hardware identity and temperatures: the CPU and Memory tiles name the parts, show the maker's
+logo and the temperature, and SRRVRR is easier to start, stop and set up.
+
 ### Added
 
 - **`Stop SRRVRR.bat`** (and `SRRVRR.ps1 -Stop`): stops whichever SRRVRR is running, the live
   or the test version, closes its window, and says what it stopped. It asks for administrator
   only when SRRVRR was started as administrator.
+  ([#39](https://github.com/nscarritt/SRRVRR/pull/39))
 - **Processor and memory names:** the CPU tile names the processor ("Intel Core i7-13700K") and
   shows the Intel or AMD logo; the Memory tile names the maker and type ("G.Skill DDR5", or
   "Mixed") and shows the maker's logo for the seven biggest memory makers: Samsung, SK hynix,
   Micron (and Crucial), Kingston, Corsair, G.Skill and ADATA. Hover the memory line for each
   stick's slot, part number, size and current speed.
+  ([#37](https://github.com/nscarritt/SRRVRR/pull/37))
 - **CPU and memory temperatures** on their tiles, every 5 seconds, styled like the GPU's: the CPU
   package temperature (amber at 80 °C, red at 90 °C) and the hottest memory stick (amber at
   70 °C, red at 80 °C), each core or stick on hover. Read through LibreHardwareMonitor's sensor
   library and the PawnIO driver, which the new `Install-TemperatureSensors.ps1` downloads
   (pinned versions, SHA-256 and signature checked) and sets up. When they can't be read, the
   tile shows an amber "Temp n/a" with the reason on hover.
+  ([#38](https://github.com/nscarritt/SRRVRR/pull/38))
+- **`Install Temperature Sensors.bat`:** double-click to set up the temperatures. It asks for
+  administrator and its window stays open at the end. The "Temp n/a" hint now names it.
+  ([#44](https://github.com/nscarritt/SRRVRR/pull/44))
 
 ### Changed
 
 - **`Start SRRVRR.bat` asks for administrator on its own**, so a plain double-click starts the
   version other PCs can open. Saying No still starts it without administrator, as before.
   Before, a double-click quietly started the local-only version, and other PCs got "Bad
-  Request - Invalid Hostname".
+  Request - Invalid Hostname". ([#43](https://github.com/nscarritt/SRRVRR/pull/43))
 
 ### Fixed
 
-- **`Install Temperature Sensors.bat`:** double-click to set up the temperatures. It asks for
-  administrator and its window stays open at the end. Right-click > **Run with PowerShell** on
-  `Install-TemperatureSensors.ps1` could close its window at once without showing why, and
-  install nothing; the "Temp n/a" hint now names the `.bat`.
-- **`Install-TemperatureSensors.ps1` no longer flashes and vanishes.** Its first window now waits
-  for the administrator window and stays open when something went wrong: a declined prompt, or an
-  administrator window that couldn't start the setup. Started from a mapped drive, it now gives the
-  administrator window the network path, since administrator windows don't see mapped drives.
+- **The temperature setup no longer flashes a window and vanishes.** Right-click > **Run with
+  PowerShell** on `Install-TemperatureSensors.ps1` could close at once and install nothing; use
+  the new `.bat` instead. The script's own first window now waits for the administrator window
+  and stays open when something went wrong: a declined prompt, or an administrator window that
+  couldn't start the setup. Started from a mapped drive, it gives the administrator window the
+  network path, since administrator windows don't see mapped drives.
+  ([#44](https://github.com/nscarritt/SRRVRR/pull/44))
 
 ## [0.5.0] - 2026-10-27
 
@@ -244,7 +254,8 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/nscarritt/SRRVRR/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nscarritt/SRRVRR/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/nscarritt/SRRVRR/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nscarritt/SRRVRR/compare/v0.3.0...v0.4.0

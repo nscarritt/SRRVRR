@@ -10,7 +10,7 @@ browser on your network.
 
 One PowerShell script. Nothing to install.
 
-Current version: **0.5.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
+Current version: **0.6.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
 
 ## Contents
 
