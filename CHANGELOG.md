@@ -26,6 +26,13 @@ called out under **Changed** or **Removed** with upgrade notes.
   (pinned versions, SHA-256 and signature checked) and sets up. When they can't be read, the
   tile shows an amber "Temp n/a" with the reason on hover.
 
+### Changed
+
+- **`Start SRRVRR.bat` asks for administrator on its own**, so a plain double-click starts the
+  version other PCs can open. Saying No still starts it without administrator, as before.
+  Before, a double-click quietly started the local-only version, and other PCs got "Bad
+  Request - Invalid Hostname".
+
 ## [0.5.0] - 2026-10-27
 
 Alerts: know when someone joins Valheim or starts a Plex stream, with an optional soft ding.

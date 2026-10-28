@@ -104,7 +104,8 @@ something doesn't show up on another language, please open an issue.
    (see [Settings](#settings)). Without it, the defaults below are used.
 3. Optional: right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell** once (see
    [CPU and memory temperatures](#cpu-and-memory-temperatures)).
-4. Right-click `Start SRRVRR.bat` > **Run as administrator**.
+4. Double-click `Start SRRVRR.bat` and click **Yes** on the administrator prompt. Say **No** to
+   run it without administrator (see [Administrator vs. not](#administrator-vs-not)).
 5. Open the address the window shows, e.g. `http://<that-machine>:8099` or
    `http://<its-IP>:8099`, from any browser on your network.
 
@@ -314,6 +315,9 @@ to a minute late.
 
 ## Troubleshooting
 
+- **Another PC gets "Bad Request - Invalid Hostname" (HTTP 400):** SRRVRR is running without
+  administrator (its window says "Loading without Admin Privs..."), so Windows only lets it
+  answer on that machine. Close it and start it again, clicking **Yes** on the prompt.
 - **Page won't load from another PC:** make sure it was started as administrator, and check the
   firewall rule: `Get-NetFirewallRule -DisplayName 'SRRVRR'`.
 - **"The process cannot access the file because it is being used by another process":**
