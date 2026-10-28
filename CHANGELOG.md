@@ -35,6 +35,10 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Fixed
 
+- **`Install Temperature Sensors.bat`:** double-click to set up the temperatures. It asks for
+  administrator and its window stays open at the end. Right-click > **Run with PowerShell** on
+  `Install-TemperatureSensors.ps1` could close its window at once without showing why, and
+  install nothing; the "Temp n/a" hint now names the `.bat`.
 - **`Install-TemperatureSensors.ps1` no longer flashes and vanishes.** Its first window now waits
   for the administrator window and stays open when something went wrong: a declined prompt, or an
   administrator window that couldn't start the setup. Started from a mapped drive, it now gives the

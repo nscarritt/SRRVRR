@@ -98,11 +98,12 @@ something doesn't show up on another language, please open an issue.
    - `SRRVRR.ps1`
    - `Start SRRVRR.bat`
    - `SRRVRR.config.example.psd1`
-   - `Install-TemperatureSensors.ps1` (optional, for CPU and memory temperatures)
+   - `Install Temperature Sensors.bat` and `Install-TemperatureSensors.ps1` (optional, for CPU
+     and memory temperatures)
    - `Stop SRRVRR.bat` (optional, to stop it from anywhere)
 2. Copy `SRRVRR.config.example.psd1` to `SRRVRR.config.psd1` and edit it
    (see [Settings](#settings)). Without it, the defaults below are used.
-3. Optional: right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell** once (see
+3. Optional: double-click `Install Temperature Sensors.bat` once (see
    [CPU and memory temperatures](#cpu-and-memory-temperatures)).
 4. Double-click `Start SRRVRR.bat` and click **Yes** on the administrator prompt. Say **No** to
    run it without administrator (see [Administrator vs. not](#administrator-vs-not)).
@@ -127,11 +128,10 @@ free components, which `Install-TemperatureSensors.ps1` downloads and sets up:
 - **The [PawnIO](https://github.com/namazso/PawnIO.Setup) driver**, signed by its author, which the library uses to
   read the sensors. It replaces the old WinRing0 driver that antivirus software flags.
 
-Close SRRVRR, right-click `Install-TemperatureSensors.ps1` > **Run with PowerShell**, and accept
-the administrator prompt. The setup runs in a second, administrator window, which stays open
-until you press Enter; the first window waits for it. If that second window can't start the setup
-(it closes by itself), the first window says so and shows the command to run from an
-administrator PowerShell window instead. Both downloads are pinned to one version and checked against a known
+Close SRRVRR, double-click **`Install Temperature Sensors.bat`**, and click **Yes** on the
+administrator prompt. The window stays open at the end so you can read what happened. It runs
+`Install-TemperatureSensors.ps1`, which you can also run yourself from an administrator
+PowerShell window. Both downloads are pinned to one version and checked against a known
 SHA-256 hash, and the PawnIO installer's signature is checked too; anything that doesn't match is
 refused. At the end it reads the temperatures once, so you can see they work. Then start SRRVRR
 again. Running it again is safe: it replaces the library and installs PawnIO only when it's
@@ -145,8 +145,9 @@ monitor after changing it.
 
 That file is listed in `.gitignore`, so it is never committed to the repository and pulling or
 copying a new version of the code never overwrites it. When updating, replace only
-`SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.example.psd1` and
-`Install-TemperatureSensors.ps1` (the `lib` folder it creates stays as it is).
+`SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.example.psd1`,
+`Install Temperature Sensors.bat` and `Install-TemperatureSensors.ps1` (the `lib` folder the
+installer creates stays as it is).
 
 | Setting | Default | Values |
 |---------|---------|--------|
@@ -329,7 +330,7 @@ to a minute late.
   name. The startup message lists the names Windows reports; copy one into the config.
 - **GPU shows N/A:** the machine has no GPU performance counters (e.g. no GPU or a basic display driver).
 - **CPU or memory shows "Temp n/a":** hover it for the reason. "Not set up" or "the PawnIO driver
-  is missing": run `Install-TemperatureSensors.ps1`. "Needs administrator": start SRRVRR as
+  is missing": run `Install Temperature Sensors.bat`. "Needs administrator": start SRRVRR as
   administrator. A memory tile with no temperature at all means the sticks have no sensor.
 - **Script won't run (execution policy):** use the `.bat` launcher, or run
   `powershell -ExecutionPolicy Bypass -File .\SRRVRR.ps1`.
