@@ -32,15 +32,35 @@ $libDir = Join-Path $PSScriptRoot 'lib\LibreHardwareMonitor'
 # --- Administrator -------------------------------------------------------------
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host 'Installing the drivers and files needs administrator; Windows will ask.'
-    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    Write-Host 'SRRVRR temperature sensors setup'
+    Write-Host 'Installing the driver and files needs administrator; Windows will ask.'
+    # Administrator windows don't see drives mapped without administrator, so use the network path.
+    $path = $PSCommandPath
+    $root = (Get-PSDrive $path.Substring(0, 1) -ErrorAction SilentlyContinue).DisplayRoot
+    if ($root) { $path = $root + $path.Substring(2) }
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$path`""
     if ($NoPause) { $argList += ' -NoPause' }
     if ($LogPath) { $argList += " -LogPath `"$LogPath`"" }
-    try { Start-Process powershell -Verb RunAs -ArgumentList $argList }
-    catch { Write-Host 'Nothing was installed: the administrator prompt was declined.'; exit 1 }
-    return
+    $code = 0
+    try {
+        $p = Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait -PassThru
+        Write-Host 'The administrator window has closed.'
+        $code = $p.ExitCode
+        # 0 = installed, 1 = stopped with a message shown there. Anything else means it never ran.
+        if ($code -ne 0 -and $code -ne 1) {
+            Write-Host "The administrator window closed before the setup finished (exit code $code)." -ForegroundColor Red
+            Write-Host 'Run it from an administrator PowerShell window instead, from the folder it is in:'
+            Write-Host '  powershell -ExecutionPolicy Bypass -File .\Install-TemperatureSensors.ps1'
+        }
+    } catch {
+        Write-Host 'Nothing was installed: the administrator prompt was declined.'
+        $code = 1
+    }
+    if (-not $NoPause -and $code -ne 0) { Write-Host 'Press Enter to close.'; [void][Console]::ReadLine() }
+    exit $code
 }
 if ($LogPath) { Start-Transcript -LiteralPath $LogPath -Force | Out-Null }
+Write-Host 'SRRVRR temperature sensors setup (administrator)'
 
 $work = Join-Path $env:TEMP ('SRRVRR-sensors-' + [guid]::NewGuid().ToString('N'))
 $ok = $false

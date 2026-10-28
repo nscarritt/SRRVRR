@@ -948,8 +948,8 @@ $slowWorker.Runspace = $slowRunspace
 $sensorDir = Join-Path $PSScriptRoot 'lib\LibreHardwareMonitor'
 $tempError = $null
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not (Test-Path -LiteralPath (Join-Path $sensorDir 'LibreHardwareMonitorLib.dll'))) { $tempError = 'not set up; run Install-TemperatureSensors.ps1' }
-elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO')) { $tempError = 'the PawnIO driver is missing; run Install-TemperatureSensors.ps1' }
+if (-not (Test-Path -LiteralPath (Join-Path $sensorDir 'LibreHardwareMonitorLib.dll'))) { $tempError = 'not set up; run Install Temperature Sensors.bat' }
+elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO')) { $tempError = 'the PawnIO driver is missing; run Install Temperature Sensors.bat' }
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
