@@ -14,7 +14,8 @@ called out under **Changed** or **Removed** with upgrade notes.
 - **Design for the v0.7.0 core** ([docs/specs/2026-10-28-srrvrr-core-design.md](docs/specs/2026-10-28-srrvrr-core-design.md)):
   modules with tests, the page in its own files, 15 minutes of history kept on the server, server-side alerts, an
   event log and a crash log, Maintenance and a Flagged list, with its test plan
-  ([docs/plans/2026-10-29-srrvrr-core-test-plan.md](docs/plans/2026-10-29-srrvrr-core-test-plan.md)). Design only; nothing changes yet.
+  ([docs/plans/2026-10-29-srrvrr-core-test-plan.md](docs/plans/2026-10-29-srrvrr-core-test-plan.md)) and implementation plan
+  ([docs/plans/2026-10-29-srrvrr-core-implementation-plan.md](docs/plans/2026-10-29-srrvrr-core-implementation-plan.md)). Design only; nothing changes yet.
 
 ### Changed
 
