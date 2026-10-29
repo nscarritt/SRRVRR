@@ -33,12 +33,16 @@ test('T47-31 bits turns bytes per second into bits with a unit', () => {
   assert.match(app.bits(0), /^0/);
 });
 
-test('T47-31 niceMax rounds up to 1, 2 or 5 times a power of ten', () => {
-  for (const v of [3, 70, 1234, 99999]) {
-    const m = app.niceMax(v);
-    assert.ok(m >= v, `${m} >= ${v}`);
-    const lead = m / Math.pow(10, Math.floor(Math.log10(m)));
-    assert.ok([1, 2, 5].some(x => Math.abs(lead - x) < 1e-9), `${m} starts with 1, 2 or 5`);
+test('T47-31 niceMax rounds the scale up to 1, 2 or 5 times a power of ten in bits, at least 100 kbit', () => {
+  // It takes and returns bytes per second; the round number is in bits (bytes x 8).
+  assert.strictEqual(app.niceMax(1000), 12500);      // 8 kbit -> the 100 kbit floor
+  assert.strictEqual(app.niceMax(20000), 25000);     // 160 kbit -> 200 kbit
+  assert.strictEqual(app.niceMax(70000), 125000);    // 560 kbit -> 1 Mbit
+  for (const v of [3, 70, 1234, 99999, 3e6]) {
+    const bits = app.niceMax(v) * 8;
+    assert.ok(bits >= v * 8, `${bits} >= ${v * 8}`);
+    const lead = bits / Math.pow(10, Math.floor(Math.log10(bits)));
+    assert.ok([1, 2, 5].some(x => Math.abs(lead - x) < 1e-9), `${bits} bits starts with 1, 2 or 5`);
   }
 });
 
