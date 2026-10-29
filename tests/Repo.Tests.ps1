@@ -5,6 +5,14 @@ BeforeAll {
     $script:Tools = Join-Path $script:Root 'tools'
 }
 
+Describe 'T47-01 the files the spec names exist' {
+    It 'T47-01 modules, web, tests, the measuring tool and the workflow are in the repo' {
+        foreach ($p in 'modules\Counters.psm1', 'web\index.html', 'web\app.js', 'web\style.css', 'web\img', 'tests', 'tools\Measure-SRRVRR.ps1', '.github\workflows\checks.yml') {
+            Test-Path (Join-Path $Root $p) | Should -BeTrue -Because $p
+        }
+    }
+}
+
 Describe 'T47-02 ASCII and line endings' {
     It 'T47-02 the repo has no non-ASCII bytes in code files and .bat files are CRLF' {
         $r = Invoke-InChildPowerShell -File (Join-Path $Tools 'Test-Ascii.ps1') -Arguments @('-Root', $Root)

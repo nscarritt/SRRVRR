@@ -77,6 +77,7 @@ function Start-TestServer {
             try { $ctx = $listener.GetContext() } catch { break }
             try {
                 $req = ConvertTo-SrrRequest -ListenerContext $ctx
+                if ($null -ne $Context.Requests) { $Context.Requests.Add("$($req.Method) $($req.Path)") }
                 Send-SrrResponse -ListenerContext $ctx -Result (Invoke-SrrRoute @req -Context $Context)
             } catch { try { $ctx.Response.Abort() } catch { $null = $_ } }
         }

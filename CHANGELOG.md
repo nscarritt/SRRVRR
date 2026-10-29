@@ -16,8 +16,26 @@ called out under **Changed** or **Removed** with upgrade notes.
   event log and a crash log, Maintenance and a Flagged list, with its test plan
   ([docs/plans/2026-10-29-srrvrr-core-test-plan.md](docs/plans/2026-10-29-srrvrr-core-test-plan.md)) and implementation plan
   ([docs/plans/2026-10-29-srrvrr-core-implementation-plan.md](docs/plans/2026-10-29-srrvrr-core-implementation-plan.md)). Design only; nothing changes yet.
+- **Checks and tests:** `tools\Invoke-Checks.ps1` runs a parse and C# compile check, an ASCII check, a
+  private-details scan, PSScriptAnalyzer and the Pester tests, locally and on every pull request
+  (GitHub Actions, in Windows PowerShell 5.1). `tools\New-TestBuild.ps1` builds a test copy of any
+  branch in its own folder, and `tools\Measure-SRRVRR.ps1` checks it against the performance budgets.
+  ([#47](https://github.com/nscarritt/SRRVRR/issues/47))
+- **`tickMs` in `/stats`:** how long each one-second reading takes, so SRRVRR's own cost stays
+  visible. ([#47](https://github.com/nscarritt/SRRVRR/issues/47))
 
 ### Changed
+
+- **The code is split into modules and the page into its own files.** `SRRVRR.ps1` loads
+  `modules\` (counters, settings, the web server's request handling) from its own folder, and serves
+  the page from `web\` (`index.html`, `app.js`, `style.css`, logos in `img\`), read on every request,
+  so a page change shows with a refresh. The page looks and works exactly as before. **Upgrading:**
+  copy the `modules` and `web` folders along with `SRRVRR.ps1`; see [Settings](README.md#settings).
+  ([#47](https://github.com/nscarritt/SRRVRR/issues/47))
+- **The web server answers only what it serves.** A request addressed to anything but this machine's
+  own names or addresses gets "421 Misdirected Request" (this blocks a website from reaching SRRVRR
+  through a DNS trick), any method but GET gets 405, and an unknown path gets 404 instead of the page.
+  ([#47](https://github.com/nscarritt/SRRVRR/issues/47))
 
 - **Memory sticks without a temperature sensor now say so.** The Memory tile shows a gray "No
   sensor" (hover names the sticks) instead of leaving the temperature blank, which looked broken.

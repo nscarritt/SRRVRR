@@ -1,8 +1,9 @@
 # Parses every PowerShell file, then compiles every literal Add-Type -TypeDefinition block with the
 # .NET Framework C# compiler that Windows PowerShell 5.1's Add-Type uses (C# 5), so newer C# fails here and not
 # at start. Nothing is loaded into this process. Exit code: 0 clean, 1 errors found.
-param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+param([string]$Root)
 
+if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }   # not in the param default: empty there under -File on 5.1
 $Root = (Resolve-Path -LiteralPath $Root).Path
 $errorsFound = 0
 $compiled = 0

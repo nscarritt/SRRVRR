@@ -1,8 +1,9 @@
 # Lists every non-ASCII byte in PowerShell and batch files, and every .bat file that isn't CRLF.
 # Windows PowerShell 5.1 reads scripts without a BOM as ANSI, so code files stay pure ASCII; web\ may be UTF-8.
 # Exit code: 0 clean, 1 problems found.
-param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+param([string]$Root)
 
+if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }   # not in the param default: empty there under -File on 5.1
 $Root = (Resolve-Path -LiteralPath $Root).Path
 $problems = 0
 # Filter by extension here: -Include is ignored with -LiteralPath on Windows PowerShell 5.1.

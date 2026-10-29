@@ -2,8 +2,9 @@
 # documentation ranges, UNC paths, e-mail addresses other than GitHub noreply, and any word in a local deny list
 # ($env:SRRVRR_DENYLIST, ';'-separated, or .git\info\private-words.txt, one per line; never committed).
 # Exit code: 0 clean, 1 findings.
-param([string]$Root = (Split-Path -Parent $PSScriptRoot), [string[]]$Path)
+param([string]$Root, [string[]]$Path)
 
+if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }   # not in the param default: empty there under -File on 5.1
 $Root = (Resolve-Path -LiteralPath $Root).Path
 if (-not $Path) { $Path = @(& git -C $Root ls-files) }
 

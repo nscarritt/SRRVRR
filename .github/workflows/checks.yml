@@ -38,7 +38,7 @@ jobs:
       - name: Run the checks
         run: |
           $PSVersionTable.PSVersion
-          & .\tools\Invoke-Checks.ps1 -CI -Elevated
+          & .\tools\Invoke-Checks.ps1 -CI -Elevated -Smoke
           exit $LASTEXITCODE
 
       - name: Job summary
