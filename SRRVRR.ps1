@@ -135,96 +135,12 @@ trap {
 
 # --- Settings -----------------------------------------------------------------
 Set-Step 'Reading settings'
-# Defaults, replaced by anything set in SRRVRR.config.psd1. That file is
-# not part of the code (see .gitignore), so updates never overwrite it.
-$settings = @{
-    Port              = 8099
-    FirewallScope     = 'LocalSubnet'
-    FirewallAddresses = @()
-    AllowPublicAddresses = $false
-    PreferredGpu      = ''
-    Processes         = @{}
-    ValheimPort       = 2456
-}
-# Settings from older versions, now handled automatically.
-$retired = @{
-    ListenAddress = 'the monitor always listens on this machine''s own addresses'
-    OpenFirewall  = 'the firewall rule is always set up, since other PCs need it'
-    GpuFallback   = 'without a PreferredGpu, the GPU with the most video memory is used'
-}
-$configPath = Join-Path $PSScriptRoot 'SRRVRR.config.psd1'
-# Before the rename to SRRVRR the settings file was SystemMonitor.config.psd1; still read it if that's all there is.
-$legacyConfig = Join-Path $PSScriptRoot 'SystemMonitor.config.psd1'
-if (-not (Test-Path -LiteralPath $configPath) -and (Test-Path -LiteralPath $legacyConfig)) {
-    $configPath = $legacyConfig
-    Write-Status 'Note: using the old settings file name SystemMonitor.config.psd1; rename it to SRRVRR.config.psd1.'
-}
-if (Test-Path -LiteralPath $configPath) {
-    $config = Import-PowerShellDataFile -LiteralPath $configPath
-    foreach ($k in $config.Keys) {
-        if ($settings.ContainsKey($k)) { $settings[$k] = $config[$k] }
-        elseif ($retired.ContainsKey($k)) { Write-Status "Note: setting '$k' is no longer used ($($retired[$k])); you can delete it from the config." }
-        else { Write-Status -Warning "Unknown setting '$k' in $configPath (ignored)." }
-    }
-    Write-Status "Settings loaded from $configPath"
-} else {
-    Write-Status 'No SRRVRR.config.psd1 found, using default settings. Copy SRRVRR.config.example.psd1 to SRRVRR.config.psd1 to change them.'
-}
-if ($PSBoundParameters.ContainsKey('Port')) { $settings.Port = $Port }
-
-if ($settings.ValheimPort -isnot [int] -or $settings.ValheimPort -lt 1 -or $settings.ValheimPort -gt 65534) {
-    throw "ValheimPort must be the Valheim server's game port, a number from 1 to 65534 (default 2456)."
-}
-$scopes = 'LocalSubnet', 'Allowlist', 'Blocklist'
-if ($settings.FirewallScope -notin $scopes) { throw "FirewallScope must be one of: $($scopes -join ', ')" }
-if ($settings.FirewallScope -in 'Allowlist', 'Blocklist' -and -not $settings.FirewallAddresses) {
-    throw "FirewallScope '$($settings.FirewallScope)' needs at least one address in FirewallAddresses."
-}
-
-# The page is meant for local networks, so firewall addresses must be private:
-# 10.x, 172.16-31.x, 192.168.x, 169.254.x, 127.x, or IPv6 fe80::/10 and fc00::/7.
-# The one exception: with AllowPublicAddresses, an Allowlist may also name
-# single public IPs, at the user's own risk (see the README's security warning).
-function Test-PrivateAddress([string]$entry) {
-    function Test-Ip([string]$text, [int]$prefix) {
-        $ip = $null
-        if (-not [System.Net.IPAddress]::TryParse($text, [ref]$ip)) { return $false }
-        $b = $ip.GetAddressBytes()
-        if ($b.Length -eq 4) {
-            # The whole subnet must fit inside one private block.
-            $blocks = @(@(10, 0, 8), @(172, 16, 12), @(192, 168, 16), @(169, 254, 16), @(127, 0, 8))
-            foreach ($blk in $blocks) {
-                $inBlock = if ($blk[2] -eq 8) { $b[0] -eq $blk[0] } elseif ($blk[2] -eq 12) { $b[0] -eq $blk[0] -and ($b[1] -band 0xF0) -eq $blk[1] } else { $b[0] -eq $blk[0] -and $b[1] -eq $blk[1] }
-                if ($inBlock -and $prefix -ge $blk[2]) { return $true }
-            }
-            return $false
-        }
-        if ($b[0] -eq 0xFE -and ($b[1] -band 0xC0) -eq 0x80) { return $prefix -ge 10 }   # fe80::/10 link-local
-        if (($b[0] -band 0xFE) -eq 0xFC) { return $prefix -ge 7 }                          # fc00::/7 unique local
-        return $false
-    }
-    if ($entry -match '^(.+)/(\d+)$') { return Test-Ip $matches[1] ([int]$matches[2]) }
-    if ($entry -match '^(.+)-(.+)$') { return (Test-Ip $matches[1] 128) -and (Test-Ip $matches[2] 128) }
-    Test-Ip $entry 128
-}
-# One specific address, written out in full: no ranges, subnets or "any" addresses.
-function Test-SingleAddress([string]$entry) {
-    $ip = $null
-    if ($entry -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -and $entry -notmatch ':') { return $false }
-    if (-not [System.Net.IPAddress]::TryParse($entry, [ref]$ip)) { return $false }
-    -not ($ip.Equals([System.Net.IPAddress]::Any) -or $ip.Equals([System.Net.IPAddress]::IPv6Any) -or $ip.Equals([System.Net.IPAddress]::Broadcast))
-}
-$public = @($settings.FirewallAddresses | Where-Object { -not (Test-PrivateAddress $_) })
-if ($settings.FirewallScope -ne 'LocalSubnet' -and $public) {
-    if ($settings.FirewallScope -ne 'Allowlist' -or -not $settings.AllowPublicAddresses) {
-        $hint = if ($settings.FirewallScope -eq 'Allowlist') { ' To let specific public IPs in AT YOUR OWN RISK, set AllowPublicAddresses = $true (read the README security warning first).' } else { '' }
-        throw "FirewallAddresses must be private (local network) addresses. Not allowed: $($public -join ', ').$hint"
-    }
-    $wide = @($public | Where-Object { -not (Test-SingleAddress $_) })
-    if ($wide) { throw "Public addresses must be single IPs, not ranges, subnets or 'any' addresses. Not allowed: $($wide -join ', ')" }
-    Write-Status -Warning ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
-        "which has no password and no encryption: $($public -join ', '). You accept this risk; see the README security warning.")
-}
+# Defaults, replaced by anything set in SRRVRR.config.psd1. That file is not part of the code (see .gitignore),
+# so updates never overwrite it. Loading and validation are in modules\Settings.psm1.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Settings.psm1') -Force
+$loaded = if ($PSBoundParameters.ContainsKey('Port')) { Import-SrrSettings -Folder $PSScriptRoot -Port $Port } else { Import-SrrSettings -Folder $PSScriptRoot }
+foreach ($n in $loaded.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
+$settings = $loaded.Settings
 
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page, and the switch name under Processes in the config
