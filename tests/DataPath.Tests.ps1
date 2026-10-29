@@ -143,24 +143,88 @@ Describe 'Writing data and falling back later' {
 Describe 'The drives card' {
     BeforeAll {
         function Vol($Letter, $Type, $SizeGB, $Label = '') { [pscustomobject]@{ DeviceID = $Letter; DriveType = $Type; Size = [double]$SizeGB * 1GB; FreeSpace = 1GB; VolumeName = $Label } }
-        $script:Vols = @((Vol 'C:' 3 400), (Vol 'D:' 3 0.5), (Vol 'H:' 2 29.5 'CODE'), (Vol 'E:' 3 4000))
+        $script:Vols = @((Vol 'C:' 3 400), (Vol 'D:' 3 0.5), (Vol 'G:' 2 29.5 'USB'), (Vol 'E:' 3 4000))
     }
     It 'T48-65 fixed drives as before, plus the removable drive that holds DataPath' {
         @(Select-DrivesToShow -Volumes $Vols -DataPaths @() | ForEach-Object DeviceID) | Should -Be @('C:', 'E:')
-        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('H:\SRRVRR') | ForEach-Object DeviceID) | Should -Be @('C:', 'E:', 'H:')
+        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('G:\SRRVRR') | ForEach-Object DeviceID) | Should -Be @('C:', 'E:', 'G:')
     }
     It 'T48-65 the data drive is shown even when it''s under 1 GB' {
         @(Select-DrivesToShow -Volumes $Vols -DataPaths @('D:\data') | ForEach-Object DeviceID) | Should -Contain 'D:'
     }
     It 'T48-66 a data drive that''s gone stays on the card as missing' {
-        $d = @(Select-DrivesToShow -Volumes @((Vol 'C:' 3 400)) -DataPaths @('H:\SRRVRR'))
-        $missing = $d | Where-Object { $_.DeviceID -eq 'H:' }
+        $d = @(Select-DrivesToShow -Volumes @((Vol 'C:' 3 400)) -DataPaths @('G:\SRRVRR'))
+        $missing = $d | Where-Object { $_.DeviceID -eq 'G:' }
         $missing.Missing | Should -BeTrue
         $missing.Size | Should -Be 0
     }
     It 'T48-71 after a fallback both the fallback''s drive and the configured drive are watched, so it shows again when it''s back' {
-        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('H:\SRRVRR', 'C:\SRRVRR') | ForEach-Object DeviceID) | Should -Be @('C:', 'E:', 'H:')
-        (@(Select-DrivesToShow -Volumes $Vols -DataPaths @('H:\SRRVRR', 'C:\SRRVRR')) | Where-Object { $_.DeviceID -eq 'H:' }).Missing | Should -BeFalse
+        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('G:\SRRVRR', 'C:\SRRVRR') | ForEach-Object DeviceID) | Should -Be @('C:', 'E:', 'G:')
+        (@(Select-DrivesToShow -Volumes $Vols -DataPaths @('G:\SRRVRR', 'C:\SRRVRR')) | Where-Object { $_.DeviceID -eq 'G:' }).Missing | Should -BeFalse
+    }
+}
+
+Describe 'Review fixes' {
+    It 'T48-08 a machine with no shares gives an empty list, not an unreadable one' {
+        Mock -ModuleName DataFolder Get-CimInstance { }
+        $s = Get-ShareList
+        $null -eq $s | Should -BeFalse
+        @($s).Count | Should -Be 0
+    }
+    It 'T48-18 an account that no longer exists in the permissions doesn''t stop the plan' {
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
+        $ghost = New-Object Security.Principal.SecurityIdentifier 'S-1-5-21-1111111111-2222222222-3333333333-4444'
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($ghost, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        $plan = Get-DataFolderAclPlan -Acl $acl
+        @($plan.Remove | ForEach-Object { $_.IdentityReference.Value }) | Should -Be @($ghost.Value)
+    }
+    It 'T48-13 a data folder whose state\ is closed to this account falls back instead of crashing' {
+        $root = New-TestDataPath; $own = Join-Path $root 'own'; $data = Join-Path $root 'data'
+        New-Item -ItemType Directory $own, (Join-Path $data 'state'), (Join-Path $data 'logs') | Out-Null
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $acl = Get-Acl (Join-Path $data 'state')
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'CreateFiles, WriteData, AppendData', 'ContainerInherit,ObjectInherit', 'None', 'Deny')))
+        Set-Acl (Join-Path $data 'state') $acl
+        try {
+            $r = Resolve-DataPath -Setting $data -OwnFolder $own -Shares @() -IsElevated $false -DriveType { 'Fixed' }
+            $r.IsFallback | Should -BeTrue
+            $r.Reason | Should -Be 'read-only'
+            $r.Lock.Dispose()
+        } finally {
+            $acl = Get-Acl (Join-Path $data 'state')
+            foreach ($rule in @($acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' })) { [void]$acl.RemoveAccessRule($rule) }
+            Set-Acl (Join-Path $data 'state') $acl
+        }
+    }
+    It 'T48-19 a drive without permissions (FAT32, exFAT) is used as it is, with a note, never refused' {
+        $root = New-TestDataPath; $own = Join-Path $root 'own'; New-Item -ItemType Directory $own | Out-Null
+        Mock -ModuleName DataFolder Get-SrrFileSystem { 'exFAT' }
+        Mock -ModuleName DataFolder Set-DataFolderAcl { throw 'should not be called' }
+        $r = Resolve-DataPath -Setting '' -OwnFolder $own -Shares @() -IsElevated $true -DriveType { 'Removable' }
+        Should -Invoke -ModuleName DataFolder Set-DataFolderAcl -Times 0
+        @($r.Notes | Where-Object { $_.Text -match 'exFAT' }).Count | Should -Be 1
+        $r.Lock.Dispose()
+    }
+}
+
+Describe 'Permissions on a real folder' -Tag 'Integration' {
+    It 'T48-19 write is removed for everyone but SYSTEM and Administrators, read stays, inheritance off, and a second run changes nothing' {
+        $f = Join-Path (New-TestDataPath) 'acl'
+        New-Item -ItemType Directory $f | Out-Null
+        $acl = Get-Acl $f
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Users', 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        Set-Acl $f $acl
+        Set-DataFolderAcl -Path $f
+        $after = Get-Acl $f
+        $after.AreAccessRulesProtected | Should -BeTrue
+        $write = [int][System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, Delete'
+        $writers = @($after.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+            $_.AccessControlType -eq 'Allow' -and ([int]$_.FileSystemRights -band $write) -and $_.IdentityReference.Value -notin 'S-1-5-18', 'S-1-5-32-544' })
+        $writers | Should -BeNullOrEmpty
+        @($after.Access | Where-Object { $_.IdentityReference.Value -eq 'BUILTIN\Users' -and $_.FileSystemRights -match 'ReadAndExecute' }).Count | Should -BeGreaterThan 0
+        Mock -ModuleName DataFolder Write-FolderAcl { throw 'nothing should change' }
+        { Set-DataFolderAcl -Path $f } | Should -Not -Throw
+        Should -Invoke -ModuleName DataFolder Write-FolderAcl -Times 0
     }
 }
 
@@ -174,8 +238,8 @@ Describe 'Permissions' {
         $acl.AddAccessRule((& $rule 'BUILTIN\Administrators' 'FullControl'))
         $plan = Get-DataFolderAclPlan -Acl $acl
         $plan.DisableInheritance | Should -BeTrue
-        @($plan.Remove | ForEach-Object { $_.IdentityReference.Value }) | Should -Be @('BUILTIN\Users')
-        @($plan.Add | ForEach-Object { '{0}:{1}' -f $_.IdentityReference.Value, $_.FileSystemRights }) | Should -Be @('BUILTIN\Users:ReadAndExecute, Synchronize')
+        @($plan.Remove | ForEach-Object { $_.IdentityReference.Value }) | Should -Be @('S-1-5-32-545')   # BUILTIN\Users, by id
+        @($plan.Add | ForEach-Object { '{0}:{1}' -f $_.IdentityReference.Value, $_.FileSystemRights }) | Should -Be @('S-1-5-32-545:ReadAndExecute, Synchronize')
     }
     It 'T48-20 an unelevated start skips the permissions step and says so' {
         $root = New-TestDataPath; $own = Join-Path $root 'own'; New-Item -ItemType Directory $own | Out-Null

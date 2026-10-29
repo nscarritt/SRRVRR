@@ -39,12 +39,19 @@ function Test-PathInShare {
 }
 
 # OS wrappers, kept small so tests can replace them.
-function Get-ShareList { @(Get-CimInstance -ClassName Win32_Share -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Path = $_.Path; Type = [long]$_.Type } }) }
+# The comma keeps an empty list a list: a machine with no shares must not look like one whose list can't be read.
+function Get-ShareList { , @(Get-CimInstance -ClassName Win32_Share -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Path = $_.Path; Type = [long]$_.Type } }) }
+function Get-SrrFileSystem([string]$Path) { [IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveFormat }
 function Test-Elevated { ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
 function Get-SrrDriveType([string]$Path) { [string]([IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveType) }
+# The folder, and its state\ and logs\ when they're there (an administrator run may have closed them to others).
 function Test-FolderWritable([string]$Path) {
-    $probe = Join-Path $Path ('.srrvrr-write-test-' + [guid]::NewGuid().ToString('n'))
-    try { [IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe -Force; $true } catch { $false }
+    foreach ($dir in @($Path, (Join-Path $Path 'state'), (Join-Path $Path 'logs'))) {
+        if ($dir -ne $Path -and -not (Test-Path -LiteralPath $dir)) { continue }
+        $probe = Join-Path $dir ('.srrvrr-write-test-' + [guid]::NewGuid().ToString('n'))
+        try { [IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe -Force } catch { return $false }
+    }
+    $true
 }
 
 # True when another copy holds Folder\state\srrvrr.lock open (a sharing violation), even if the folder looks
@@ -96,7 +103,11 @@ function Resolve-DataPath {
     foreach ($sub in 'state', 'logs') { New-Item -ItemType Directory -Force -Path (Join-Path $path $sub) | Out-Null }
     try { $lock = [IO.File]::Open((Join-Path $path 'state\srrvrr.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
     catch [IO.IOException] { throw (New-Refusal "another SRRVRR is using the data folder $path.") }
-    if ($IsElevated) {
+    catch [UnauthorizedAccessException] { throw (New-Refusal "SRRVRR can't open its lock file in $path\state: $($_.Exception.Message)") }
+    $fs = Get-SrrFileSystem $path
+    if ($IsElevated -and $fs -notin 'NTFS', 'ReFS') {
+        $notes.Add(@{ Level = 'Note'; Text = "The data folder is on $fs, which has no permissions to set, so they were left as they are." })
+    } elseif ($IsElevated) {
         try { foreach ($sub in 'state', 'logs') { Set-DataFolderAcl -Path (Join-Path $path $sub) } }
         catch { $lock.Dispose(); throw (New-Refusal "SRRVRR couldn't limit who can write its data folder ${path}: $($_.Exception.Message)") }
     } else {
@@ -109,27 +120,40 @@ function Resolve-DataPath {
 # any write right is replaced by a read rule for the same account, and inheritance is turned off.
 function Get-DataFolderAclPlan {
     param([System.Security.AccessControl.FileSystemSecurity]$Acl)
-    $write = [System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    # The write rights, plus the generic forms that inherited rules (CREATOR OWNER and the like) are often stored in.
+    $write = [long][System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    $write = $write -bor 0x10000000 -bor 0x40000000   # GENERIC_ALL, GENERIC_WRITE
     $remove = @(); $add = @()
     foreach ($r in $Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
         if ($r.AccessControlType -ne 'Allow' -or $r.IdentityReference.Value -in $script:SystemSid, $script:AdminsSid) { continue }
-        if (([int]$r.FileSystemRights -band [int]$write) -eq 0) { continue }
-        $who = $r.IdentityReference.Translate([Security.Principal.NTAccount])
-        $remove += New-Object System.Security.AccessControl.FileSystemAccessRule($who, $r.FileSystemRights, $r.InheritanceFlags, $r.PropagationFlags, 'Allow')
+        if (([long][int]$r.FileSystemRights -band $write) -eq 0) { continue }
+        # By account id, never translated to a name: an account deleted since (or from another PC) has no name.
+        $who = $r.IdentityReference
+        $remove += New-Object System.Security.AccessControl.FileSystemAccessRule($who, 'Read', $r.InheritanceFlags, $r.PropagationFlags, 'Allow')
         $add += New-Object System.Security.AccessControl.FileSystemAccessRule($who, 'ReadAndExecute', $r.InheritanceFlags, $r.PropagationFlags, 'Allow')
     }
     @{ Remove = $remove; Add = $add; DisableInheritance = $true }
 }
 
+# Applies the plan: inheritance off (inherited rules kept as the folder's own), every other account's rules cleared
+# and read access given back. Nothing is written when the folder is already that way.
+# Only the access rules are read and written: Get-Acl/Set-Acl also carry the audit rules, which need a privilege
+# (SeSecurityPrivilege) that SRRVRR shouldn't need.
+function Read-FolderAcl([string]$Path) { [IO.Directory]::GetAccessControl($Path, [System.Security.AccessControl.AccessControlSections]::Access) }
+function Write-FolderAcl([string]$Path, $Acl) { [IO.Directory]::SetAccessControl($Path, $Acl) }
+
 function Set-DataFolderAcl([string]$Path) {
-    $acl = Get-Acl -LiteralPath $Path
-    $acl.SetAccessRuleProtection($true, $true)   # inherited rules become explicit, so they can be changed here
-    Set-Acl -LiteralPath $Path -AclObject $acl
-    $acl = Get-Acl -LiteralPath $Path
+    $acl = Read-FolderAcl $Path
+    if (-not $acl.AreAccessRulesProtected) {
+        $acl.SetAccessRuleProtection($true, $true)   # inherited rules become the folder's own, so they can be changed
+        Write-FolderAcl $Path $acl
+        $acl = Read-FolderAcl $Path
+    }
     $plan = Get-DataFolderAclPlan -Acl $acl
-    foreach ($r in $plan.Remove) { [void]$acl.RemoveAccessRule($r) }
+    if (-not $plan.Remove) { return }
+    foreach ($r in $plan.Remove) { $acl.PurgeAccessRules($r.IdentityReference) }   # an exact-match remove misses rules stored with extra bits
     foreach ($r in $plan.Add) { $acl.AddAccessRule($r) }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    Write-FolderAcl $Path $acl
 }
 
 # Writes data files under the data folder. The first write that fails switches every later write to the fallback

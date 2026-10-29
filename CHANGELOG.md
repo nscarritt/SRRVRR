@@ -13,7 +13,7 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 - **A crash and error log**, `logs\srrvrr-YYYY-MM-DD.log`: every startup step, settings problems,
   errors from the background readers, crashes with their details, and a last line saying why SRRVRR
-  stopped and its exit code. 20 MB a day at most, kept `LogRetentionDays` (31) days.
+  stopped and its exit code. 20 MB a day at most (old files are removed once the event log arrives).
   ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
 - **`DataPath`:** keep the `state` and `logs` folders on another local drive. If it's missing or
   can't be written, SRRVRR uses its own folder until the next restart and logs a flag; the Storage

@@ -191,14 +191,15 @@ It creates those two, never `DataPath` itself.
 - **The log**, `logs\srrvrr-YYYY-MM-DD.log`, one file per day: every startup step, settings problems,
   errors from the background readers (each written when it appears or changes, and at most once a
   minute), crashes with their details, and a last line saying why SRRVRR stopped, e.g.
-  `stopped: requested (exit 0)`. Each day's file stops growing at 20 MB, and files older than
-  `LogRetentionDays` are removed.
+  `stopped: requested (exit 0)`. Each day's file stops growing at 20 MB. Removing files older than
+  `LogRetentionDays` comes with the event log in a later release; until then old files stay.
 - **If `DataPath` is missing or can't be written**, at start or later, SRRVRR uses its own folder until
   the next restart and logs a flag saying so. The Storage card keeps watching the drive that holds
   `DataPath`, even a USB drive, and shows it as Missing when it's gone.
 - **It refuses to start** (exit code 3) if the data folder is shared on the network, is on a network
-  drive, or is already used by another copy of SRRVRR. Windows' own hidden drive shares (`C$` and the
-  like) don't count.
+  drive, or is already used by another copy of SRRVRR. That includes a folder on a drive you share as
+  a whole (a share of `E:\` covers everything on E:), and a drive root with a shared folder below it.
+  Windows' own hidden drive shares (`C$` and the like) don't count. Pick a folder no share covers.
 - **When run as administrator**, it makes sure only SYSTEM and Administrators can change `state` and
   `logs`; everyone who could read them before still can.
 

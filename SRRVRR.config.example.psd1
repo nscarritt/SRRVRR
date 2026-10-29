@@ -72,7 +72,7 @@
     # start if the folder is shared on the network.
     DataPath = ''
 
-    # How many days of the event log and the error log to keep (7 to 366).
+    # How many days of logs to keep (7 to 366). Old files are removed once the event log arrives.
     LogRetentionDays = 31
 
     # How long the Maintenance checkbox stays on before it switches itself off,

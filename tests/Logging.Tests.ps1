@@ -151,6 +151,9 @@ param($Entry)
 $ast = [Management.Automation.Language.Parser]::ParseFile($Entry, [ref]$null, [ref]$null)
 $src = ($ast.FindAll({ param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] -and $n.Value -match 'class ProcessNetTrace' }, $true) | Select-Object -First 1).Value
 Add-Type -TypeDefinition $src
+# A session name of its own, and never the old name: the probe must not touch a running SRRVRR's trace.
+[ProcessNetTrace]::SessionName = 'SRRVRRNet-probe-' + [guid]::NewGuid().ToString('n').Substring(0, 8)
+[ProcessNetTrace]::StopLegacy = $false
 $started = [ProcessNetTrace]::Start()
 [pscustomobject]@{ Started = $started; Error = [ProcessNetTrace]::Error; Count = [ProcessNetTrace]::ErrorCount; Alive = [ProcessNetTrace]::Alive; Drained = [ProcessNetTrace]::Drain().Count } | ConvertTo-Json -Compress
 '@
@@ -158,8 +161,7 @@ $started = [ProcessNetTrace]::Start()
         $r = Invoke-InChildPowerShell -File $probe -Arguments @((Join-Path (Get-RepoRoot) 'SRRVRR.ps1'))
         $j = ($r.Output.Trim() -split "`n")[-1] | ConvertFrom-Json
         $j.Started | Should -BeFalse
-        # 183 (already exists): a live SRRVRR's trace session has the same name until each copy gets its own (Task 12).
-        $j.Error | Should -Match '^(needs administrator|StartTrace error 183)$'
+        $j.Error | Should -Be 'needs administrator'
         $j.Count | Should -Be 0
         $j.Alive | Should -BeFalse
         $j.Drained | Should -Be 0
