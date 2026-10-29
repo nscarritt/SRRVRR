@@ -1,0 +1,10 @@
+# Releases are built with git archive: ship only the files that run.
+tests/ export-ignore
+tools/ export-ignore
+docs/ export-ignore
+.github/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+
+# Batch files need CRLF to run reliably in cmd.exe.
+*.bat text eol=crlf

@@ -1,0 +1,53 @@
+# SRRVRR's checks: the same tools\Invoke-Checks.ps1 that runs locally, in Windows PowerShell 5.1 (the version
+# SRRVRR runs on), never PowerShell 7. Advisory until the owner makes it a required check.
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: powershell
+
+jobs:
+  checks:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install the pinned Pester and PSScriptAnalyzer
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Install-PackageProvider -Name NuGet -Force -Scope CurrentUser | Out-Null
+          Install-Module Pester -RequiredVersion 6.2.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+
+      - name: Run the checks
+        run: |
+          $PSVersionTable.PSVersion
+          & .\tools\Invoke-Checks.ps1 -CI -Elevated -Smoke
+          exit $LASTEXITCODE
+
+      - name: Job summary
+        if: always()
+        run: if (Test-Path out\summary.md) { Get-Content out\summary.md | Add-Content $env:GITHUB_STEP_SUMMARY }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-results
+          path: out/
+          if-no-files-found: ignore
