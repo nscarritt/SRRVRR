@@ -35,19 +35,61 @@ Describe 'Test builds' -Tag 'Smoke' {
         $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         if ($elevated -and -not $env:GITHUB_ACTIONS) { throw 'Run the smoke tests without administrator: an elevated test copy would change the live SRRVRR''s firewall rule.' }
     }
-    It 'T48-55 a missing module stops the sampler with a plain error in /stats, not a page stuck on Starting' {
+    It 'T48-55 a module the sampler can''t load stops SRRVRR with a crash code, and the log says which' {
         $port = Get-FreePort
         $folder = New-Build 'HEAD' $port
-        Remove-Item (Join-Path $folder 'modules\Counters.psm1')
+        # Main loads Counters too, so break only the copy the sampler loads: an unreadable file would stop both.
+        [IO.File]::WriteAllText((Join-Path $folder 'modules\Counters.psm1'), "function Invoke-FastTick { }`r`nthrow 'broken module'")
         $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Minimized -PassThru
+        $null = $p.Handle
         try {
-            $deadline = [DateTime]::UtcNow.AddSeconds(90); $s = $null
-            while ([DateTime]::UtcNow -lt $deadline) {
-                Start-Sleep -Milliseconds 500
-                try { $s = (Invoke-TestRequest -Url "http://localhost:$port/stats").Body | ConvertFrom-Json; if ($s.error) { break } } catch { $null = $_ }
-            }
-            $s.error | Should -Match 'Counters\.psm1'
-            $s.ready | Should -BeFalse
+            $p.WaitForExit(90000) | Should -BeTrue
+            $p.ExitCode | Should -Not -Be 0
+            $log = (Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n"
+            $log | Should -Match 'broken module|Counters\.psm1'
+            $log | Should -Match 'stopped: (crash|refused).*\(exit [13]\)'
+        } finally { Stop-Build $p }
+    }
+    It 'T48-25 a settings error exits 2 with one plain line, a log line and the stopped line' {
+        foreach ($bad in "@{ ValheimPort = 0 }", "@{ FirewallScope = 'Open' }", "@{ ValheimPort = ", "@{ LogRetentionDays = 3 }") {
+            $port = Get-FreePort
+            $folder = New-Build 'HEAD' $port
+            [IO.File]::WriteAllText((Join-Path $folder 'SRRVRR.config.psd1'), $bad)
+            $out = Join-Path $folder 'console.txt'
+            $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError (Join-Path $folder 'err.txt')
+            $null = $p.Handle
+            $p.WaitForExit(60000) | Should -BeTrue
+            $p.ExitCode | Should -Be 2 -Because $bad
+            @(Get-Content $out | Where-Object { $_ -match '^SRRVRR stopped:' }).Count | Should -Be 1
+            [IO.File]::ReadAllText((Join-Path $folder 'err.txt')) | Should -Not -Match 'CategoryInfo'
+            $lines = @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)
+            $lines[-1] | Should -Match 'stopped: settings error \(exit 2\)$'
+        }
+    }
+    It 'T48-56 a crash exits 1, with the exception''s type, message, line and stack in the log' {
+        $port = Get-FreePort
+        $folder = New-Build 'HEAD' $port
+        $taken = New-Object Net.HttpListener; $taken.Prefixes.Add("http://localhost:$port/"); $taken.Start()
+        try {
+            $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
+            $null = $p.Handle
+            $p.WaitForExit(90000) | Should -BeTrue
+            $p.ExitCode | Should -Be 1
+            $lines = @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)
+            ($lines -join "`n") | Should -Match 'ERROR srrvrr: System\.[\w.]+Exception: .+ \| at SRRVRR\.ps1:\d+ \| stack: '
+            $lines[-1] | Should -Match 'stopped: crash: System\.[\w.]+ \(exit 1\)$'
+        } finally { $taken.Stop(); $taken.Close() }
+    }
+    It 'T48-21 the log holds the settings source, every startup step in order and the serving line' {
+        $port = Get-FreePort
+        $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        try {
+            $text = (Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n"
+            $text | Should -Match 'INFO startup: Settings loaded from .*SRRVRR\.config\.psd1'
+            $steps = @([regex]::Matches($text, 'INFO startup: \[(\d+)/(\d+)\]') | ForEach-Object { [int]$_.Groups[1].Value })
+            $steps | Should -Be (1..$steps.Count)
+            $text | Should -Match "INFO startup: serving at http://localhost:$port"
         } finally { Stop-Build $p }
     }
     It 'T47-18 v0.6.0 and HEAD side by side: the same /stats shape apart from tickMs, and the same headers' {

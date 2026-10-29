@@ -164,7 +164,8 @@ function Import-SrrSettings {
         $notes.Add(@{ Level = 'Note'; Text = 'Note: using the old settings file name SystemMonitor.config.psd1; rename it to SRRVRR.config.psd1.' })
     }
     if (Test-Path -LiteralPath $configPath) {
-        $config = Import-PowerShellDataFile -LiteralPath $configPath
+        try { $config = Import-PowerShellDataFile -LiteralPath $configPath -ErrorAction Stop }
+        catch { throw (New-SettingsError "$([IO.Path]::GetFileName($configPath)) couldn't be read: $($_.Exception.Message)") }
         foreach ($k in $config.Keys) {
             if ($settings.ContainsKey($k)) { $settings[$k] = $config[$k] }
             elseif ($retired.ContainsKey($k)) { $notes.Add(@{ Level = 'Note'; Text = "Note: setting '$k' is no longer used ($($retired[$k])); you can delete it from the config." }) }

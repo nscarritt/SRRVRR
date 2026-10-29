@@ -57,6 +57,25 @@ if ($Stop) {
 # background thread sits below the current step while it works. Messages go
 # through Write-Status so they don't collide with the spinner line. The spinner
 # is skipped when output goes to a file.
+# The crash and error log, logs\srrvrr-YYYY-MM-DD.log (modules\Logging.psm1): startup steps, settings problems,
+# sampler and worker errors, crashes with their details, and a last line saying why SRRVRR stopped. Only this
+# thread writes it.
+$srrLog = $null; $srrThrottle = $null
+try {
+    Import-Module -Name (Join-Path $PSScriptRoot 'modules\Logging.psm1') -Force -ErrorAction Stop
+    $srrLog = New-DailyLog -Folder (Join-Path $PSScriptRoot 'logs') -Prefix 'srrvrr' -Extension 'log' -Clock { [DateTimeOffset]::Now }
+    $srrThrottle = New-ErrorThrottle -Clock { [DateTimeOffset]::Now }
+} catch { }   # no log is better than no SRRVRR
+function Write-SrrLog([string]$Level, [string]$Source, [string]$Message, [switch]$Always) {
+    if ($srrLog) { $srrLog.Write((Format-LogLine -Time ([DateTimeOffset]::Now) -Level $Level -Source $Source -Message $Message), [bool]$Always) }
+}
+# An error, written at most once a minute with a count of repeats (key: the error itself).
+function Write-SrrError([string]$Source, [string]$Message) {
+    if (-not $srrThrottle) { return }
+    $repeats = $srrThrottle.ShouldWrite("$Source|$Message")
+    if ($null -ne $repeats) { Write-SrrLog 'ERROR' $Source ($Message + $(if ($repeats) { " (repeated $repeats times)" })) }
+}
+
 $startup = [hashtable]::Synchronized(@{
     Step   = 0
     Steps  = 8        # number of Set-Step calls below
@@ -90,6 +109,7 @@ function Write-Status([string]$message, [switch]$Warning, [switch]$Step) {
         elseif ($Step) { Write-Host $message }
         else { Write-Host "      $message" }   # details sit under their step
     } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
+    Write-SrrLog $(if ($Warning) { 'WARN' } else { 'INFO' }) 'startup' $message   # every startup line goes in the log too
 }
 function Set-Step([string]$label) {
     $startup.Step++
@@ -126,6 +146,12 @@ function Stop-StartupSpinner {
 # The one way SRRVRR ends itself, so whatever started it can tell why from the exit code (spec section 5):
 # 0 a clean stop, 2 a settings error, 3 a refusal to start, anything else a crash.
 function Exit-SRRVRR([int]$Code, [string]$Reason) {
+    if ($srrThrottle) {
+        $pending = $srrThrottle.Flush()
+        foreach ($k in $pending.Keys) { $src, $msg = $k -split '\|', 2; Write-SrrLog 'ERROR' $src "$msg (repeated $($pending[$k]) more times)" -Always }
+    }
+    $line = if (Get-Command Format-StopLine -ErrorAction SilentlyContinue) { Format-StopLine -Reason $Reason -Code $Code } else { "stopped: $Reason (exit $Code)" }
+    Write-SrrLog $(if ($Code) { 'ERROR' } else { 'INFO' }) 'srrvrr' $line -Always
     exit $Code
 }
 # Any error that stops the script: clear the spinner and show one plain message
@@ -135,6 +161,8 @@ trap {
     try { [Console]::CursorVisible = $true } catch { }
     Write-Host ''
     Write-Host "SRRVRR stopped: $($_.Exception.Message)" -ForegroundColor Red
+    $details = if (Get-Command Format-SrrException -ErrorAction SilentlyContinue) { Format-SrrException -ErrorRecord $_ } else { "$($_.Exception.GetType().FullName): $($_.Exception.Message)" }
+    Write-SrrLog 'ERROR' 'srrvrr' $details -Always
     if (Get-Command Get-SrrExitCode -ErrorAction SilentlyContinue) {
         Exit-SRRVRR -Code (Get-SrrExitCode $_.Exception) -Reason (Get-SrrStopReason $_.Exception)
     }
@@ -147,6 +175,7 @@ Set-Step 'Reading settings'
 # so updates never overwrite it. Loading and validation are in modules\Settings.psm1.
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Settings.psm1') -Force
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Web.psm1') -Force
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Counters.psm1') -Force   # Get-TracerLogEntry, for the watcher
 $loaded = if ($PSBoundParameters.ContainsKey('Port')) { Import-SrrSettings -Folder $PSScriptRoot -Port $Port } else { Import-SrrSettings -Folder $PSScriptRoot }
 foreach ($n in $loaded.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
 $settings = $loaded.Settings
@@ -325,6 +354,18 @@ public static class ProcessNetTrace {
     public static string Error;
     public static long EventsSeen;           // every event delivered, for troubleshooting
     public static int TraceResult = -1;      // ProcessTrace's return code once it stops
+    // PowerShell can't run a handler on this class's own thread, so errors are kept here for the main loop to
+    // log (spec section 4): the last error's type and text, how many there have been, and whether the thread runs.
+    public static volatile string LastErrorType = "";
+    public static volatile string LastErrorText = "";
+    public static int ErrorCount;
+    public static volatile bool Alive;
+
+    static void Record(Exception e) {
+        LastErrorType = e.GetType().FullName;
+        LastErrorText = e.Message;
+        Interlocked.Increment(ref ErrorCount);
+    }
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
     static extern int StartTraceW(out ulong handle, string name, IntPtr properties);
@@ -391,13 +432,22 @@ public static class ProcessNetTrace {
         ulong trace = OpenTraceW(log);
         if (trace == ulong.MaxValue) { Error = "OpenTrace error " + Marshal.GetLastWin32Error(); Stop(); return false; }
 
-        Thread t = new Thread(() => { TraceResult = ProcessTrace(new ulong[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); });
+        Thread t = new Thread(() => {
+            Alive = true;
+            try { TraceResult = ProcessTrace(new ulong[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); }
+            catch (Exception e) { Record(e); }
+            finally { Alive = false; }
+        });
         t.IsBackground = true;
         t.Start();
         return true;
     }
 
     static void OnEvent(IntPtr record) {
+        try { Count(record); } catch (Exception e) { Record(e); }   // an exception must never cross into ETW
+    }
+
+    static void Count(IntPtr record) {
         Interlocked.Increment(ref EventsSeen);
         bool sent;
         switch ((ushort)Marshal.ReadInt16(record, 40)) {   // EventHeader.EventDescriptor.Id
@@ -838,6 +888,7 @@ try {
 Set-Step 'Reticulating Splines...'
 Stop-StartupSpinner
 Write-Host "SRRVRR running at $url"
+Write-SrrLog 'INFO' 'startup' "serving at $url"
 
 # A spinner on the last console line shows the monitor is alive. Skipped when
 # output goes to a file instead of a console window.
@@ -865,10 +916,35 @@ $webContext = @{
 }
 $identityRead = [DateTime]::UtcNow
 
+# Once a second, between requests: log sampler errors (throttled), the network tracer's errors, and stop with a
+# crash code if a background worker has died, so whatever started SRRVRR starts it again (spec section 4).
+$workers = @(@{ Name = 'fast sampler'; PowerShell = $worker }, @{ Name = 'slow sampler'; PowerShell = $slowWorker })
+$tracerLogged = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $netPerProcess }
+$watched = [DateTime]::UtcNow
+function Invoke-Watch {
+    foreach ($k in 'error', 'drivesError', 'tempError') { if ($state[$k]) { Write-SrrError $(if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }) "${k}: $($state[$k])" } }
+    if ($netPerProcess) {
+        $now = @{ ErrorText = [ProcessNetTrace]::LastErrorText; ErrorType = [ProcessNetTrace]::LastErrorType; ErrorCount = [ProcessNetTrace]::ErrorCount; Alive = [ProcessNetTrace]::Alive }
+        $entry = Get-TracerLogEntry -Current $now -LastLogged $script:tracerLogged
+        if ($entry) { Write-SrrLog $entry.Level 'network-tracer' $entry.Message; $script:tracerLogged = $now }
+    }
+    $health = Test-WorkerHealth -Workers $workers
+    if (-not $health.Healthy) {
+        $why = $health.Reason + $(if ($state.error) { " ($($state.error))" })
+        foreach ($e in $health.Errors) { Write-SrrLog 'ERROR' 'worker' $e -Always }
+        Write-SrrLog 'ERROR' 'worker' $why -Always
+        Write-Host ''; Write-Host "SRRVRR stopped: $why" -ForegroundColor Red
+        Exit-SRRVRR -Code $health.ExitCode -Reason "crash: $($health.Reason)"
+    }
+}
+
 try {
     while ($listener.IsListening) {
         $pending = $listener.BeginGetContext($null, $null)
-        while (-not $pending.AsyncWaitHandle.WaitOne(50)) { Show-Spinner }   # short waits keep Ctrl+C responsive
+        while (-not $pending.AsyncWaitHandle.WaitOne(50)) {
+            Show-Spinner   # short waits keep Ctrl+C responsive
+            if (([DateTime]::UtcNow - $watched).TotalSeconds -ge 1) { $watched = [DateTime]::UtcNow; Invoke-Watch }
+        }
         Show-Spinner
         $ctx = $listener.EndGetContext($pending)
         # Addresses can change (a new DHCP lease), so the allowlist is rebuilt once a minute.
@@ -877,6 +953,7 @@ try {
             $identityRead = [DateTime]::UtcNow
         }
         Invoke-SrrRequest -ListenerContext $ctx -Context $webContext
+        if (([DateTime]::UtcNow - $watched).TotalSeconds -ge 1) { $watched = [DateTime]::UtcNow; Invoke-Watch }   # busy pages too
     }
 } finally {
     if ($spinner) { [Console]::WriteLine("`r  Stopped.                                "); try { [Console]::CursorVisible = $true } catch { } }
