@@ -11,6 +11,21 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Added
 
+- **A crash and error log**, `logs\srrvrr-YYYY-MM-DD.log`: every startup step, settings problems,
+  errors from the background readers, crashes with their details, and a last line saying why SRRVRR
+  stopped and its exit code. 20 MB a day at most, kept `LogRetentionDays` (31) days.
+  ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
+- **`DataPath`:** keep the `state` and `logs` folders on another local drive. If it's missing or
+  can't be written, SRRVRR uses its own folder until the next restart and logs a flag; the Storage
+  card watches that drive, even a USB one, and shows it as Missing when it's gone. SRRVRR refuses to
+  start if the data folder is shared on the network, on a network drive, or used by another copy.
+  ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
+- **Exit codes** for whatever starts SRRVRR: 0 a clean stop, 2 a settings error, 3 a refusal to
+  start, anything else a crash. SRRVRR also stops with a crash code if one of its background readers
+  dies, so a launcher can start it again. ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
+- New settings `LogRetentionDays`, `MaintenanceHours` and `MaintenanceMaxHours` (Maintenance itself
+  arrives in a later release). ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
+
 - **Design for the v0.7.0 core** ([docs/specs/2026-10-28-srrvrr-core-design.md](docs/specs/2026-10-28-srrvrr-core-design.md)):
   modules with tests, the page in its own files, 15 minutes of history kept on the server, server-side alerts, an
   event log and a crash log, Maintenance and a Flagged list, with its test plan
@@ -26,6 +41,14 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Changed
 
+- **Stopping is clean.** `Stop SRRVRR.bat` (`SRRVRR.ps1 -Stop`) now stops only the SRRVRR in its own
+  folder, by signalling it to save and close, and ends it only if it hasn't closed after 10 seconds.
+  Ctrl+C is a clean stop too. Closing the window is still a hard stop. A settings error now exits
+  with code 2, not 1. **Upgrading:** to stop a test copy, use the `Stop SRRVRR.bat` in its folder.
+  ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
+- **Test copies keep to themselves.** A copy built by `tools\New-TestBuild.ps1` uses its own firewall
+  rules ("SRRVRR (test)") and its own network trace, so even run as administrator it never changes the
+  live copy's. ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
 - **The code is split into modules and the page into its own files.** `SRRVRR.ps1` loads
   `modules\` (counters, settings, the web server's request handling) from its own folder, and serves
   the page from `web\` (`index.html`, `app.js`, `style.css`, logos in `img\`), read on every request,

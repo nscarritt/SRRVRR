@@ -164,6 +164,23 @@ Describe 'T47-25 CI workflow' {
     }
 }
 
+Describe 'T48-68 the README on stopping' {
+    BeforeAll { $script:Readme = [IO.File]::ReadAllText((Join-Path $Root 'README.md')) -replace '\s+', ' ' }
+    It 'T48-68 -Stop and Stop SRRVRR.bat stop only the copy in their own folder' {
+        $Readme | Should -Match 'stops the SRRVRR in its own folder'
+        $Readme | Should -Not -Match 'SRRVRR - test\.ps1'
+    }
+    It 'T48-68 closing the window is a hard stop that can lose up to 5 minutes of history and the last log line' {
+        $Readme | Should -Match 'Closing the window is a hard stop'
+        $Readme | Should -Match '5 minutes'
+    }
+    It 'T48-68 the data folder, the crash log and the exit codes are described' {
+        $Readme | Should -Match 'DataPath'
+        $Readme | Should -Match 'logs\\srrvrr-'
+        $Readme | Should -Match 'exit code 2'
+    }
+}
+
 Describe 'T47-34 changelog' {
     It 'T47-34 CHANGELOG.md has an [Unreleased] section with an entry' {
         $text = [IO.File]::ReadAllText((Join-Path $Root 'CHANGELOG.md'))

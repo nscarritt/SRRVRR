@@ -1,6 +1,10 @@
 # Read-only checks for one story's UAT checklist (docs\uat\<story>-*.md), against a running test copy. Prints one
 # PASS / FAIL line per check, numbered like the checklist's steps. Exit code: 0 all passed, 1 any failed.
-param([Parameter(Mandatory)][ValidateSet(47)][int]$Story, [string]$BaseUrl = 'http://localhost:8091')
+param(
+    [Parameter(Mandatory)][ValidateSet(47, 48)][int]$Story, [string]$BaseUrl = 'http://localhost:8091',
+    [string]$Folder,       # the test copy's folder (#48)
+    [string]$DataFolder    # its DataPath (#48)
+)
 
 $failed = 0
 function Get-Url([string]$Path, [string]$Method = 'GET') {
@@ -34,5 +38,21 @@ if ($Story -eq 47) {
     Test-Step '3' "app.js, style.css and all $($images.Count) logos load" { (Get-Url '/app.js').Status -eq 200 -and $css.Status -eq 200 -and $images.Count -gt 0 -and -not ($images | Where-Object { (Get-Url $_).Status -ne 200 }) }
     Test-Step '5' 'an unknown path gets 404, not the page' { (Get-Url '/no-such-page').Status -eq 404 }
     Test-Step '5' 'a POST gets 405' { (Get-Url '/' 'POST').Status -eq 405 }
+}
+if ($Story -eq 48) {
+    $logDir = Join-Path $(if ($DataFolder) { $DataFolder } else { $Folder }) 'logs'
+    $log = Get-ChildItem -LiteralPath $logDir -Filter 'srrvrr-*.log' -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
+    $lines = if ($log) { @(Get-Content -LiteralPath $log.FullName) } else { @() }
+    $running = $false; try { $running = (Get-Url '/stats').Status -eq 200 } catch { $null = $_ }
+    if ($running) {
+        Test-Step '1' 'the copy answers and its folder is marked as a test copy' { Test-Path (Join-Path $Folder 'TESTBUILD.txt') }
+        Test-Step '1' 'the log says it''s a test copy' { $lines -match 'This is a test copy' }
+        $rules = @(Get-NetFirewallRule -DisplayName 'SRRVRR', 'SRRVRR (test)' -ErrorAction SilentlyContinue | ForEach-Object { $_.DisplayName })
+        Test-Step '3' 'the live rule "SRRVRR" is still there' { $rules -contains 'SRRVRR' }
+        Test-Step '3' 'the test copy made its own rule "SRRVRR (test)" (only when started as administrator)' { $rules -contains 'SRRVRR (test)' }
+        Test-Step '4' 'the log has the startup steps, the data folder and the serving line' { ($lines -match 'INFO startup: \[1/') -and ($lines -match 'History and logs go to') -and ($lines -match 'serving at http') }
+    } else {
+        Test-Step '5/6' "the copy has stopped and the log's last line is a clean stop" { $lines -and $lines[-1] -match 'stopped: (requested|Ctrl\+C) \(exit 0\)$' }
+    }
 }
 if ($failed) { exit 1 } else { exit 0 }

@@ -18,6 +18,7 @@ Current version: **0.6.0**. See the [changelog](CHANGELOG.md) for what changed i
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Settings](#settings)
+  - [Data folder and logs](#data-folder-and-logs)
   - [Upgrading from an older version](#upgrading-from-an-older-version)
   - [CPU and memory temperatures](#cpu-and-memory-temperatures)
   - [Command-line override](#command-line-override)
@@ -101,7 +102,7 @@ something doesn't show up on another language, please open an issue.
    - `SRRVRR.config.example.psd1`
    - `Install Temperature Sensors.bat` and `Install-TemperatureSensors.ps1` (optional, for CPU
      and memory temperatures)
-   - `Stop SRRVRR.bat` (optional, to stop it from anywhere)
+   - `Stop SRRVRR.bat` (optional, to stop it cleanly)
 2. Copy `SRRVRR.config.example.psd1` to `SRRVRR.config.psd1` and edit it
    (see [Settings](#settings)). Without it, the defaults below are used.
 3. Optional: double-click `Install Temperature Sensors.bat` once (see
@@ -111,12 +112,13 @@ something doesn't show up on another language, please open an issue.
 5. Open the address the window shows, e.g. `http://<that-machine>:8099` or
    `http://<its-IP>:8099`, from any browser on your network.
 
-Leave the window open while you want monitoring. To stop it, close the window (or press Ctrl+C),
-or double-click **`Stop SRRVRR.bat`**. That stops whichever SRRVRR is running, the live
-`SRRVRR.ps1` or a `SRRVRR - test.ps1` copy (both, if both are), closes its window, and says what
-it stopped. When SRRVRR was started as administrator, it asks for administrator too, since Windows
-hides administrator programs from programs that aren't. It runs `SRRVRR.ps1 -Stop`, which you can
-also run yourself.
+Leave the window open while you want monitoring. To stop it, press Ctrl+C in the window, or
+double-click **`Stop SRRVRR.bat`**, which stops the SRRVRR in its own folder (a test copy in another
+folder isn't touched): it signals SRRVRR to save and close, ends it if it hasn't closed after 10 seconds,
+closes its window, and says what happened. When SRRVRR was started as administrator, it asks for
+administrator too, since only administrator can signal it then. It runs `SRRVRR.ps1 -Stop`, which you
+can also run yourself. Closing the window is a hard stop: it skips the save, so up to 5 minutes of
+history and the last log line can be lost.
 
 ### CPU and memory temperatures
 
@@ -160,6 +162,10 @@ installer creates stays as it is).
 | `PreferredGpu` | `''` | The graphics card to show, by its exact name as Windows reports it (dxdiag > Display > Name, or Device Manager > Display adapters), e.g. `'NVIDIA T600'`. Not case-sensitive. `''`, or a name that isn't found, = the GPU with the most video memory. At startup the console shows the card in use and its size (e.g. `NVIDIA T600 · 4 GB`), and lists every GPU's name if `PreferredGpu` isn't found, so you can copy one. |
 | `Processes` | all `$true` | One switch per built-in table row, e.g. `@{ Valheim = $true; Plex = $false }`. `$false` hides that row; the table disappears when every row is hidden. |
 | `ValheimPort` | `2456` | The Valheim server's game port. Its player count is read from the status query on the next port up. |
+| `DataPath` | `''` | Where SRRVRR keeps its `state` and `logs` folders. `''` = SRRVRR's own folder; or a full local folder path with a drive letter, e.g. `'D:\SRRVRR'`. See [Data folder and logs](#data-folder-and-logs). |
+| `LogRetentionDays` | `31` | How many days of logs to keep, 7 to 366. |
+| `MaintenanceHours` | `2` | How long the Maintenance checkbox stays on, in hours (0.25 up to `MaintenanceMaxHours`). |
+| `MaintenanceMaxHours` | `8` | The longest Maintenance can stay on, in hours (1 to 24). |
 
 Example:
 
@@ -174,8 +180,30 @@ Example:
 ```
 
 `SRRVRR.config.example.psd1` has the same settings with comments explaining each one.
-Unknown settings are ignored with a warning; an invalid `FirewallScope` value stops the monitor
-with a message saying what's allowed.
+Unknown settings are ignored with a warning; an invalid setting stops the monitor with one message
+saying what's allowed (exit code 2).
+
+### Data folder and logs
+
+SRRVRR keeps its data in two folders under `DataPath` (by default its own folder): `state` and `logs`.
+It creates those two, never `DataPath` itself.
+
+- **The log**, `logs\srrvrr-YYYY-MM-DD.log`, one file per day: every startup step, settings problems,
+  errors from the background readers (each written when it appears or changes, and at most once a
+  minute), crashes with their details, and a last line saying why SRRVRR stopped, e.g.
+  `stopped: requested (exit 0)`. Each day's file stops growing at 20 MB, and files older than
+  `LogRetentionDays` are removed.
+- **If `DataPath` is missing or can't be written**, at start or later, SRRVRR uses its own folder until
+  the next restart and logs a flag saying so. The Storage card keeps watching the drive that holds
+  `DataPath`, even a USB drive, and shows it as Missing when it's gone.
+- **It refuses to start** (exit code 3) if the data folder is shared on the network, is on a network
+  drive, or is already used by another copy of SRRVRR. Windows' own hidden drive shares (`C$` and the
+  like) don't count.
+- **When run as administrator**, it makes sure only SYSTEM and Administrators can change `state` and
+  `logs`; everyone who could read them before still can.
+
+Exit codes, for anything that starts SRRVRR: 0 a clean stop, 2 a settings error, 3 a refusal to start,
+anything else a crash.
 
 ### Upgrading from an older version
 
