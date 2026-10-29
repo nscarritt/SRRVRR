@@ -4,3 +4,8 @@ SRRVRR.config.psd1
 SystemMonitor.config.psd1
 # Downloaded by Install-TemperatureSensors.ps1 (LibreHardwareMonitor's sensor library).
 lib/
+# SRRVRR's saved history, Maintenance state and logs (when DataPath is left empty).
+state/
+logs/
+# Test results, coverage and summaries from tools\Invoke-Checks.ps1.
+out/
