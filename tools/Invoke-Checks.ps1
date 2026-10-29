@@ -87,7 +87,9 @@ $jsTests = Join-Path $root 'tests\js'
 if (-not $Path -and (Test-Path $jsTests)) {
     if ($node) {
         Write-Host 'JavaScript'
-        & $node.Source --test $jsTests
+        # Newer Node takes test files, not a folder.
+        $jsFiles = @(Get-ChildItem -LiteralPath $jsTests -Filter '*.test.js' | ForEach-Object { $_.FullName })
+        & $node.Source --test @jsFiles
         Add-Result 'JavaScript' ($LASTEXITCODE -eq 0) 'node --test tests\js'
     } elseif ($CI) { Add-Result 'JavaScript' $false 'node not found' }
     else { Add-Result 'JavaScript' $true 'skipped: node not installed (CI runs these)' }
