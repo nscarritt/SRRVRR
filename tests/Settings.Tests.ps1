@@ -21,8 +21,8 @@ Describe 'T47-29 existing settings rules' {
     }
     It 'T47-29 private blocks and their edges' {
         Test-PrivateAddress '172.16.0.0/12' | Should -BeTrue
-        Test-PrivateAddress '172.15.0.1' | Should -BeFalse
-        Test-PrivateAddress '172.32.0.1' | Should -BeFalse
+        Test-PrivateAddress '172.15.0.1' | Should -BeFalse   # private-check: allow (edge of a private block)
+        Test-PrivateAddress '172.32.0.1' | Should -BeFalse   # private-check: allow (edge of a private block)
         Test-PrivateAddress '10.0.0.0/7' | Should -BeFalse
         Test-PrivateAddress '10.0.0.0/8' | Should -BeTrue
         Test-PrivateAddress 'fe80::/9' | Should -BeFalse
@@ -31,17 +31,17 @@ Describe 'T47-29 existing settings rules' {
         Test-PrivateAddress '192.168.1.20-192.168.1.30' | Should -BeTrue
     }
     It 'T47-29 public addresses only with Allowlist and AllowPublicAddresses, single IPs only' {
-        { Test-SrrSettings (New-Config @{ FirewallScope = 'Allowlist'; FirewallAddresses = @('8.8.8.8') }) } | Should -Throw '*must be private*'
-        { Test-SrrSettings (New-Config @{ FirewallScope = 'Blocklist'; FirewallAddresses = @('8.8.8.8'); AllowPublicAddresses = $true }) } | Should -Throw '*must be private*'
-        { Test-SrrSettings (New-Config @{ FirewallScope = 'Allowlist'; FirewallAddresses = @('8.8.8.0/24'); AllowPublicAddresses = $true }) } | Should -Throw '*single IPs*'
-        $r = Test-SrrSettings (New-Config @{ FirewallScope = 'Allowlist'; FirewallAddresses = @('8.8.8.8'); AllowPublicAddresses = $true })
+        { Test-SrrSettings (New-Config @{ FirewallScope = 'Allowlist'; FirewallAddresses = @('203.0.113.7') }) } | Should -Throw '*must be private*'
+        { Test-SrrSettings (New-Config @{ FirewallScope = 'Blocklist'; FirewallAddresses = @('203.0.113.7'); AllowPublicAddresses = $true }) } | Should -Throw '*must be private*'
+        { Test-SrrSettings (New-Config @{ FirewallScope = 'Allowlist'; FirewallAddresses = @('203.0.113.0/24'); AllowPublicAddresses = $true }) } | Should -Throw '*single IPs*'
+        $r = Test-SrrSettings (New-Config @{ FirewallScope = 'Allowlist'; FirewallAddresses = @('203.0.113.7'); AllowPublicAddresses = $true })
         @($r.Notes | Where-Object { $_.Level -eq 'Warning' -and $_.Text -match 'SECURITY' }).Count | Should -Be 1
     }
     It 'T47-29 0.0.0.0 and broadcast are never single addresses' {
         Test-SingleAddress '0.0.0.0' | Should -BeFalse
         Test-SingleAddress '255.255.255.255' | Should -BeFalse
-        Test-SingleAddress '8.8.8.8' | Should -BeTrue
-        Test-SingleAddress '8.8.8.0/24' | Should -BeFalse
+        Test-SingleAddress '203.0.113.7' | Should -BeTrue
+        Test-SingleAddress '203.0.113.0/24' | Should -BeFalse
     }
     It 'T47-29 retired keys give a note and unknown keys a warning' {
         $dir = New-TestDataPath

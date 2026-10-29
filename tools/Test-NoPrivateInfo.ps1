@@ -33,8 +33,11 @@ foreach ($p in $Path) {
     $n = 0
     foreach ($line in [IO.File]::ReadAllLines($full)) {
         $n++
-        foreach ($m in [regex]::Matches($line, '\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b')) {
-            if (Test-PublicIPv4 $m.Value) { Write-Output "${p}:${n}: public IPv4 address $($m.Value)"; $findings++ }
+        # A line marked 'private-check: allow' is a deliberate public test address; only the IPv4 check skips it.
+        if ($line -notmatch 'private-check: allow') {
+            foreach ($m in [regex]::Matches($line, '\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b')) {
+                if (Test-PublicIPv4 $m.Value) { Write-Output "${p}:${n}: public IPv4 address $($m.Value)"; $findings++ }
+            }
         }
         if ($line -match '(?<![\w"''`])\\\\[A-Za-z0-9_.-]+\\[A-Za-z0-9_$ .-]+') { Write-Output "${p}:${n}: UNC path"; $findings++ }
         foreach ($m in [regex]::Matches($line, '[\w.+-]+@[\w-]+\.[\w.-]+')) {
