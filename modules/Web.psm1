@@ -27,14 +27,33 @@ function Get-StaticRoute([string]$UrlPath) {
 function Test-HostAllowed {
     param([string]$HostHeader, [int]$Port, [hashtable]$Identity)
     if (-not $HostHeader) { return $false }
-    if ($HostHeader -match '^\[(?<h>[^\]]+)\]:(?<p>\d+)$' -or $HostHeader -match '^(?<h>[^:\[\]]+):(?<p>\d+)$') {
-        $name = $matches['h']; $p = [int]$matches['p']
+    if ($HostHeader -match '^\[(?<h>[^\]]+)\](:(?<p>\d+))?$' -or $HostHeader -match '^(?<h>[^:\[\]]+)(:(?<p>\d+))?$') {
+        $name = $matches['h']
+        $p = 0
+        if ($matches['p']) { if (-not [int]::TryParse($matches['p'], [ref]$p)) { return $false } }
+        elseif ($Port -eq 80) { $p = 80 }   # browsers leave out :80
     } else { return $false }
     if ($p -ne $Port -or $name.EndsWith('.')) { return $false }
     $name = ($name -replace '%.*$', '')   # IPv6 zone id
     $allowed = @('localhost', '127.0.0.1', '::1') + @($Identity.Names) + @($Identity.Addresses | ForEach-Object { $_ -replace '%.*$', '' })
     foreach ($a in $allowed) { if ($a -and [string]::Equals($a, $name, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
     $false
+}
+
+# This machine's names and addresses, for the Host allowlist: the computer name, its .local (mDNS) name, its full
+# DNS name and the name with the network's DNS suffix, any aliases, and every address of its network adapters.
+function Get-HostIdentity {
+    $names = New-Object System.Collections.Generic.List[string]
+    $names.Add($env:COMPUTERNAME); $names.Add("$env:COMPUTERNAME.local")
+    try { $entry = [Net.Dns]::GetHostEntry(''); $names.Add($entry.HostName); foreach ($a in $entry.Aliases) { $names.Add($a) } } catch { $null = $_ }
+    try { $domain = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().DomainName; if ($domain) { $names.Add("$env:COMPUTERNAME.$domain") } } catch { $null = $_ }
+    $addresses = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            foreach ($u in $nic.GetIPProperties().UnicastAddresses) { $addresses.Add(($u.Address.ToString() -replace '%.*$', '')) }
+        }
+    } catch { $null = $_ }
+    @{ Names = @($names | Where-Object { $_ } | Select-Object -Unique); Addresses = @($addresses | Select-Object -Unique) }
 }
 
 # The /stats document: a copy of the shared state, plus uptime.
@@ -61,23 +80,43 @@ function Invoke-SrrRoute {
         [string]$Method, [string]$Path, [hashtable]$Query, [hashtable]$Headers, [string]$Body,
         [string]$RemoteAddress, [int]$LocalPort, [hashtable]$Context
     )
-    if (-not (Test-HostAllowed -HostHeader $Headers['Host'] -Port $LocalPort -Identity $Context.Identity)) {
-        return New-Result 421 $null '' @{}
+    try {
+        if (-not (Test-HostAllowed -HostHeader $Headers['Host'] -Port $LocalPort -Identity $Context.Identity)) {
+            return New-Result 421 $null '' @{}
+        }
+        if ($Method -ne 'GET') { return New-Result 405 'text/plain; charset=utf-8' 'Method not allowed' }
+        if ($Path -eq '/stats') {
+            $doc = New-StatsSnapshot -State $Context.State -BootTime $Context.BootTime -Now (& $Context.Clock)
+            return New-Result 200 'application/json; charset=utf-8' ($doc | ConvertTo-Json -Compress -Depth 6)
+        }
+        $route = Get-StaticRoute $Path
+        if (-not $route) { return New-Result 404 'text/plain; charset=utf-8' 'Not found' }
+        $file = Join-Path $Context.WebRoot $route.File
+        try { $bytes = Read-StaticFile $file }
+        catch {
+            Write-RouteError $Context "Couldn't read the page file web\$($route.File): $($_.Exception.Message)"
+            return New-Result 500 'text/plain; charset=utf-8' "SRRVRR couldn't read web\$($route.File). See the error log."
+        }
+        New-Result 200 $route.ContentType $bytes
+    } catch {
+        Write-RouteError $Context "Error answering $Method ${Path}: $($_.Exception.Message)"
+        New-Result 500 'text/plain; charset=utf-8' 'SRRVRR had an error answering this request. See the error log.'
     }
-    if ($Method -ne 'GET') { return New-Result 405 'text/plain; charset=utf-8' 'Method not allowed' }
-    if ($Path -eq '/stats') {
-        $doc = New-StatsSnapshot -State $Context.State -BootTime $Context.BootTime -Now (& $Context.Clock)
-        return New-Result 200 'application/json; charset=utf-8' ($doc | ConvertTo-Json -Compress -Depth 6)
+}
+
+function Write-RouteError([hashtable]$Context, [string]$Message) {
+    try { & $Context.LogError $Message } catch { $null = $_ }   # the log must never take the server down
+}
+
+# One request from start to finish: the listener loop in SRRVRR.ps1 and the tests' server both call this.
+# Anything that still goes wrong drops just this connection.
+function Invoke-SrrRequest($ListenerContext, [hashtable]$Context) {
+    try {
+        $request = ConvertTo-SrrRequest -ListenerContext $ListenerContext
+        Send-SrrResponse -ListenerContext $ListenerContext -Result (Invoke-SrrRoute @request -Context $Context)
+    } catch {
+        try { $ListenerContext.Response.Abort() } catch { $null = $_ }   # usually the browser went away mid-response
     }
-    $route = Get-StaticRoute $Path
-    if (-not $route) { return New-Result 404 'text/plain; charset=utf-8' 'Not found' }
-    $file = Join-Path $Context.WebRoot $route.File
-    try { $bytes = Read-StaticFile $file }
-    catch {
-        & $Context.LogError "Couldn't read the page file web\$($route.File): $($_.Exception.Message)"
-        return New-Result 500 'text/plain; charset=utf-8' "SRRVRR couldn't read web\$($route.File). See the error log."
-    }
-    New-Result 200 $route.ContentType $bytes
 }
 
 # The parts of an HttpListener request the router needs, as plain values.
@@ -87,13 +126,10 @@ function ConvertTo-SrrRequest($ListenerContext) {
     foreach ($k in $r.Headers.AllKeys) { $headers[$k] = $r.Headers[$k] }
     $query = @{}
     foreach ($k in $r.QueryString.AllKeys) { if ($k) { $query[$k] = $r.QueryString[$k] } }
-    $body = ''
-    if ($r.HasEntityBody -and $r.ContentLength64 -le 65536) {
-        $reader = New-Object IO.StreamReader $r.InputStream, ([Text.Encoding]::UTF8)
-        try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
-    }
+    # The body is never read here: the listener has one thread, and a slow or endless body would hold up every
+    # other request. A route that needs a body (POST /maintenance, #50) reads it itself, after the Host check.
     @{
-        Method = $r.HttpMethod; Path = $r.Url.AbsolutePath; Query = $query; Headers = $headers; Body = $body
+        Method = $r.HttpMethod; Path = $r.Url.AbsolutePath; Query = $query; Headers = $headers; Body = ''
         RemoteAddress = [string]$r.RemoteEndPoint.Address; LocalPort = $r.LocalEndPoint.Port
     }
 }
@@ -110,5 +146,5 @@ function Send-SrrResponse($ListenerContext, [hashtable]$Result) {
     $resp.Close()
 }
 
-Export-ModuleMember -Function Get-StaticRoute, Test-HostAllowed, New-StatsSnapshot, Read-StaticFile, Invoke-SrrRoute,
-    ConvertTo-SrrRequest, Send-SrrResponse
+Export-ModuleMember -Function Get-StaticRoute, Test-HostAllowed, Get-HostIdentity, New-StatsSnapshot, Read-StaticFile,
+    Invoke-SrrRoute, Invoke-SrrRequest, ConvertTo-SrrRequest, Send-SrrResponse

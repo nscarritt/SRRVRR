@@ -427,7 +427,11 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath)
+    # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
+    # it on "Starting..." with no reason.
+    try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
+    catch { $state.error = "Couldn't load modules\Counters.psm1: $($_.Exception.Message)"; return }
     $cats = @{}
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
     $reader = { $s = @{}; foreach ($n in $cats.Keys) { $s[$n] = $cats[$n].ReadCategory() }; $s }.GetNewClosure()
@@ -445,15 +449,14 @@ $sampler = {
 }
 
 Set-Step 'Starting the background samplers'
-# Each runspace imports SRRVRR's own modules by full path, never by name.
+# Each runspace imports SRRVRR's own modules by full path, never by name (at the top of its script).
 $samplerSession = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
 $samplerSession.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::Bypass
-$samplerSession.ImportPSModule(@(Join-Path $PSScriptRoot 'modules\Counters.psm1'))
 $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1'))
 [void]$worker.BeginInvoke()
 Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 
@@ -843,14 +846,7 @@ function Show-Spinner {
 }
 if ($spinner) { try { [Console]::CursorVisible = $false } catch { } }
 
-# This machine's names and addresses: a request whose Host names anything else is refused (modules\Web.psm1).
-function Get-HostIdentity {
-    $names = @($env:COMPUTERNAME)
-    try { $names += [Net.Dns]::GetHostEntry('').HostName } catch { }
-    $addresses = @()
-    try { $addresses = @([Net.Dns]::GetHostAddresses($env:COMPUTERNAME) | ForEach-Object { $_.ToString() }) } catch { }
-    @{ Names = @($names | Select-Object -Unique); Addresses = $addresses }
-}
+# A request whose Host names anything but this machine is refused (Get-HostIdentity, modules\Web.psm1).
 $webContext = @{
     State    = $state
     WebRoot  = Join-Path $PSScriptRoot 'web'
@@ -867,12 +863,12 @@ try {
         while (-not $pending.AsyncWaitHandle.WaitOne(50)) { Show-Spinner }   # short waits keep Ctrl+C responsive
         Show-Spinner
         $ctx = $listener.EndGetContext($pending)
-        try {
-            # Addresses can change (a new DHCP lease), so the allowlist is rebuilt once a minute.
-            if (([DateTime]::UtcNow - $identityRead).TotalSeconds -ge 60) { $webContext.Identity = Get-HostIdentity; $identityRead = [DateTime]::UtcNow }
-            $request = ConvertTo-SrrRequest -ListenerContext $ctx
-            Send-SrrResponse -ListenerContext $ctx -Result (Invoke-SrrRoute @request -Context $webContext)
-        } catch { }   # browser went away mid-response
+        # Addresses can change (a new DHCP lease), so the allowlist is rebuilt once a minute.
+        if (([DateTime]::UtcNow - $identityRead).TotalSeconds -ge 60) {
+            try { $webContext.Identity = Get-HostIdentity } catch { }
+            $identityRead = [DateTime]::UtcNow
+        }
+        Invoke-SrrRequest -ListenerContext $ctx -Context $webContext
     }
 } finally {
     if ($spinner) { [Console]::WriteLine("`r  Stopped.                                "); try { [Console]::CursorVisible = $true } catch { } }

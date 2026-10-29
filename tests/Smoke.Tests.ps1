@@ -30,6 +30,26 @@ BeforeAll {
 }
 
 Describe 'Test builds' -Tag 'Smoke' {
+    BeforeAll {
+        # An elevated test copy shares the live copy's firewall rule and network trace until #48 gives each copy its own.
+        $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($elevated -and -not $env:GITHUB_ACTIONS) { throw 'Run the smoke tests without administrator: an elevated test copy would change the live SRRVRR''s firewall rule.' }
+    }
+    It 'T48-55 a missing module stops the sampler with a plain error in /stats, not a page stuck on Starting' {
+        $port = Get-FreePort
+        $folder = New-Build 'HEAD' $port
+        Remove-Item (Join-Path $folder 'modules\Counters.psm1')
+        $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Minimized -PassThru
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(90); $s = $null
+            while ([DateTime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 500
+                try { $s = (Invoke-TestRequest -Url "http://localhost:$port/stats").Body | ConvertFrom-Json; if ($s.error) { break } } catch { $null = $_ }
+            }
+            $s.error | Should -Match 'Counters\.psm1'
+            $s.ready | Should -BeFalse
+        } finally { Stop-Build $p }
+    }
     It 'T47-18 v0.6.0 and HEAD side by side: the same /stats shape apart from tickMs, and the same headers' {
         $oldPort = Get-FreePort; $newPort = Get-FreePort
         $old = Start-Build (New-Build 'v0.6.0' $oldPort) $oldPort

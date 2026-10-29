@@ -49,6 +49,44 @@ Describe 'T47-03 and T47-32 parsing and C# compile' {
             $r.Output | Should -Match 'broken\.ps1:\d+'
         } finally { Remove-TestDataPath $tmp }
     }
+    It 'T47-32 a compiler warning is an error, as Add-Type treats it on Windows PowerShell 5.1' {
+        $tmp = New-TestDataPath
+        try {
+            $warn = "Add-Type -TypeDefinition @'`r`npublic static class Warn { public static int F() { int unused = 1; return 2; } }`r`n'@`r`n"
+            [IO.File]::WriteAllText((Join-Path $tmp 'warning.ps1'), $warn)
+            $r = Invoke-InChildPowerShell -File (Join-Path $Tools 'Test-Parse.ps1') -Arguments @('-Root', $tmp)
+            $r.ExitCode | Should -Be 1
+            $r.Output | Should -Match 'warning\.ps1:2: C# CS0219'
+        } finally { Remove-TestDataPath $tmp }
+    }
+}
+
+Describe 'Q4 the private-details scan' {
+    BeforeAll {
+        $script:Scan = { param($folder, $files) Invoke-InChildPowerShell -File (Join-Path $Tools 'Test-NoPrivateInfo.ps1') -Arguments (@('-Root', $folder, '-Path') + @($files -join ',')) }
+    }
+    It 'T51-07 a global IPv6 address, a user profile path and a deny-list word in a file name are found' {
+        $tmp = New-TestDataPath
+        try {
+            [IO.File]::WriteAllText((Join-Path $tmp 'a.md'), "server at 2a01:4f8:1:2::5`r`n")   # private-check: allow (a deliberate public test address)
+            [IO.File]::WriteAllText((Join-Path $tmp 'b.md'), ('copy to C:\Users\' + "somebody\Desktop`r`n"))
+            [IO.File]::WriteAllText((Join-Path $tmp 'notes-forbiddenword.md'), "nothing here`r`n")
+            $env:SRRVRR_DENYLIST = 'forbiddenword'
+            try { $r = & $Scan $tmp @('a.md', 'b.md', 'notes-forbiddenword.md') } finally { $env:SRRVRR_DENYLIST = $null }
+            $r.ExitCode | Should -Be 1
+            $r.Output | Should -Match 'a\.md:1: public IPv6'
+            $r.Output | Should -Match 'b\.md:1: user profile path'
+            $r.Output | Should -Match 'notes-.*: a word from the private deny list in the file name'
+        } finally { Remove-TestDataPath $tmp }
+    }
+    It 'T51-07 documentation and private IPv6 examples and a placeholder profile path pass' {
+        $tmp = New-TestDataPath
+        try {
+            [IO.File]::WriteAllText((Join-Path $tmp 'ok.md'), "fd00::5 fe80::1 2001:db8::7 ::1`r`nC:\Users\<name>\Documents and %USERPROFILE%`r`n")
+            $r = & $Scan $tmp @('ok.md')
+            $r.ExitCode | Should -Be 0 -Because $r.Output
+        } finally { Remove-TestDataPath $tmp }
+    }
 }
 
 Describe 'T47-04 the command line stays the same' {

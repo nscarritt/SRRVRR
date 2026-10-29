@@ -12,6 +12,7 @@ param(
 )
 
 $Level = @($Level | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($Path) { $Path = @($Path | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 $unknown = @($Level | Where-Object { $_ -notin 'Static', 'Unit', 'Integration' })
 if ($unknown) { Write-Host "Unknown -Level: $($unknown -join ', '). Use Static, Unit and/or Integration."; exit 2 }
 

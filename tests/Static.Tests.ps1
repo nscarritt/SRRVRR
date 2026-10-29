@@ -45,7 +45,8 @@ Describe 'T47-08 and T47-07 entry script rules' {
         $text = [IO.File]::ReadAllText($EntryPath)
         $text | Should -Not -Match 'PSModulePath'
         $text | Should -Not -Match '#Requires\s+-Modules'
-        foreach ($i in Get-Imports (Get-ScriptAst $EntryPath)) { $i.Extent.Text | Should -Match 'modules' }
+        # A literal path under modules\, or a module-path variable the script builds from $PSScriptRoot\modules.
+        foreach ($i in Get-Imports (Get-ScriptAst $EntryPath)) { $i.Extent.Text | Should -Match 'modules|\$\w*[Mm]odule\w*Path' }
     }
     It 'T47-07 the Steps count matches the Set-Step calls and the last step is Reticulating Splines' {
         $ast = Get-ScriptAst $EntryPath

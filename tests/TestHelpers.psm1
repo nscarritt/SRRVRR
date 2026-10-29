@@ -75,11 +75,8 @@ function Start-TestServer {
         $Context.LogError = { param($m) $Context.Errors.Add($m) }
         while ($listener.IsListening) {
             try { $ctx = $listener.GetContext() } catch { break }
-            try {
-                $req = ConvertTo-SrrRequest -ListenerContext $ctx
-                if ($null -ne $Context.Requests) { $Context.Requests.Add("$($req.Method) $($req.Path)") }
-                Send-SrrResponse -ListenerContext $ctx -Result (Invoke-SrrRoute @req -Context $Context)
-            } catch { try { $ctx.Response.Abort() } catch { $null = $_ } }
+            if ($null -ne $Context.Requests) { $Context.Requests.Add("$($ctx.Request.HttpMethod) $($ctx.Request.Url.AbsolutePath)") }
+            Invoke-SrrRequest -ListenerContext $ctx -Context $Context   # the same code SRRVRR.ps1's loop runs
         }
     }).AddArgument($listener).AddArgument($Context)
     $handle = $ps.BeginInvoke()

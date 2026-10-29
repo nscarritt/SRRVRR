@@ -51,6 +51,17 @@ Describe 'T47-27 Measure-SRRVRR.ps1' -Tag 'Integration' {
         @($Ctx.Requests | Where-Object { $_ -notmatch '^GET ' }) | Should -BeNullOrEmpty
         $Ctx.Requests.Count | Should -BeGreaterThan 10
     }
+    It 'T47-27 a copy that isn''t found fails the run unless -Informational' {
+        $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\Measure-SRRVRR.ps1') -Arguments @('-BaseUrl', "http://localhost:$($Server.Port)", '-Folder', (Join-Path $env:TEMP 'no-such-copy'), '-Seconds', '2') -TimeoutSeconds 120
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match 'no SRRVRR found'
+    }
+    It 'T47-27 failed requests are counted as failures, not timed as successes' {
+        $port = Get-FreePort
+        $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\Measure-SRRVRR.ps1') -Arguments @('-BaseUrl', "http://localhost:$port", '-Folder', (Join-Path $env:TEMP 'no-such-copy'), '-Seconds', '2', '-Informational') -TimeoutSeconds 120
+        $r.Output | Should -Match '\| Failed requests \| [1-9]'
+        $r.Output | Should -Not -Match '\| /stats p95 \| [0-9]'
+    }
 }
 
 Describe 'New-TestBuild.ps1 refusals' -Tag 'Integration' {

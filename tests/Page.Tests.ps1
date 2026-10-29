@@ -5,9 +5,10 @@ BeforeAll {
     $script:Web = Join-Path $Root 'web'
     $script:ExportBlock = '(?s)\n// For tests under Node.*$'
 
-    # The page as it was before the move: the $html here-string in main's SRRVRR.ps1.
+    # The page as it was before the move: the $html here-string in SRRVRR.ps1 at the last commit before #47
+    # (#46, the 'No sensor' change, which v0.6.0 doesn't have). A fixed commit, so the test still works after the merge.
     function Get-OldPage {
-        $source = (& git -C $Root show 'origin/main:SRRVRR.ps1') -join "`n"
+        $source = (& git -C $Root show '0b5a25ba68be9db8dc27548af0d3a5d97d2a5735:SRRVRR.ps1') -join "`n"
         $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
         $assign = $ast.Find({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$html' }, $true)
         $assign.Right.Expression.Value -replace "`r`n", "`n"

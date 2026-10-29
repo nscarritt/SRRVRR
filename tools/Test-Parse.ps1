@@ -36,13 +36,14 @@ foreach ($f in $files) {
                 }
                 $options = New-Object System.CodeDom.Compiler.CompilerParameters
                 $options.GenerateInMemory = $false
+                $options.WarningLevel = 4   # what Add-Type compiles with on 5.1, where a warning is an error
                 $options.OutputAssembly = Join-Path $env:TEMP ('srrvrr-parse-' + [guid]::NewGuid().ToString('n') + '.dll')
                 $references | ForEach-Object { [void]$options.ReferencedAssemblies.Add($_) }
                 $result = $provider.CompileAssemblyFromSource($options, $arg.Value)
                 Remove-Item -LiteralPath $options.OutputAssembly -ErrorAction SilentlyContinue
                 $compiled++
+                # Warnings count too: Windows PowerShell 5.1's Add-Type fails on them ("Warning as Error").
                 foreach ($ce in $result.Errors) {
-                    if ($ce.IsWarning) { continue }
                     # Here-string content starts on the line after the opening @'.
                     $line = $arg.Extent.StartLineNumber + $ce.Line
                     Write-Output ('{0}:{1}: C# {2}: {3} (block at line {4})' -f $rel, $line, $ce.ErrorNumber, $ce.ErrorText, $call.Extent.StartLineNumber)

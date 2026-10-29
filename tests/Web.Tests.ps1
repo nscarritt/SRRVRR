@@ -35,6 +35,24 @@ Describe 'T47-38 the Host allowlist' {
             Test-HostAllowed -HostHeader $h -Port 8091 -Identity $Identity | Should -BeTrue -Because $h
         }
     }
+    It 'T47-38 a port too big for a number is refused, not an error' {
+        Test-HostAllowed -HostHeader 'srrvrr:99999999999' -Port 8091 -Identity $Identity | Should -BeFalse
+    }
+    It 'T47-38 the .local name and a name with the network''s DNS suffix are the machine''s own' {
+        $id = @{ Names = @('SRRVRR', 'SRRVRR.local', 'srrvrr.lan'); Addresses = @() }
+        Test-HostAllowed -HostHeader 'srrvrr.local:8091' -Port 8091 -Identity $id | Should -BeTrue
+        Test-HostAllowed -HostHeader 'SRRVRR.lan:8091' -Port 8091 -Identity $id | Should -BeTrue
+    }
+    It 'T47-38 the machine''s identity includes its name, its .local name and its addresses' {
+        $id = Get-HostIdentity
+        $id.Names | Should -Contain $env:COMPUTERNAME
+        $id.Names | Should -Contain "$env:COMPUTERNAME.local"
+        @($id.Addresses).Count | Should -BeGreaterThan 0
+    }
+    It 'T47-38 no port in Host is accepted only when SRRVRR listens on port 80' {
+        Test-HostAllowed -HostHeader 'SRRVRR' -Port 80 -Identity $Identity | Should -BeTrue
+        Test-HostAllowed -HostHeader 'SRRVRR' -Port 8091 -Identity $Identity | Should -BeFalse
+    }
     It 'T47-38 an IPv6 zone id is stripped before comparing' {
         Test-HostAllowed -HostHeader '[fd00::5%12]:8091' -Port 8091 -Identity $Identity | Should -BeTrue
     }
@@ -78,6 +96,16 @@ Describe 'T47-39 DNS rebinding is refused (router level)' {
             $r.Headers.Count | Should -Be 0
         }
         (Invoke-Route -Path '/stats' -Context $ctx).Status | Should -Be 200
+    }
+}
+
+Describe 'T47-37 a failure while routing' {
+    It 'T47-37 an exception inside the router becomes a 500 with one error-log line' {
+        $ctx = New-Context (New-WebRoot)
+        $ctx.Clock = { throw 'clock broke' }
+        $r = Invoke-Route -Path '/stats' -Context $ctx
+        $r.Status | Should -Be 500
+        @($ctx.Errors | Where-Object { $_ -match 'clock broke' }).Count | Should -Be 1
     }
 }
 
@@ -150,6 +178,18 @@ Describe 'Routing through a real listener' -Tag 'Integration' {
         }
         $script:Last = Invoke-TestRequest -Method 'OPTIONS' -Url "$Base/maintenance" -Headers @{ 'Access-Control-Request-Method' = 'POST'; Origin = 'http://evil.example' }
         $Last.Status | Should -Be 405
+    }
+    It 'T47-36 a request body is never read, so a body that never ends can''t hold up the next request' {
+        $client = New-Object Net.Sockets.TcpClient 'localhost', $Server.Port
+        try {
+            $s = $client.GetStream()
+            $head = "POST /stats HTTP/1.1`r`nHost: localhost:$($Server.Port)`r`nTransfer-Encoding: chunked`r`n`r`n5`r`nhello`r`n"
+            $bytes = [Text.Encoding]::ASCII.GetBytes($head); $s.Write($bytes, 0, $bytes.Length)
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $script:Last = Invoke-TestRequest -Url "$Base/stats"
+            $Last.Status | Should -Be 200
+            $sw.Elapsed.TotalSeconds | Should -BeLessThan 5
+        } finally { $client.Close() }
     }
     It 'T47-37 a missing or unreadable page file is a 500 with one error-log line, and the next request works' {
         Remove-Item (Join-Path $Root 'app.js')
