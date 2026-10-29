@@ -530,6 +530,7 @@ line and the crash log in #48; their event-log side is tested in #50 (T50-13, T5
 |---|---|---|---|---|---|
 | T48-65 | P4 | U | `Select-DrivesToShow` with fixed drives, a removable drive holding `DataPath`, another removable drive, a data drive under 1 GB, `DataPath` on a folder mount point | Fixed drives of 1 GB or more as today; the removable data drive shown; the other removable not; the small data drive shown; the mount point's volume (from `Win32_Volume`) is the one marked | FX drives |
 | T48-66 | P4 | U | Data drive health `Unknown`; data drive already fixed; data drive missing; on the fallback | Shown as "Unknown"; listed once; stays on the card as missing; while on the fallback, the fallback's drive is the one watched | FX drives |
+| T48-71 | P4 | U | Review Focus 1: on the fallback, the configured data drive comes back | Both the configured drive and the fallback's are watched; the configured drive shows present again, not missing | - |
 
 **Launcher contract, README text, performance and UAT**
 
@@ -740,7 +741,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | P1 | 3 | `DataPath` default is SRRVRR's own folder; `state\`, `logs\` created inside it | T48-11 |
 | P2 | 3 | Fallback when missing, read-only, or a later write fails; flag; stays until restart | T48-12, T48-13, T48-14, T48-72, T50-13 |
 | P3 | 3 | Refuse (exit 3) for a share equal, above or below; junctions; whole names; special shares only ignored; network paths and mapped drives; unreadable list | T48-01 to T48-10 |
-| P4 | 3 | Drives card watches the data drive (removable, mount points, under 1 GB, missing, fallback) | T48-65, T48-66 |
+| P4 | 3 | Drives card watches the data drive (removable, mount points, under 1 GB, missing, fallback) | T48-65, T48-66 , T48-71 |
 | P5 | 3 | Owner keeps read access; permissions explained | T48-18, T51-05 |
 | P6 | 3 | `DataPath` itself is never created | T48-12 |
 | P7 | 3 | `state\srrvrr.lock`: a second copy refuses (exit 3) | T48-15, T48-16, T48-17 |

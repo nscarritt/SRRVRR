@@ -76,6 +76,7 @@ function Write-SrrLog([string]$Level, [string]$Source, [string]$Message, [switch
 $dataFolder = $null
 function Switch-DataToFallback([string]$Why) {
     $script:dataFolder.Path = $PSScriptRoot; $script:dataFolder.IsFallback = $true
+    if ($script:dataDrives) { $script:dataDrives.Paths = @($settings.DataPath, $PSScriptRoot) | Where-Object { $_ } }
     $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs'))
     Write-SrrLog 'FLAG' 'data' "$Why; history and logs now go to $PSScriptRoot until the next restart" -Always
 }
@@ -226,6 +227,8 @@ $stopEvent = New-StopEvent -Folder $PSScriptRoot -Elevated (Test-Elevated)
 Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'state\stop-requested') -ErrorAction SilentlyContinue
 # A test copy (tools\New-TestBuild.ps1 puts TESTBUILD.txt in its folder) has its own firewall rules and trace session.
 $copyKind = Get-SrrCopyKind -Folder $PSScriptRoot
+# The data drives the Storage card watches: the configured DataPath and the folder in use (they differ on fallback).
+$dataDrives = [hashtable]::Synchronized(@{ Paths = @($settings.DataPath, $data.Path) | Where-Object { $_ } })
 if ($copyKind -eq 'test') { Write-Status 'This is a test copy: it uses its own firewall rules and network trace, never the live copy''s.' }
 
 # --- Processes shown in the table under the graphs ----------------------------
@@ -577,7 +580,9 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath)
+    # Select-DrivesToShow; a failure shows as drivesError on the page.
+    try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
     # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
@@ -734,8 +739,9 @@ public static class SrrvrrSensorLoader {
                     @{ bytes = 500e6; kind = 'drive' }                                            # unknown or virtual: a middle estimate
                 }
                 $drives = @()
-                foreach ($v in Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Sort-Object DeviceID) {
-                    if ([double]$v.Size -lt 1GB) { continue }   # tiny system/metadata partitions aren't storage people use
+                # Fixed drives of 1 GB or more (tiny system partitions aren't storage people use), plus the drive
+                # that holds the data folder, even removable, shown as Missing when it's gone (spec section 3).
+                foreach ($v in Select-DrivesToShow -Volumes @(Get-CimInstance Win32_LogicalDisk) -DataPaths $dataDrives.Paths) {
                     $disk = $null
                     $letter = $v.DeviceID.TrimEnd(':')
                     if ($diskOf.ContainsKey($letter)) { $disk = $health[$diskOf[$letter]] }
@@ -748,7 +754,7 @@ public static class SrrvrrSensorLoader {
                         size   = [double]$v.Size
                         free   = [double]$v.FreeSpace
                         disk   = if ($disk) { $disk.name } else { $null }
-                        health = if ($disk) { $disk.health } else { $null }
+                        health = if ($v.Missing) { 'Missing' } elseif ($disk) { $disk.health } else { $null }
                     }
                 }
                 $state.drives = $drives
@@ -875,7 +881,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1'))
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }

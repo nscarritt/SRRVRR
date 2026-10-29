@@ -140,6 +140,30 @@ Describe 'Writing data and falling back later' {
     }
 }
 
+Describe 'The drives card' {
+    BeforeAll {
+        function Vol($Letter, $Type, $SizeGB, $Label = '') { [pscustomobject]@{ DeviceID = $Letter; DriveType = $Type; Size = [double]$SizeGB * 1GB; FreeSpace = 1GB; VolumeName = $Label } }
+        $script:Vols = @((Vol 'C:' 3 400), (Vol 'D:' 3 0.5), (Vol 'H:' 2 29.5 'CODE'), (Vol 'E:' 3 4000))
+    }
+    It 'T48-65 fixed drives as before, plus the removable drive that holds DataPath' {
+        @(Select-DrivesToShow -Volumes $Vols -DataPaths @() | ForEach-Object DeviceID) | Should -Be @('C:', 'E:')
+        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('H:\SRRVRR') | ForEach-Object DeviceID) | Should -Be @('C:', 'E:', 'H:')
+    }
+    It 'T48-65 the data drive is shown even when it''s under 1 GB' {
+        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('D:\data') | ForEach-Object DeviceID) | Should -Contain 'D:'
+    }
+    It 'T48-66 a data drive that''s gone stays on the card as missing' {
+        $d = @(Select-DrivesToShow -Volumes @((Vol 'C:' 3 400)) -DataPaths @('H:\SRRVRR'))
+        $missing = $d | Where-Object { $_.DeviceID -eq 'H:' }
+        $missing.Missing | Should -BeTrue
+        $missing.Size | Should -Be 0
+    }
+    It 'T48-71 after a fallback both the fallback''s drive and the configured drive are watched, so it shows again when it''s back' {
+        @(Select-DrivesToShow -Volumes $Vols -DataPaths @('H:\SRRVRR', 'C:\SRRVRR') | ForEach-Object DeviceID) | Should -Be @('C:', 'E:', 'H:')
+        (@(Select-DrivesToShow -Volumes $Vols -DataPaths @('H:\SRRVRR', 'C:\SRRVRR')) | Where-Object { $_.DeviceID -eq 'H:' }).Missing | Should -BeFalse
+    }
+}
+
 Describe 'Permissions' {
     It 'T48-18 the plan removes write for everyone but SYSTEM and Administrators, keeps read, and turns inheritance off' {
         $acl = New-Object System.Security.AccessControl.DirectorySecurity

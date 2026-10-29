@@ -161,5 +161,20 @@ function New-DataFolder {
     $f
 }
 
-Export-ModuleMember -Function Resolve-SrrPath, Test-PathInShare, Get-ShareList, Test-Elevated, Get-SrrDriveType, Test-FolderWritable,
+# The drives on the Storage card: fixed drives of 1 GB or more, as before, plus every drive that holds a data
+# folder (DataPaths: the configured one and the one in use, which differ while on the fallback), whatever its type
+# or size. A data drive that isn't there is kept as a placeholder with Missing = $true. Volumes: Win32_LogicalDisk-like.
+function Select-DrivesToShow {
+    param([object[]]$Volumes, [string[]]$DataPaths, [double]$MinBytes = 1GB)
+    $dataLetters = @($DataPaths | Where-Object { $_ -match '^[A-Za-z]:' } | ForEach-Object { $_.Substring(0, 2).ToUpperInvariant() } | Select-Object -Unique)
+    $shown = @($Volumes | Where-Object { ($_.DriveType -eq 3 -and [double]$_.Size -ge $MinBytes) -or $dataLetters -contains ([string]$_.DeviceID).ToUpperInvariant() })
+    foreach ($l in $dataLetters) {
+        if (-not ($shown | Where-Object { ([string]$_.DeviceID).ToUpperInvariant() -eq $l })) {
+            $shown += [pscustomobject]@{ DeviceID = $l; DriveType = 0; Size = 0; FreeSpace = 0; VolumeName = 'data drive (missing)'; Missing = $true }
+        }
+    }
+    @($shown | ForEach-Object { if (-not $_.PSObject.Properties['Missing']) { $_ | Add-Member NoteProperty Missing $false -PassThru } else { $_ } } | Sort-Object DeviceID)
+}
+
+Export-ModuleMember -Function Select-DrivesToShow, Resolve-SrrPath, Test-PathInShare, Get-ShareList, Test-Elevated, Get-SrrDriveType, Test-FolderWritable,
     Test-LockHeld, Resolve-DataPath, Get-DataFolderAclPlan, Set-DataFolderAcl, New-DataFolder
