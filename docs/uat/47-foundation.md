@@ -11,6 +11,11 @@ About 15 minutes. Nothing should look or behave differently from the live dashbo
 Until #48, the test copy's `Stop SRRVRR.bat` stops every SRRVRR on the machine, the live one included. Close the
 test copy's window instead (step 7).
 
+The CPU and Memory tiles show "Temp n/a" on the test copy: a build has no `lib\` folder (the sensor library that
+`Install Temperature Sensors.bat` downloads) and the copy runs without administrator, which the sensors need. That's
+expected here. Temperatures are checked in #48's UAT, once a test copy can run as administrator without touching the
+live copy's firewall rule.
+
 ## Steps
 | # | Do | Expect | Checked for you |
 |---|---|---|---|

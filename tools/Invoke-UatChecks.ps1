@@ -23,7 +23,10 @@ if ($Story -eq 47) {
     $stats = Get-Url '/stats'
     $doc = $stats.Body | ConvertFrom-Json
     Test-Step '2' '/stats answers, is ready and reports tickMs' { $stats.Status -eq 200 -and $doc.ready -and $doc.tickMs -is [int] }
-    Test-Step '2' 'tickMs is within the #47 budget (44 ms, +10% or 5 ms)' { $doc.tickMs -le 49 }
+    # One reading swings (40-65 ms on the server), so the budget is checked on the median of 10, a second apart.
+    $ticks = @(foreach ($i in 1..10) { [int]((Get-Url '/stats').Body | ConvertFrom-Json).tickMs; if ($i -lt 10) { Start-Sleep -Milliseconds 1000 } }) | Sort-Object
+    $median = $ticks[[int][Math]::Floor($ticks.Count / 2)]
+    Test-Step '2' "tickMs median $median ms of 10 readings is within the #47 budget (44 ms, +10% or 5 ms: 49 ms)" { $median -le 49 }
     $page = Get-Url '/'
     Test-Step '3' 'the page is served from web\ as UTF-8 HTML with nosniff' { $page.Status -eq 200 -and $page.Type -eq 'text/html; charset=utf-8' -and $page.Nosniff -eq 'nosniff' }
     $css = Get-Url '/style.css'

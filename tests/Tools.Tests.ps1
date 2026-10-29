@@ -64,6 +64,29 @@ Describe 'T47-27 Measure-SRRVRR.ps1' -Tag 'Integration' {
     }
 }
 
+Describe 'T47-35 Invoke-UatChecks.ps1' -Tag 'Integration' {
+    BeforeAll {
+        $web = Join-Path (New-TestDataPath) 'web'
+        Copy-Item -Recurse (Join-Path $Root 'web') $web
+        # tickMs alternates 40 and 70: one reading can be over the budget, the median (40-70 ... ) decides.
+        $script:Ctx = @{
+            State = @{ ready = $true; tickMs = 40 }; WebRoot = $web; Identity = @{ Names = @(); Addresses = @() }
+            BootTime = [DateTimeOffset]::Now; Clock = { [DateTimeOffset]::Now }; LogError = { }
+            Errors = (New-Object System.Collections.Generic.List[string])
+        }
+        $script:Server = Start-TestServer -Context $Ctx
+    }
+    AfterAll { Stop-TestServer $Server }
+    It 'T47-35 the tick check uses the median of several readings, not one' {
+        $flip = [powershell]::Create().AddScript({ param($s) while ($true) { $s.tickMs = 70; Start-Sleep -Milliseconds 150; $s.tickMs = 40; Start-Sleep -Milliseconds 450 } }).AddArgument($Ctx.State)
+        $h = $flip.BeginInvoke()
+        try {
+            $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\Invoke-UatChecks.ps1') -Arguments @('-Story', '47', '-BaseUrl', "http://localhost:$($Server.Port)") -TimeoutSeconds 60
+            $r.Output | Should -Match 'PASS 2 tickMs median'
+        } finally { $flip.Stop(); $flip.Dispose() }
+    }
+}
+
 Describe 'New-TestBuild.ps1 refusals' -Tag 'Integration' {
     It 'T48-49 refuses a destination inside the live folder and a non-empty folder without -Force' {
         $base = New-TestDataPath
