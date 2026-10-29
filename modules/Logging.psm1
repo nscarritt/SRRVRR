@@ -54,13 +54,22 @@ function New-ErrorThrottle {
 # stops SRRVRR.
 function New-DailyLog {
     param(
-        [Parameter(Mandatory)][string]$Folder, [Parameter(Mandatory)][string]$Prefix, [string]$Extension = 'log',
+        [AllowEmptyString()][string]$Folder, [Parameter(Mandatory)][string]$Prefix, [string]$Extension = 'log',
         [Parameter(Mandatory)][scriptblock]$Clock, [long]$CapBytes = 20MB
     )
-    $log = [pscustomobject]@{ Folder = $Folder; Prefix = $Prefix; Extension = $Extension; Clock = $Clock; CapBytes = $CapBytes; Date = ''; Bytes = 0L; Capped = $false }
+    $log = [pscustomobject]@{ Folder = $Folder; Prefix = $Prefix; Extension = $Extension; Clock = $Clock; CapBytes = $CapBytes; Date = ''; Bytes = 0L; Capped = $false; Buffer = $null; Failed = $false }
+    # With no folder yet (SRRVRR hasn't chosen its data folder), lines wait in memory; SetFolder writes them out.
+    if (-not $Folder) { $log.Buffer = New-Object System.Collections.Generic.List[object] }
+    $log | Add-Member ScriptMethod SetFolder {
+        param([string]$NewFolder)
+        $this.Folder = $NewFolder; $this.Date = ''
+        $waiting = $this.Buffer; $this.Buffer = $null
+        if ($waiting) { foreach ($w in $waiting) { $this.Write($w.Line, $w.Always) } }
+    }
     $log | Add-Member ScriptMethod PathFor { param([DateTimeOffset]$Now) Join-Path $this.Folder ('{0}-{1}.{2}' -f $this.Prefix, $Now.ToString('yyyy-MM-dd'), $this.Extension) }
     $log | Add-Member ScriptMethod Write {
         param([string]$Line, [bool]$Always)
+        if ($null -ne $this.Buffer) { $this.Buffer.Add(@{ Line = $Line; Always = $Always }); return }
         try {
             $now = & $this.Clock
             $path = $this.PathFor($now)
@@ -80,7 +89,7 @@ function New-DailyLog {
             $bytes = $utf8.GetBytes($Line + "`r`n")
             [IO.File]::AppendAllText($path, $Line + "`r`n", $utf8)
             $this.Bytes += $bytes.Length
-        } catch { $null = $_ }
+        } catch { $this.Failed = $true }   # the caller checks Failed to fall back to SRRVRR's own folder
     }
     $log
 }

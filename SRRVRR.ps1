@@ -63,11 +63,26 @@ if ($Stop) {
 $srrLog = $null; $srrThrottle = $null
 try {
     Import-Module -Name (Join-Path $PSScriptRoot 'modules\Logging.psm1') -Force -ErrorAction Stop
-    $srrLog = New-DailyLog -Folder (Join-Path $PSScriptRoot 'logs') -Prefix 'srrvrr' -Extension 'log' -Clock { [DateTimeOffset]::Now }
+    # No folder yet: lines wait in memory until the data folder is chosen, so a day's log stays in one place.
+    $srrLog = New-DailyLog -Folder '' -Prefix 'srrvrr' -Extension 'log' -Clock { [DateTimeOffset]::Now }
     $srrThrottle = New-ErrorThrottle -Clock { [DateTimeOffset]::Now }
 } catch { }   # no log is better than no SRRVRR
 function Write-SrrLog([string]$Level, [string]$Source, [string]$Message, [switch]$Always) {
-    if ($srrLog) { $srrLog.Write((Format-LogLine -Time ([DateTimeOffset]::Now) -Level $Level -Source $Source -Message $Message), [bool]$Always) }
+    if (-not $srrLog) { return }
+    $srrLog.Write((Format-LogLine -Time ([DateTimeOffset]::Now) -Level $Level -Source $Source -Message $Message), [bool]$Always)
+    # A log write that failed on the data drive switches everything to SRRVRR's own folder (spec section 3).
+    if ($srrLog.Failed -and $script:dataFolder -and -not $script:dataFolder.IsFallback) {
+        $srrLog.Failed = $false
+        Switch-DataToFallback "writing the log to $($srrLog.Folder) failed"
+        $srrLog.Write((Format-LogLine -Time ([DateTimeOffset]::Now) -Level $Level -Source $Source -Message $Message), [bool]$Always)
+    }
+}
+# The data folder (modules\DataFolder.psm1) is set up after the settings; until then logs wait in memory.
+$dataFolder = $null
+function Switch-DataToFallback([string]$Why) {
+    $script:dataFolder.Path = $PSScriptRoot; $script:dataFolder.IsFallback = $true
+    $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs'))
+    Write-SrrLog 'FLAG' 'data' "$Why; history and logs now go to $PSScriptRoot until the next restart" -Always
 }
 # An error, written at most once a minute with a count of repeats (key: the error itself).
 function Write-SrrError([string]$Source, [string]$Message) {
@@ -146,6 +161,7 @@ function Stop-StartupSpinner {
 # The one way SRRVRR ends itself, so whatever started it can tell why from the exit code (spec section 5):
 # 0 a clean stop, 2 a settings error, 3 a refusal to start, anything else a crash.
 function Exit-SRRVRR([int]$Code, [string]$Reason) {
+    if ($srrLog -and $null -ne $srrLog.Buffer) { $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs')) }   # stopped before a data folder was chosen
     if ($srrThrottle) {
         $pending = $srrThrottle.Flush()
         foreach ($k in $pending.Keys) { $src, $msg = $k -split '\|', 2; Write-SrrLog 'ERROR' $src "$msg (repeated $($pending[$k]) more times)" -Always }
@@ -179,6 +195,18 @@ Import-Module -Name (Join-Path $PSScriptRoot 'modules\Counters.psm1') -Force   #
 $loaded = if ($PSBoundParameters.ContainsKey('Port')) { Import-SrrSettings -Folder $PSScriptRoot -Port $Port } else { Import-SrrSettings -Folder $PSScriptRoot }
 foreach ($n in $loaded.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
 $settings = $loaded.Settings
+
+# The data folder: DataPath if it's there and writable, else this folder; never inside a network share, one copy
+# at a time (the lock stays open while SRRVRR runs), and when elevated only SYSTEM and Administrators can write.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\DataFolder.psm1') -Force
+$shareList = try { Get-ShareList } catch { $null }
+$data = Resolve-DataPath -Setting $settings.DataPath -OwnFolder $PSScriptRoot -Shares $shareList -IsElevated (Test-Elevated)
+$dataLock = $data.Lock
+$dataFolder = New-DataFolder -Path $data.Path -FallbackPath $PSScriptRoot -IsFallback $data.IsFallback -OnFallback { param($why) Switch-DataToFallback $why }
+$srrLog.SetFolder((Join-Path $data.Path 'logs'))
+foreach ($n in $data.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
+if ($data.IsFallback) { Write-SrrLog 'FLAG' 'data' "DataPath $($settings.DataPath) is $($data.Reason); using $($data.Path)" -Always }
+Write-Status "History and logs go to $($data.Path)"
 
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page, and the switch name under Processes in the config
@@ -921,12 +949,24 @@ $identityRead = [DateTime]::UtcNow
 $workers = @(@{ Name = 'fast sampler'; PowerShell = $worker }, @{ Name = 'slow sampler'; PowerShell = $slowWorker })
 $tracerLogged = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $netPerProcess }
 $watched = [DateTime]::UtcNow
+$shareCheckedAt = [DateTime]::UtcNow; $shareFlagged = $false
 function Invoke-Watch {
     foreach ($k in 'error', 'drivesError', 'tempError') { if ($state[$k]) { Write-SrrError $(if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }) "${k}: $($state[$k])" } }
     if ($netPerProcess) {
         $now = @{ ErrorText = [ProcessNetTrace]::LastErrorText; ErrorType = [ProcessNetTrace]::LastErrorType; ErrorCount = [ProcessNetTrace]::ErrorCount; Alive = [ProcessNetTrace]::Alive }
         $entry = Get-TracerLogEntry -Current $now -LastLogged $script:tracerLogged
         if ($entry) { Write-SrrLog $entry.Level 'network-tracer' $entry.Message; $script:tracerLogged = $now }
+    }
+    # Once a day: a share that appeared on the data folder since the start is flagged (once), not a stop.
+    if (([DateTime]::UtcNow - $script:shareCheckedAt).TotalHours -ge 24) {
+        $script:shareCheckedAt = [DateTime]::UtcNow
+        try {
+            $share = Test-PathInShare -Path $dataFolder.Path -Shares (Get-ShareList)
+            if ($share -and -not $script:shareFlagged) {
+                $script:shareFlagged = $true
+                Write-SrrLog 'FLAG' 'data' "the data folder $($dataFolder.Path) is now shared on the network (share '$($share.Name)'); stop sharing it" -Always
+            }
+        } catch { Write-SrrError 'data' "couldn't check the shared folders: $($_.Exception.Message)" }
     }
     $health = Test-WorkerHealth -Workers $workers
     if (-not $health.Healthy) {

@@ -80,6 +80,26 @@ Describe 'Test builds' -Tag 'Smoke' {
             $lines[-1] | Should -Match 'stopped: crash: System\.[\w.]+ \(exit 1\)$'
         } finally { $taken.Stop(); $taken.Close() }
     }
+    It 'T48-17 a second copy pointed at a running copy''s data folder exits 3, and the first keeps running' {
+        $data = Join-Path (New-TestDataPath) 'shared-data'
+        New-Item -ItemType Directory $data | Out-Null
+        $portA = Get-FreePort; $portB = Get-FreePort
+        $a = Join-Path (New-TestDataPath) 'a'; $b = Join-Path (New-TestDataPath) 'b'
+        foreach ($x in @(@($a, $portA), @($b, $portB))) {
+            $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\New-TestBuild.ps1') -Arguments @('-Ref', 'HEAD', '-Destination', $x[0], '-Port', "$($x[1])", '-DataPath', $data)
+            if ($r.ExitCode -ne 0) { throw $r.Output }
+        }
+        $pa = Start-Build $a $portA
+        try {
+            $pb = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$b\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
+            $null = $pb.Handle
+            $pb.WaitForExit(90000) | Should -BeTrue
+            $pb.ExitCode | Should -Be 3
+            (Invoke-TestRequest -Url "http://localhost:$portA/stats").Status | Should -Be 200
+            $last = @(Get-ChildItem (Join-Path $b 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1]
+            $last | Should -Match 'stopped: refused: another SRRVRR is using the data folder .* \(exit 3\)$'
+        } finally { Stop-Build $pa }
+    }
     It 'T48-21 the log holds the settings source, every startup step in order and the serving line' {
         $port = Get-FreePort
         $folder = New-Build 'HEAD' $port

@@ -86,6 +86,19 @@ Describe 'T48-61 the daily file and its cap' {
     }
 }
 
+Describe 'T48-21 lines before the data folder is chosen' {
+    It 'T48-21 wait in memory and are written, in order, once the folder is set' {
+        $dir = Join-Path (New-TestDataPath) 'chosen-later'
+        $c = New-FakeClock $T0
+        $log = New-DailyLog -Folder '' -Prefix 'srrvrr' -Extension 'log' -Clock $c.Clock
+        $log.Write('one', $false); $log.Write('two', $true)
+        Test-Path $dir | Should -BeFalse
+        $log.SetFolder($dir)
+        $log.Write('three', $false)
+        [IO.File]::ReadAllLines((Join-Path $dir 'srrvrr-2026-01-05.log')) | Should -Be @('one', 'two', 'three')
+    }
+}
+
 Describe 'T48-31 network tracer errors' {
     It 'T48-31 one line per change in the error count or the thread' {
         $ok = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $true }

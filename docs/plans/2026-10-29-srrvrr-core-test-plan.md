@@ -437,6 +437,7 @@ line and the crash log in #48; their event-log side is tested in #50 (T50-13, T5
 | T48-12 | P2, P6 | U | `DataPath` doesn't exist at start | Falls back to the own folder with reason `missing`; status line says where data goes now; the `DataPath` folder is **not** created (`Test-Path` still false afterwards) | TH |
 | T48-13 | P2 | U | `DataPath` read-only at start (deny-write rule for the current user) | Falls back; reason `read-only`; `DataPath` left untouched | TH (read-only folder) |
 | T48-14 | P2 | I | Start on a writable `DataPath`; make it read-only; write twice; make it writable again; write | First failed write switches to the fallback and is written there; one fallback notice; every later write (including after it's writable again) goes to the fallback; no day's log exists in both places after the switch | TH (read-only folder) |
+| T48-72 | P2 | U | Review Focus 2: the data drive fills up (`IOException`, disk full) on a write | The same fallback and flag as a read-only folder, and the write lands in the fallback folder | TH |
 | T48-15 | P7, X3 | U X | `Lock-TestDataPath` holds `state\srrvrr.lock`; resolve the data folder | Refuse (exit 3) with a message naming the folder | TH |
 | T48-16 | P7 | U | Lock file left on disk by a crashed copy (exists, not held); a copy that stops cleanly | Start succeeds and takes the lock; after a clean stop the lock is released (the file opens exclusively) | TH |
 | T48-17 | P7, X3 | K X | Test build B configured with the same `DataPath` as running test build A (stand-in for "pointed at the live data folder") | B exits 3 naming the folder; A keeps running and its history and logs are unchanged. Second case: A's data folder also made read-only for B (as an elevated live copy would): B still exits 3, not a fallback (OQ10) | NTB, TH |
@@ -737,7 +738,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | D7 | 2 | `/events` from an in-memory index, never files per request | T50-20, T50-21 |
 | G1 | 2 | Graph buttons 60 s (default) and 15 min, remembered per browser | T49-27, T49-28 |
 | P1 | 3 | `DataPath` default is SRRVRR's own folder; `state\`, `logs\` created inside it | T48-11 |
-| P2 | 3 | Fallback when missing, read-only, or a later write fails; flag; stays until restart | T48-12, T48-13, T48-14, T50-13 |
+| P2 | 3 | Fallback when missing, read-only, or a later write fails; flag; stays until restart | T48-12, T48-13, T48-14, T48-72, T50-13 |
 | P3 | 3 | Refuse (exit 3) for a share equal, above or below; junctions; whole names; special shares only ignored; network paths and mapped drives; unreadable list | T48-01 to T48-10 |
 | P4 | 3 | Drives card watches the data drive (removable, mount points, under 1 GB, missing, fallback) | T48-65, T48-66 |
 | P5 | 3 | Owner keeps read access; permissions explained | T48-18, T51-05 |
