@@ -373,6 +373,7 @@ $state = [hashtable]::Synchronized(@{
     memLabel = $memLabel
     memVendor = $memVendor
     memSticks = $memSticks
+    tickMs = $null   # the fast sampler's own time per reading, once it has one
 })
 
 # --- Per-process network ------------------------------------------------------
@@ -507,141 +508,31 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # --- Background sampler: one reading per second -------------------------------
 # Reads whole counter categories at once (much faster than Get-Counter when there
 # are hundreds of GPU engine instances) and works out each value from the change
-# since the previous read.
+# since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
     param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid)
     $cats = @{}
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
+    $reader = { $s = @{}; foreach ($n in $cats.Keys) { $s[$n] = $cats[$n].ReadCategory() }; $s }.GetNewClosure()
+    $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
+    $ctx = New-FastTickContext -Reader $reader -Processes { Get-Process } -Tracer $tracer -Services $services `
+        -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
+        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew())
     $prev = $null
-    $cpuTimes = @{}   # process id -> CPU seconds at the previous read
-    $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    $cores = [Environment]::ProcessorCount
-
-    # @{ instance = value } for one counter, between the previous read and this one.
-    function Get-Values($category, $counter) {
-        $out = @{}
-        if (-not $prev -or -not $cur.ContainsKey($category)) { return $out }
-        $now = $cur[$category][$counter]; $old = $prev[$category][$counter]
-        if (-not $now -or -not $old) { return $out }
-        foreach ($inst in $now.Keys) {
-            $o = $old[$inst]
-            if ($o) { $out[$inst] = [System.Diagnostics.CounterSample]::Calculate($o.Sample, $now[$inst].Sample) }
-        }
-        $out
-    }
-    function Get-Sum($values) { $t = 0.0; foreach ($v in $values.Values) { $t += $v }; $t }
-
     while ($true) {
         $started = [DateTime]::UtcNow
-        try {
-            $cur = @{}
-            foreach ($n in $cats.Keys) { $cur[$n] = $cats[$n].ReadCategory() }
-            $elapsed = $clock.Elapsed.TotalSeconds
-            $clock.Restart()
-
-            if ($prev) {
-                $cpu = 0
-                $cpuValues = Get-Values $cpuCounter[0] $cpuCounter[1]
-                foreach ($k in $cpuValues.Keys) { if ($k -eq '_Total') { $cpu = $cpuValues[$k] } }
-
-                # Like Task Manager: add up every process on each engine, then report the busiest engine.
-                $engines = @{}
-                $gpuByProc = @{}   # process id -> @{ engine = utilization }
-                $util = Get-Values 'GPU Engine' 'Utilization Percentage'
-                foreach ($k in $util.Keys) {
-                    if ($k -match 'pid_(\d+)_luid_(\w+?_\w+?)_phys_(\d+)_eng_(\d+)_engtype_(.*)$') {
-                        if ($gpuLuid -and $matches[2] -ne $gpuLuid) { continue }   # another GPU
-                        $key = "$($matches[2])|$($matches[3])|$($matches[4])"
-                        if (-not $engines.ContainsKey($key)) { $engines[$key] = @{ v = 0.0; t = $matches[5] } }
-                        $engines[$key].v += $util[$k]
-                        $procId = [int]$matches[1]
-                        if (-not $gpuByProc.ContainsKey($procId)) { $gpuByProc[$procId] = @{} }
-                        $gpuByProc[$procId][$key] += $util[$k]
-                    }
-                }
-                $gpu = 0; $gpuEngine = ''
-                foreach ($e in $engines.Values) { if ($e.v -gt $gpu) { $gpu = $e.v; $gpuEngine = $e.t } }
-
-                # Per-process rows: CPU and GPU the way Task Manager counts them, memory as a share of RAM.
-                $procs = Get-Process
-                $net = if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null }
-                $privateMem = @{}   # process id -> private working set
-                if ($cur.ContainsKey('Process')) {
-                    $ids = $cur['Process']['ID Process']; $ws = $cur['Process']['Working Set - Private']
-                    foreach ($k in $ws.Keys) { $i = $ids[$k]; if ($i) { $privateMem[[int]$i.RawValue] = $ws[$k].RawValue } }
-                }
-                $nextCpuTimes = @{}
-                $rows = @()
-                foreach ($svc in $services) {
-                    $group = @($procs | Where-Object { $_.ProcessName -like $svc.match })
-                    if (-not ($group | Where-Object { $_.ProcessName -eq $svc.main })) {
-                        $rows += @{ name = $svc.name; icon = $svc.icon; online = $false }
-                        continue
-                    }
-                    $cpuSec = 0.0; $mem = 0; $sent = 0; $recv = 0; $gpuEngines = @{}
-                    foreach ($p in $group) {
-                        $mem += if ($privateMem.ContainsKey($p.Id)) { $privateMem[$p.Id] } else { $p.WorkingSet64 }
-                        try {
-                            $t = $p.TotalProcessorTime.TotalSeconds
-                            if ($cpuTimes.ContainsKey($p.Id)) { $cpuSec += $t - $cpuTimes[$p.Id] }
-                            $nextCpuTimes[$p.Id] = $t
-                        } catch { }   # process exited or is not readable
-                        if ($gpuByProc.ContainsKey($p.Id)) {
-                            foreach ($e in $gpuByProc[$p.Id].Keys) { $gpuEngines[$e] += $gpuByProc[$p.Id][$e] }
-                        }
-                        $bytes = $null
-                        if ($net -and $net.TryGetValue($p.Id, [ref]$bytes)) { $sent += $bytes[0]; $recv += $bytes[1] }
-                    }
-                    $procGpu = 0
-                    foreach ($v in $gpuEngines.Values) { if ($v -gt $procGpu) { $procGpu = $v } }
-                    $rows += @{
-                        name   = $svc.name
-                        icon   = $svc.icon
-                        online = $true
-                        cpu    = [math]::Round([math]::Min(100, 100 * $cpuSec / ($elapsed * $cores)), 1)
-                        # The same CPU time in whole cores (1.0 = one core flat out); shows when a
-                        # mostly single-threaded server like Valheim is maxing out its main thread.
-                        coresUsed = [math]::Round($cpuSec / $elapsed, 1)
-                        mem    = [math]::Round(100 * $mem / $totalRam, 1)
-                        gpu    = [math]::Round([math]::Min(100, $procGpu), 1)
-                        tx     = if ($net) { [math]::Round($sent / $elapsed) } else { $null }
-                        rx     = if ($net) { [math]::Round($recv / $elapsed) } else { $null }
-                    }
-                }
-                $cpuTimes = $nextCpuTimes
-                $state.services = $rows
-
-                $state.cpu = [math]::Round([math]::Min(100, $cpu), 1)
-                $state.memUsed = $totalRam - (Get-Sum (Get-Values 'Memory' 'Available Bytes'))
-                $state.rx = [math]::Round((Get-Sum (Get-Values 'Network Interface' 'Bytes Received/sec')))
-                $state.tx = [math]::Round((Get-Sum (Get-Values 'Network Interface' 'Bytes Sent/sec')))
-                $state.gpu = [math]::Round([math]::Min(100, $gpu), 1)
-                $state.gpuEngine = $gpuEngine
-                $gpuMem = Get-Values 'GPU Adapter Memory' 'Dedicated Usage'
-                $state.gpuMem = 0
-                foreach ($k in $gpuMem.Keys) { if (-not $gpuLuid -or $k -like "luid_${gpuLuid}_*") { $state.gpuMem += $gpuMem[$k] } }
-                # Read/write speed per drive letter (the LogicalDisk counters' "C:", "D:" ... instances).
-                $diskIO = @{}
-                $reads = Get-Values 'LogicalDisk' 'Disk Read Bytes/sec'; $writes = Get-Values 'LogicalDisk' 'Disk Write Bytes/sec'
-                foreach ($k in $reads.Keys) {
-                    if ($k -match '^[A-Za-z]:$') { $diskIO[$k.ToUpper()] = @{ r = [math]::Round($reads[$k]); w = [math]::Round($writes[$k]) } }
-                }
-                $state.diskIO = $diskIO
-                $state.ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-                $state.error = $null
-                $state.ready = $true
-            }
-            $prev = $cur
-        } catch {
-            $state.error = $_.Exception.Message
-        }
+        $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
         $wait = 1000 - ([DateTime]::UtcNow - $started).TotalMilliseconds
         if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
     }
 }
 
 Set-Step 'Starting the background samplers'
-$runspace = [runspacefactory]::CreateRunspace()
+# Each runspace imports SRRVRR's own modules by full path, never by name.
+$samplerSession = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+$samplerSession.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::Bypass
+$samplerSession.ImportPSModule(@(Join-Path $PSScriptRoot 'modules\Counters.psm1'))
+$runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
