@@ -92,6 +92,32 @@ Describe 'T47-24 PSScriptAnalyzer' {
     }
 }
 
+Describe 'T47-25 CI workflow' {
+    BeforeAll {
+        $script:WorkflowPath = Join-Path $Root '.github\workflows\checks.yml'
+        $script:Workflow = if (Test-Path $WorkflowPath) { [IO.File]::ReadAllText($WorkflowPath) } else { '' }
+    }
+    It 'T47-25 the workflow exists and every step runs in Windows PowerShell 5.1' {
+        $Workflow | Should -Not -BeNullOrEmpty
+        $Workflow | Should -Match '(?m)^defaults:\s*\r?\n\s+run:\s*\r?\n\s+shell: powershell\s*$'
+        $Workflow | Should -Not -Match 'shell:\s*pwsh'
+    }
+    It 'T47-25 the runner image is pinned and permissions are read-only' {
+        $Workflow | Should -Match 'runs-on: windows-2022'
+        $Workflow | Should -Not -Match 'windows-latest'
+        $Workflow | Should -Match '(?m)^permissions:\s*\r?\n\s+contents: read\s*$'
+    }
+    It 'T47-25 every action is pinned to a full commit SHA' {
+        $uses = @([regex]::Matches($Workflow, 'uses:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value })
+        $uses.Count | Should -BeGreaterThan 0
+        $uses | Where-Object { $_ -notmatch '@[0-9a-f]{40}$' } | Should -BeNullOrEmpty
+    }
+    It 'T47-25 the test job runs tools\Invoke-Checks.ps1 with -CI and runs on pull requests' {
+        $Workflow | Should -Match 'tools\\Invoke-Checks\.ps1 -CI'
+        $Workflow | Should -Match '(?m)^\s+pull_request:'
+    }
+}
+
 Describe 'T47-34 changelog' {
     It 'T47-34 CHANGELOG.md has an [Unreleased] section with an entry' {
         $text = [IO.File]::ReadAllText((Join-Path $Root 'CHANGELOG.md'))
