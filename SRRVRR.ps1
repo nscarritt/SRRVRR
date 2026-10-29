@@ -224,6 +224,9 @@ Write-Status "History and logs go to $($data.Path)"
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
 $stopEvent = New-StopEvent -Folder $PSScriptRoot -Elevated (Test-Elevated)
 Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'state\stop-requested') -ErrorAction SilentlyContinue
+# A test copy (tools\New-TestBuild.ps1 puts TESTBUILD.txt in its folder) has its own firewall rules and trace session.
+$copyKind = Get-SrrCopyKind -Folder $PSScriptRoot
+if ($copyKind -eq 'test') { Write-Status 'This is a test copy: it uses its own firewall rules and network trace, never the live copy''s.' }
 
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page, and the switch name under Processes in the config
@@ -388,7 +391,10 @@ using System.Runtime.InteropServices;
 using System.Threading;
 
 public static class ProcessNetTrace {
-    const string SessionName = "SRRVRRNet";
+    // Set before Start(): the live copy's session is SRRVRRNet; a test copy's has its own name (modules\Control.psm1),
+    // and only the live copy clears the name used before the rename.
+    public static string SessionName = "SRRVRRNet";
+    public static bool StopLegacy = true;
     const string LegacySessionName = "SystemMonitorNet";   // name used before the rename to SRRVRR
     static readonly Guid KernelNetwork = new Guid("7DD42A49-5329-4832-8DFD-43D979153A88");
 
@@ -457,7 +463,7 @@ public static class ProcessNetTrace {
     public static bool Start() {
         if (IntPtr.Size != 8) { Error = "needs 64-bit PowerShell"; return false; }
         Stop();                                  // clear a session left behind by an earlier run
-        StopSession(LegacySessionName);
+        if (StopLegacy) { StopSession(LegacySessionName); }
         ulong session;
         IntPtr props = NewProperties();
         int rc = StartTraceW(out session, SessionName, props);
@@ -521,6 +527,8 @@ public static class ProcessNetTrace {
     }
 }
 '@
+[ProcessNetTrace]::SessionName = Get-TraceSessionName -Folder $PSScriptRoot -Copy $copyKind
+[ProcessNetTrace]::StopLegacy = ($copyKind -eq 'live')
 $netPerProcess = [ProcessNetTrace]::Start()
 $state.netError = [ProcessNetTrace]::Error
 Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } else { "Per-program network tracking is off ($([ProcessNetTrace]::Error))." })
@@ -884,20 +892,14 @@ Set-Step 'Setting up the Windows Firewall rule'
 # Other PCs can only reach the page through the firewall, so the rule is always
 # set up, and rebuilt on every start to match the current settings.
 try {
-    $firewallArgs = @{ Port = $settings.Port; Scope = $settings.FirewallScope; Addresses = $settings.FirewallAddresses }
-    Invoke-Reported -Arguments $firewallArgs -Script {
-        param($Port, $Scope, $Addresses)
-        $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $Port }
-        # Also removes the rules from before the rename to SRRVRR ('System Monitor').
-        Get-NetFirewallRule -DisplayName 'SRRVRR', 'SRRVRR (blocked)', 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
-        switch ($Scope) {
-            'LocalSubnet' { New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
-            'Allowlist'   { New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress $Addresses -Action Allow -ErrorAction Stop | Out-Null }
-            'Blocklist'   {
-                # Local network, minus the listed addresses (Windows applies Block rules first).
-                New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
-                New-NetFirewallRule -DisplayName 'SRRVRR (blocked)' @rule -RemoteAddress $Addresses -Action Block -ErrorAction Stop | Out-Null
-            }
+    # This copy's own rules only (modules\Control.psm1): a test copy's names never touch the live copy's.
+    $firewallPlan = Get-FirewallRulePlan -Copy $copyKind -Scope $settings.FirewallScope -Addresses $settings.FirewallAddresses -Port $settings.Port
+    Invoke-Reported -Arguments @{ Plan = $firewallPlan } -Script {
+        param($Plan)
+        Get-NetFirewallRule -DisplayName $Plan.Remove -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+        foreach ($r in $Plan.Add) {
+            New-NetFirewallRule -DisplayName $r.DisplayName -Group $r.Group -Direction Inbound -Protocol TCP -LocalPort $r.LocalPort `
+                -RemoteAddress $r.RemoteAddress -Action $r.Action -ErrorAction Stop | Out-Null
         }
     } | Out-Null
     $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
@@ -907,10 +909,12 @@ try {
 }
 
 Set-Step 'Starting the web page server'
-# Listens on every address this machine has: its network IP, its name and localhost.
+# Elevated, it listens on every address this machine has: its network IP, its name and localhost. Not elevated,
+# on localhost only (Windows refuses the rest), so only this machine can open the page.
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://+:$($settings.Port)/")
+$listener.Prefixes.Add((Get-ListenerPrefix -Elevated (Test-Elevated) -Port $settings.Port))
 try {
+    if (-not (Test-Elevated)) { throw 'not elevated' }   # straight to the localhost listener below
     $listener.Start()
     $url = "http://$($env:COMPUTERNAME):$($settings.Port)"
     # Also show the network IP (of the adapter with the default route), which works even where names don't.

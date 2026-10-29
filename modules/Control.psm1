@@ -130,5 +130,40 @@ function Invoke-StopCommand {
     @{ Action = $(if ($forced) { 'forced' } else { 'stopped' }); Signalled = [bool]$handles; Forced = $forced; Ids = @($running | ForEach-Object { $_.ProcessId }) }
 }
 
+# 'test' for a copy built by tools\New-TestBuild.ps1 (its folder has TESTBUILD.txt), 'live' otherwise.
+function Get-SrrCopyKind([string]$Folder) {
+    if (Test-Path -LiteralPath (Join-Path $Folder 'TESTBUILD.txt')) { 'test' } else { 'live' }
+}
+
+# Every address when elevated; this machine only (localhost) when not.
+function Get-ListenerPrefix([bool]$Elevated, [int]$Port) {
+    if ($Elevated) { "http://+:$Port/" } else { "http://localhost:$Port/" }
+}
+
+# The firewall rules a copy manages: the live copy "SRRVRR" and "SRRVRR (blocked)", a test copy "SRRVRR (test)" and
+# "SRRVRR (test, blocked)", each in its own group. A copy removes only its own names (only the live copy also the
+# ones from before the rename, "System Monitor"), so an elevated test copy never replaces the live copy's rules.
+# Returns @{ Remove = display names; Add = rules (DisplayName, Action, RemoteAddress, LocalPort, Group) }.
+function Get-FirewallRulePlan {
+    param([ValidateSet('live', 'test')][string]$Copy, [string]$Scope, [string[]]$Addresses, [int]$Port)
+    if ($Copy -eq 'live') { $allow = 'SRRVRR'; $block = 'SRRVRR (blocked)'; $group = 'SRRVRR'; $old = @('System Monitor', 'System Monitor (blocked)') }
+    else { $allow = 'SRRVRR (test)'; $block = 'SRRVRR (test, blocked)'; $group = 'SRRVRR (test)'; $old = @() }
+    $rule = { param($name, $action, $remote) @{ DisplayName = $name; Action = $action; RemoteAddress = @($remote); LocalPort = $Port; Group = $group } }
+    $add = switch ($Scope) {
+        'LocalSubnet' { & $rule $allow 'Allow' 'LocalSubnet' }
+        'Allowlist'   { & $rule $allow 'Allow' $Addresses }
+        'Blocklist'   { (& $rule $allow 'Allow' 'LocalSubnet'); (& $rule $block 'Block' $Addresses) }   # Windows applies Block first
+    }
+    @{ Remove = @($allow, $block) + $old; Add = @($add) }
+}
+
+# The network tracer's trace session: the live copy keeps "SRRVRRNet"; a test copy gets "SRRVRRNet-test-" plus 8
+# hex characters from its folder, so starting one never stops the live copy's trace.
+function Get-TraceSessionName([string]$Folder, [ValidateSet('live', 'test')][string]$Copy) {
+    if ($Copy -eq 'live') { return 'SRRVRRNet' }
+    'SRRVRRNet-test-' + (Get-StopEventName -Folder $Folder -Elevated $false).Substring('Local\SRRVRR-stop-'.Length, 8)
+}
+
 Export-ModuleMember -Function ConvertTo-StopPath, Get-StopEventName, New-StopEventSecurity, Test-StopEventTrusted, New-StopEvent,
-    Send-StopSignal, Select-SRRVRRProcess, Invoke-StopCommand
+    Send-StopSignal, Select-SRRVRRProcess, Invoke-StopCommand, Get-SrrCopyKind, Get-ListenerPrefix, Get-FirewallRulePlan,
+    Get-TraceSessionName
