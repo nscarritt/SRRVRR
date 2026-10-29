@@ -1,5 +1,16 @@
 # Settings: defaults, SRRVRR.config.psd1, and validation. Invalid settings throw one plain message; everything
 # worth telling the user comes back as Notes (@{ Level = 'Note' | 'Warning'; Text }) for SRRVRR.ps1 to print.
+# Also the exit codes: a settings error exits 2, a refusal to start 3, anything else 1 (spec section 5).
+
+# The two exceptions that set the exit code, compiled once even when the module is imported again.
+if (-not ('SrrSettingsException' -as [type])) {
+    Add-Type -TypeDefinition @'
+public class SrrSettingsException : System.Exception { public SrrSettingsException(string message) : base(message) { } }
+public class SrrRefusalException : System.Exception { public SrrRefusalException(string message) : base(message) { } }
+'@
+}
+
+function New-SettingsError([string]$Message) { New-Object SrrSettingsException $Message }
 
 # Defaults, replaced by anything set in SRRVRR.config.psd1.
 function Get-SrrDefaultSettings {
@@ -11,6 +22,10 @@ function Get-SrrDefaultSettings {
         PreferredGpu         = ''
         Processes            = @{}
         ValheimPort          = 2456
+        DataPath             = ''
+        LogRetentionDays     = 31
+        MaintenanceHours     = 2
+        MaintenanceMaxHours  = 8
     }
 }
 
@@ -60,12 +75,12 @@ function Test-SingleAddress([string]$Entry) {
 function Test-SrrSettings([hashtable]$Settings) {
     $notes = New-Object System.Collections.Generic.List[hashtable]
     if ($Settings.ValheimPort -isnot [int] -or $Settings.ValheimPort -lt 1 -or $Settings.ValheimPort -gt 65534) {
-        throw "ValheimPort must be the Valheim server's game port, a number from 1 to 65534 (default 2456)."
+        throw (New-SettingsError "ValheimPort must be the Valheim server's game port, a number from 1 to 65534 (default 2456).")
     }
     $scopes = 'LocalSubnet', 'Allowlist', 'Blocklist'
-    if ($Settings.FirewallScope -notin $scopes) { throw "FirewallScope must be one of: $($scopes -join ', ')" }
+    if ($Settings.FirewallScope -notin $scopes) { throw (New-SettingsError "FirewallScope must be one of: $($scopes -join ', ')") }
     if ($Settings.FirewallScope -in 'Allowlist', 'Blocklist' -and -not $Settings.FirewallAddresses) {
-        throw "FirewallScope '$($Settings.FirewallScope)' needs at least one address in FirewallAddresses."
+        throw (New-SettingsError "FirewallScope '$($Settings.FirewallScope)' needs at least one address in FirewallAddresses.")
     }
     # The one exception to private addresses: with AllowPublicAddresses, an Allowlist may also name single
     # public IPs, at the user's own risk (see the README's security warning).
@@ -73,14 +88,66 @@ function Test-SrrSettings([hashtable]$Settings) {
     if ($Settings.FirewallScope -ne 'LocalSubnet' -and $public) {
         if ($Settings.FirewallScope -ne 'Allowlist' -or -not $Settings.AllowPublicAddresses) {
             $hint = if ($Settings.FirewallScope -eq 'Allowlist') { ' To let specific public IPs in AT YOUR OWN RISK, set AllowPublicAddresses = $true (read the README security warning first).' } else { '' }
-            throw "FirewallAddresses must be private (local network) addresses. Not allowed: $($public -join ', ').$hint"
+            throw (New-SettingsError "FirewallAddresses must be private (local network) addresses. Not allowed: $($public -join ', ').$hint")
         }
         $wide = @($public | Where-Object { -not (Test-SingleAddress $_) })
-        if ($wide) { throw "Public addresses must be single IPs, not ranges, subnets or 'any' addresses. Not allowed: $($wide -join ', ')" }
+        if ($wide) { throw (New-SettingsError "Public addresses must be single IPs, not ranges, subnets or 'any' addresses. Not allowed: $($wide -join ', ')") }
         $notes.Add(@{ Level = 'Warning'; Text = ("SECURITY: AllowPublicAddresses is on. The firewall will let these INTERNET addresses open the page, " +
             "which has no password and no encryption: $($public -join ', '). You accept this risk; see the README security warning.") })
     }
+    Test-NewSettings $Settings
     @{ Settings = $Settings; Notes = $notes }
+}
+
+function Test-Number($Value) { $Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] }
+
+# The settings added in v0.7.0 (spec section 6).
+function Test-NewSettings([hashtable]$Settings) {
+    $d = $Settings.DataPath
+    # A full local path with a drive letter. Whether it exists isn't checked here: a missing or read-only folder
+    # falls back to SRRVRR's own folder at start (spec section 3), so a drive that's unplugged never stops SRRVRR.
+    if ($d -isnot [string] -or ($d -ne '' -and $d -notmatch '^[A-Za-z]:\\')) {
+        throw (New-SettingsError "DataPath must be empty (SRRVRR's own folder) or a full local folder path with a drive letter, like 'D:\SRRVRR'; not a relative or network path.")
+    }
+    $days = $Settings.LogRetentionDays
+    if (-not ($days -is [int] -or $days -is [long]) -or $days -lt 7 -or $days -gt 366) {
+        throw (New-SettingsError 'LogRetentionDays must be a whole number of days from 7 to 366 (default 31).')
+    }
+    $max = $Settings.MaintenanceMaxHours
+    if (-not (Test-Number $max) -or $max -lt 1 -or $max -gt 24) {
+        throw (New-SettingsError 'MaintenanceMaxHours must be a number of hours from 1 to 24 (default 8).')
+    }
+    $hours = $Settings.MaintenanceHours
+    if (-not (Test-Number $hours) -or $hours -lt 0.25 -or $hours -gt $max) {
+        throw (New-SettingsError "MaintenanceHours must be a number of hours from 0.25 up to MaintenanceMaxHours ($max) (default 2).")
+    }
+}
+
+# The exit code for whatever stopped SRRVRR: 2 for a settings error, 3 for a refusal to start, 1 for anything else.
+# Looks through the exceptions PowerShell wraps around the real one.
+function Get-SrrExitCode([Exception]$Exception) {
+    $e = $Exception
+    while ($e) {
+        if ($e -is [SrrSettingsException]) { return 2 }
+        if ($e -is [SrrRefusalException]) { return 3 }
+        $e = $e.InnerException
+    }
+    1
+}
+
+# Why SRRVRR stopped, for its last log line: "settings error", "refused: <why>" or "crash: <exception type>".
+function Get-SrrStopReason([Exception]$Exception) {
+    $e = $Exception
+    while ($e) {
+        if ($e -is [SrrSettingsException]) { return 'settings error' }
+        if ($e -is [SrrRefusalException]) { return "refused: $($e.Message)" }
+        $e = $e.InnerException
+    }
+    "crash: $(if ($Exception) { $Exception.GetType().FullName } else { 'unknown' })"
+}
+
+function Format-StopLine([string]$Reason, [int]$Code) {
+    "stopped: $Reason (exit $Code)"
 }
 
 # Reads SRRVRR.config.psd1 from Folder (or the pre-rename SystemMonitor.config.psd1 when it's the only one),
@@ -115,4 +182,4 @@ function Import-SrrSettings {
 }
 
 Export-ModuleMember -Function Get-SrrDefaultSettings, Get-SrrRetiredSettings, Test-PrivateAddress, Test-SingleAddress,
-    Test-SrrSettings, Import-SrrSettings
+    Test-SrrSettings, Import-SrrSettings, Get-SrrExitCode, Get-SrrStopReason, Format-StopLine

@@ -123,14 +123,22 @@ function Stop-StartupSpinner {
         if ($startup.Active) { $startup.Active = $false; [Console]::Write("`r" + (' ' * $startup.Width) + "`r") }
     } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
 }
+# The one way SRRVRR ends itself, so whatever started it can tell why from the exit code (spec section 5):
+# 0 a clean stop, 2 a settings error, 3 a refusal to start, anything else a crash.
+function Exit-SRRVRR([int]$Code, [string]$Reason) {
+    exit $Code
+}
 # Any error that stops the script: clear the spinner and show one plain message
-# instead of PowerShell's error block.
+# instead of PowerShell's error block. Settings errors exit 2 and refusals 3 (modules\Settings.psm1).
 trap {
     Stop-StartupSpinner
     try { [Console]::CursorVisible = $true } catch { }
     Write-Host ''
     Write-Host "SRRVRR stopped: $($_.Exception.Message)" -ForegroundColor Red
-    exit 1
+    if (Get-Command Get-SrrExitCode -ErrorAction SilentlyContinue) {
+        Exit-SRRVRR -Code (Get-SrrExitCode $_.Exception) -Reason (Get-SrrStopReason $_.Exception)
+    }
+    Exit-SRRVRR -Code 1 -Reason "crash: $($_.Exception.GetType().FullName)"
 }
 
 # --- Settings -----------------------------------------------------------------
