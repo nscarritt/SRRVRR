@@ -18,35 +18,30 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # --- Stop ---------------------------------------------------------------------
-# -Stop (what Stop SRRVRR.bat runs) ends whichever SRRVRR is running, the live
-# SRRVRR.ps1 or "SRRVRR - test.ps1", and closes its Start SRRVRR window. Windows
-# hides an administrator process's command line from programs that aren't, so when
-# nothing is found without administrator, this asks for it and looks again. Ending
-# the process skips SRRVRR's own cleanup, so this also stops its network-event
-# session (the next start would clear it anyway).
+# -Stop (what Stop SRRVRR.bat runs) stops the SRRVRR running from this folder only: it signals that copy's stop
+# event, so the copy saves and logs why it stopped, and ends the process only if it hasn't exited after 10 seconds
+# (modules\Control.psm1). A copy started as administrator can only be signalled by administrator, so when nothing
+# here can reach it, this asks for administrator and tries again. Its Start SRRVRR window is closed too.
 if ($Stop) {
+    Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
     $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    $running = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object {
-        $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)-File\s+"?[^"]*\bSRRVRR( - test)?\.ps1"?' -and $_.CommandLine -notmatch '(?i)\s-Stop\b'
-    })
-    if (-not $running -and -not $elevated) {
-        Write-Host 'Looking for an SRRVRR started as administrator; Windows will ask for administrator.'
+    $all = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'")
+    $windows = @(Select-SRRVRRProcess -Folder $PSScriptRoot -Processes $all | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.ParentProcessId)" -ErrorAction SilentlyContinue })
+    try { $result = Invoke-StopCommand -Folder $PSScriptRoot -Clock { [DateTimeOffset]::Now } } catch [UnauthorizedAccessException] { $result = @{ Action = 'denied' } }
+    if ($result.Action -in 'not running', 'denied' -and -not $elevated) {
+        Write-Host 'Looking for an SRRVRR started as administrator from this folder; Windows will ask for administrator.'
         try { Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Stop" }
         catch { Write-Host 'Not stopped: the administrator prompt was declined.'; exit 1 }
         exit 0
     }
-    if (-not $running) { Write-Host 'SRRVRR is not running.' }
-    foreach ($p in $running) {
-        $which = if ($p.CommandLine -match '(?i)SRRVRR - test\.ps1') { 'test version' } else { 'live version' }
-        $window = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)" -ErrorAction SilentlyContinue
-        try {
-            Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
-            # The Start SRRVRR window would otherwise wait at "Press any key".
-            if ($window -and $window.Name -eq 'cmd.exe' -and $window.CommandLine -match '(?i)Start SRRVRR.*\.bat') { Stop-Process -Id $window.ProcessId -Force -ErrorAction SilentlyContinue }
-            Write-Host "Stopped the SRRVRR $which (process $($p.ProcessId))."
-        } catch { Write-Host "Couldn't stop the SRRVRR $which (process $($p.ProcessId)): $($_.Exception.Message)" }
+    switch ($result.Action) {
+        'not running' { Write-Host "SRRVRR isn't running from $PSScriptRoot." }
+        'stopped'     { Write-Host 'Stopped SRRVRR: it saved and closed.' }
+        'forced'      { Write-Host "SRRVRR didn't stop within 10 seconds, so it was ended (process $($result.Ids -join ', '))." }
+        default       { Write-Host "Couldn't stop SRRVRR: $($result.Action)." }
     }
-    if ($running -and $elevated) { & logman.exe stop SRRVRRNet -ets *> $null }
+    # The Start SRRVRR window would otherwise wait at "Press any key".
+    foreach ($w in $windows) { if ($w -and $w.Name -eq 'cmd.exe' -and $w.CommandLine -match '(?i)Start SRRVRR.*\.bat') { Stop-Process -Id $w.ProcessId -Force -ErrorAction SilentlyContinue } }
     if (-not [Console]::IsOutputRedirected) { Start-Sleep -Seconds 4 }   # time to read the result before the window closes
     exit 0
 }
@@ -127,6 +122,8 @@ function Write-Status([string]$message, [switch]$Warning, [switch]$Step) {
     Write-SrrLog $(if ($Warning) { 'WARN' } else { 'INFO' }) 'startup' $message   # every startup line goes in the log too
 }
 function Set-Step([string]$label) {
+    # A stop that arrives during the startup takes effect at the next step.
+    if ($script:stopEvent -and $script:stopEvent.WaitOne(0)) { Stop-StartupSpinner; Invoke-GracefulStop 'requested' }
     $startup.Step++
     Write-Status -Step "[$($startup.Step)/$($startup.Steps)] $label"
 }
@@ -161,6 +158,7 @@ function Stop-StartupSpinner {
 # The one way SRRVRR ends itself, so whatever started it can tell why from the exit code (spec section 5):
 # 0 a clean stop, 2 a settings error, 3 a refusal to start, anything else a crash.
 function Exit-SRRVRR([int]$Code, [string]$Reason) {
+    $script:srrExiting = $true   # the loop's finally then knows this isn't a Ctrl+C
     if ($srrLog -and $null -ne $srrLog.Buffer) { $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs')) }   # stopped before a data folder was chosen
     if ($srrThrottle) {
         $pending = $srrThrottle.Flush()
@@ -170,6 +168,19 @@ function Exit-SRRVRR([int]$Code, [string]$Reason) {
     Write-SrrLog $(if ($Code) { 'ERROR' } else { 'INFO' }) 'srrvrr' $line -Always
     exit $Code
 }
+# What a clean stop saves first (history and Maintenance arrive in #49 and #50). A saver that fails is logged and
+# the stop goes on.
+$stopSavers = New-Object System.Collections.Generic.List[object]
+function Invoke-StopSavers {
+    foreach ($s in $stopSavers) { try { & $s.Save } catch { Write-SrrLog 'ERROR' 'stop' "couldn't save $($s.Name): $($_.Exception.Message)" -Always } }
+}
+# A requested stop (the stop event): save, then end with exit 0. Also checked between startup steps.
+function Invoke-GracefulStop([string]$Reason) {
+    Invoke-StopSavers
+    Write-Host ''; Write-Host "SRRVRR stopped ($Reason)."
+    Exit-SRRVRR -Code 0 -Reason $Reason
+}
+$stopEvent = $null
 # Any error that stops the script: clear the spinner and show one plain message
 # instead of PowerShell's error block. Settings errors exit 2 and refusals 3 (modules\Settings.psm1).
 trap {
@@ -207,6 +218,12 @@ $srrLog.SetFolder((Join-Path $data.Path 'logs'))
 foreach ($n in $data.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
 if ($data.IsFallback) { Write-SrrLog 'FLAG' 'data' "DataPath $($settings.DataPath) is $($data.Reason); using $($data.Path)" -Always }
 Write-Status "History and logs go to $($data.Path)"
+
+# The stop event this copy waits on, tied to its folder (modules\Control.psm1). A name someone else made first
+# with open permissions is refused (exit 3). An old stop-requested marker from an earlier stop is cleared.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
+$stopEvent = New-StopEvent -Folder $PSScriptRoot -Elevated (Test-Elevated)
+Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'state\stop-requested') -ErrorAction SilentlyContinue
 
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page, and the switch name under Processes in the config
@@ -949,9 +966,15 @@ $identityRead = [DateTime]::UtcNow
 $workers = @(@{ Name = 'fast sampler'; PowerShell = $worker }, @{ Name = 'slow sampler'; PowerShell = $slowWorker })
 $tracerLogged = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $netPerProcess }
 $watched = [DateTime]::UtcNow
-$shareCheckedAt = [DateTime]::UtcNow; $shareFlagged = $false
+$shareCheckedAt = [DateTime]::UtcNow; $shareFlagged = $false; $lastStateErrors = @{}
 function Invoke-Watch {
-    foreach ($k in 'error', 'drivesError', 'tempError') { if ($state[$k]) { Write-SrrError $(if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }) "${k}: $($state[$k])" } }
+    # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
+    # library would otherwise fill the log); errors that come and go are still held to once a minute.
+    foreach ($k in 'error', 'drivesError', 'tempError') {
+        $v = $state[$k]
+        if ($v -and $v -ne $script:lastStateErrors[$k]) { Write-SrrError $(if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }) "${k}: $v" }
+        $script:lastStateErrors[$k] = $v
+    }
     if ($netPerProcess) {
         $now = @{ ErrorText = [ProcessNetTrace]::LastErrorText; ErrorType = [ProcessNetTrace]::LastErrorType; ErrorCount = [ProcessNetTrace]::ErrorCount; Alive = [ProcessNetTrace]::Alive }
         $entry = Get-TracerLogEntry -Current $now -LastLogged $script:tracerLogged
@@ -981,8 +1004,12 @@ function Invoke-Watch {
 try {
     while ($listener.IsListening) {
         $pending = $listener.BeginGetContext($null, $null)
-        while (-not $pending.AsyncWaitHandle.WaitOne(50)) {
-            Show-Spinner   # short waits keep Ctrl+C responsive
+        # Wait for a request or the stop event, 50 ms at a time so Ctrl+C stays responsive.
+        while ($true) {
+            $woke = [System.Threading.WaitHandle]::WaitAny(@($pending.AsyncWaitHandle, $stopEvent), 50)
+            if ($woke -eq 0) { break }
+            if ($woke -eq 1) { Invoke-GracefulStop 'requested' }
+            Show-Spinner
             if (([DateTime]::UtcNow - $watched).TotalSeconds -ge 1) { $watched = [DateTime]::UtcNow; Invoke-Watch }
         }
         Show-Spinner
@@ -997,10 +1024,14 @@ try {
     }
 } finally {
     if ($spinner) { [Console]::WriteLine("`r  Stopped.                                "); try { [Console]::CursorVisible = $true } catch { } }
+    # Ctrl+C ends the loop without passing through Exit-SRRVRR; it's a clean stop too (spec section 5).
+    $ctrlC = -not $script:srrExiting
+    if ($ctrlC) { Invoke-StopSavers }
     $listener.Stop()
     if ($netPerProcess) { [ProcessNetTrace]::Stop() }
     $worker.Stop()
     $runspace.Close()
     $slowWorker.Stop()
     $slowRunspace.Close()
+    if ($ctrlC) { Exit-SRRVRR -Code 0 -Reason 'Ctrl+C' }
 }

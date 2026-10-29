@@ -100,6 +100,82 @@ Describe 'Test builds' -Tag 'Smoke' {
             $last | Should -Match 'stopped: refused: another SRRVRR is using the data folder .* \(exit 3\)$'
         } finally { Stop-Build $pa }
     }
+    It 'T48-52 Stop SRRVRR.bat stops the copy cleanly: marker, exit 0 within 10 s, "stopped: requested"' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        $null = $p.Handle
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        & cmd /c "`"$folder\Stop SRRVRR.bat`"" | Out-Null
+        $LASTEXITCODE | Should -Be 0
+        $p.WaitForExit(10000) | Should -BeTrue
+        $p.ExitCode | Should -Be 0
+        $sw.Elapsed.TotalSeconds | Should -BeLessThan 10
+        Test-Path (Join-Path $folder 'state\stop-requested') | Should -BeTrue
+        @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Match 'INFO srrvrr: stopped: requested \(exit 0\)$'
+    }
+    It 'T48-53 one copy''s -Stop never stops another copy' {
+        $pa = Get-FreePort; $pb = Get-FreePort
+        $a = New-Build 'HEAD' $pa; $b = New-Build 'HEAD' $pb
+        $procA = Start-Build $a $pa; $procB = Start-Build $b $pb
+        try {
+            $null = $procA.Handle
+            & $Exe -NoProfile -ExecutionPolicy Bypass -File "$a\SRRVRR.ps1" -Stop | Out-Null
+            $procA.WaitForExit(10000) | Should -BeTrue
+            (Invoke-TestRequest -Url "http://localhost:$pb/stats").Status | Should -Be 200
+            Test-Path (Join-Path $b 'state\stop-requested') | Should -BeFalse
+        } finally { Stop-Build $procA; Stop-Build $procB }
+    }
+    It 'T48-54 a stop sent during the startup takes effect at the next step' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        Import-Module (Join-Path $Root 'modules\Control.psm1') -Force
+        $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
+        $null = $p.Handle
+        $name = Get-StopEventName -Folder $folder -Elevated $false
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        while (-not (Send-StopSignal -Name $name) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+        $p.WaitForExit(30000) | Should -BeTrue
+        $p.ExitCode | Should -Be 0
+        $lines = @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)
+        $lines[-1] | Should -Match 'stopped: requested \(exit 0\)$'
+        ($lines -join "`n") | Should -Not -Match 'serving at'
+    }
+    It 'T48-57 Ctrl+C is a clean stop: exit 0 and "stopped: Ctrl+C"' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        $null = $p.Handle
+        $sender = Join-Path (New-TestDataPath) 'send-ctrlc.ps1'
+        Copy-Item (Join-Path $PSScriptRoot 'fakes\Send-CtrlC.ps1') $sender
+        $s = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$sender`" -TargetId $($p.Id)" -WindowStyle Hidden -PassThru
+        $s.WaitForExit(20000) | Out-Null
+        $p.WaitForExit(15000) | Should -BeTrue
+        $p.ExitCode | Should -Be 0
+        @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Match 'stopped: Ctrl\+C \(exit 0\)$'
+    }
+    It 'T48-58 a forced kill leaves a crash-looking exit code, no "stopped:" line and no marker' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        $null = $p.Handle
+        Stop-Process -Id $p.Id -Force
+        $p.WaitForExit(10000) | Should -BeTrue
+        $p.ExitCode | Should -Not -BeIn @(0, 2, 3)
+        @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Not -Match 'stopped:'
+        Test-Path (Join-Path $folder 'state\stop-requested') | Should -BeFalse
+    }
+    It 'T48-36 a stop event name someone else took first refuses the start (exit 3)' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        Import-Module (Join-Path $Root 'modules\Control.psm1') -Force
+        $open = New-Object System.Security.AccessControl.EventWaitHandleSecurity
+        $open.AddAccessRule((New-Object System.Security.AccessControl.EventWaitHandleAccessRule((New-Object Security.Principal.SecurityIdentifier 'S-1-1-0'), 'FullControl', 'Allow')))
+        $made = $false
+        $squat = New-Object System.Threading.EventWaitHandle($false, 'ManualReset', (Get-StopEventName -Folder $folder -Elevated $false), [ref]$made, $open)
+        try {
+            $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
+            $null = $p.Handle
+            $p.WaitForExit(60000) | Should -BeTrue
+            $p.ExitCode | Should -Be 3
+            @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Match 'stopped: refused: The stop event name .* \(exit 3\)$'
+        } finally { $squat.Dispose() }
+    }
     It 'T48-21 the log holds the settings source, every startup step in order and the serving line' {
         $port = Get-FreePort
         $folder = New-Build 'HEAD' $port
