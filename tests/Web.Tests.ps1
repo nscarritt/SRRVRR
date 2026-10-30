@@ -216,3 +216,20 @@ Describe 'T47-39 DNS rebinding through a real listener' -Tag 'Elevated' {
         } finally { Stop-TestServer $server }
     }
 }
+
+Describe 'T48-73 /stats while the samplers write' {
+    It 'T48-73 copying the shared state never fails while another thread writes to it' {
+        $state = [hashtable]::Synchronized(@{})
+        foreach ($i in 1..40) { $state["k$i"] = $i }
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({ param($s) $end = [DateTime]::UtcNow.AddSeconds(3); $n = 0; while ([DateTime]::UtcNow -lt $end) { $s["k$($n % 40 + 1)"] = $n; $n++ } }).AddArgument($state)
+        $h = $ps.BeginInvoke()
+        $errors = 0
+        try {
+            while (-not $h.IsCompleted) {
+                try { $null = New-StatsSnapshot -State $state -BootTime ([DateTimeOffset]::Now) -Now ([DateTimeOffset]::Now) } catch { $errors++ }
+            }
+        } finally { $ps.EndInvoke($h); $ps.Dispose() }
+        $errors | Should -Be 0
+    }
+}

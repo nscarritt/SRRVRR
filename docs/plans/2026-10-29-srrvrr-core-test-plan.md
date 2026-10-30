@@ -438,6 +438,7 @@ line and the crash log in #48; their event-log side is tested in #50 (T50-13, T5
 | T48-13 | P2 | U | `DataPath` read-only at start (deny-write rule for the current user) | Falls back; reason `read-only`; `DataPath` left untouched | TH (read-only folder) |
 | T48-14 | P2 | I | Start on a writable `DataPath`; make it read-only; write twice; make it writable again; write | First failed write switches to the fallback and is written there; one fallback notice; every later write (including after it's writable again) goes to the fallback; no day's log exists in both places after the switch | TH (read-only folder) |
 | T48-72 | P2 | U | Review Focus 2: the data drive fills up (`IOException`, disk full) on a write | The same fallback and flag as a read-only folder, and the write lands in the fallback folder | TH |
+| T48-73 | D6 | I | A thread writes to the shared state as fast as it can while `/stats` copies it, for 3 s | Every copy succeeds (found live after the #48 deploy: "Collection was modified") | TH |
 | T48-15 | P7, X3 | U X | `Lock-TestDataPath` holds `state\srrvrr.lock`; resolve the data folder | Refuse (exit 3) with a message naming the folder | TH |
 | T48-16 | P7 | U | Lock file left on disk by a crashed copy (exists, not held); a copy that stops cleanly | Start succeeds and takes the lock; after a clean stop the lock is released (the file opens exclusively) | TH |
 | T48-17 | P7, X3 | K X | Test build B configured with the same `DataPath` as running test build A (stand-in for "pointed at the live data folder") | B exits 3 naming the folder; A keeps running and its history and logs are unchanged. Second case: A's data folder also made read-only for B (as an elevated live copy would): B still exits 3, not a fallback (OQ10) | NTB, TH |
@@ -735,7 +736,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | D3 | 2 | `/history`: every line's last 15 minutes | T49-19, T49-26 |
 | D4 | 2 | `/events?days=n`: n from 1 to `LogRetentionDays`, else 400; newest 1,000, newest first | T50-20, T50-41, T50-42 |
 | D5 | 2 | `POST /maintenance` returns the new state | T50-34 |
-| D6 | 2 | `/stats` keeps every v0.6.0 field | T47-17, T47-18, T49-22 |
+| D6 | 2 | `/stats` keeps every v0.6.0 field | T47-17, T47-18, T48-73, T49-22 |
 | D7 | 2 | `/events` from an in-memory index, never files per request | T50-20, T50-21 |
 | G1 | 2 | Graph buttons 60 s (default) and 15 min, remembered per browser | T49-27, T49-28 |
 | P1 | 3 | `DataPath` default is SRRVRR's own folder; `state\`, `logs\` created inside it | T48-11 |
