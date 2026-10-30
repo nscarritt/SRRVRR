@@ -11,7 +11,8 @@ BeforeAll {
         $source = (& git -C $Root show '0b5a25ba68be9db8dc27548af0d3a5d97d2a5735:SRRVRR.ps1') -join "`n"
         $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
         $assign = $ast.Find({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$html' }, $true)
-        $assign.Right.Expression.Value -replace "`r`n", "`n"
+        # The one deliberate change since: #48 UAT shows a missing temperature in gray, not amber.
+        ($assign.Right.Expression.Value -replace "`r`n", "`n").Replace(": error ? ' warn' : none ? ' none' : '');", ": error || none ? ' none' : '');")
     }
     # The new files put back together: the CSS and script inlined, and each /img/ URL turned back into its data URI.
     function Get-NewPage {

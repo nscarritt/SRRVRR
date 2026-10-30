@@ -13,7 +13,7 @@ BeforeAll {
 Describe 'T48-37 the stop event''s name' {
     It 'T48-37 one folder gives one name, whatever its case or trailing separator' {
         $f = New-TestDataPath
-        ConvertTo-StopPath $f | Should -Be ($f.ToUpperInvariant())
+        ConvertTo-StopPath $f | Should -Be ((Get-Item -LiteralPath $f).FullName.TrimEnd('\').ToUpperInvariant())   # long names, as CI's temp folder is 8.3
         Get-StopEventName -Folder $f -Elevated $true | Should -Be (Get-StopEventName -Folder ($f.ToLowerInvariant() + '\') -Elevated $true)
         Get-StopEventName -Folder $f -Elevated $true | Should -Match '^Global\\SRRVRR-stop-[0-9a-f]{16}$'
         Get-StopEventName -Folder $f -Elevated $false | Should -Match '^Local\\SRRVRR-stop-[0-9a-f]{16}$'

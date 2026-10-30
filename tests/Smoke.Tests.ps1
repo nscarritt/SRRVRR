@@ -69,7 +69,10 @@ Describe 'Test builds' -Tag 'Smoke' {
     It 'T48-56 a crash exits 1, with the exception''s type, message, line and stack in the log' {
         $port = Get-FreePort
         $folder = New-Build 'HEAD' $port
-        $taken = New-Object Net.HttpListener; $taken.Prefixes.Add("http://localhost:$port/"); $taken.Start()
+        # Take every address SRRVRR could listen on (elevated, it tries http://+ first and falls back to localhost).
+        $taken = New-Object Net.HttpListener; $taken.Prefixes.Add("http://localhost:$port/")
+        if ($elevated) { $taken.Prefixes.Add("http://+:$port/") }
+        $taken.Start()
         try {
             $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
             $null = $p.Handle
@@ -130,7 +133,7 @@ Describe 'Test builds' -Tag 'Smoke' {
         Import-Module (Join-Path $Root 'modules\Control.psm1') -Force
         $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
         $null = $p.Handle
-        $name = Get-StopEventName -Folder $folder -Elevated $false
+        $name = Get-StopEventName -Folder $folder -Elevated $elevated
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         while (-not (Send-StopSignal -Name $name) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         $p.WaitForExit(30000) | Should -BeTrue
@@ -167,7 +170,7 @@ Describe 'Test builds' -Tag 'Smoke' {
         $open = New-Object System.Security.AccessControl.EventWaitHandleSecurity
         $open.AddAccessRule((New-Object System.Security.AccessControl.EventWaitHandleAccessRule((New-Object Security.Principal.SecurityIdentifier 'S-1-1-0'), 'FullControl', 'Allow')))
         $made = $false
-        $squat = New-Object System.Threading.EventWaitHandle($false, 'ManualReset', (Get-StopEventName -Folder $folder -Elevated $false), [ref]$made, $open)
+        $squat = New-Object System.Threading.EventWaitHandle($false, 'ManualReset', (Get-StopEventName -Folder $folder -Elevated $elevated), [ref]$made, $open)
         try {
             $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru
             $null = $p.Handle
@@ -185,7 +188,7 @@ Describe 'Test builds' -Tag 'Smoke' {
             $text | Should -Match 'INFO startup: Settings loaded from .*SRRVRR\.config\.psd1'
             $steps = @([regex]::Matches($text, 'INFO startup: \[(\d+)/(\d+)\]') | ForEach-Object { [int]$_.Groups[1].Value })
             $steps | Should -Be (1..$steps.Count)
-            $text | Should -Match "INFO startup: serving at http://localhost:$port"
+            $text | Should -Match "INFO startup: serving at http://(localhost|$env:COMPUTERNAME):$port"   # elevated (as in CI) it serves by name
         } finally { Stop-Build $p }
     }
     It 'T47-18 v0.6.0 and HEAD side by side: the same /stats shape apart from tickMs, and the same headers' {
