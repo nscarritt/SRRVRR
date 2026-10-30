@@ -61,4 +61,24 @@
     # The Valheim server's game port (the one players connect to). The player
     # count comes from the server's status query on the next port up.
     ValheimPort = 2456
+
+    # --- Data: saved history, Maintenance and the logs ------------------------
+
+    # The folder that holds SRRVRR's state\ and logs\ folders. Leave it '' to use
+    # SRRVRR's own folder, or give a full local path with a drive letter, e.g.
+    # 'D:\SRRVRR', to keep them on another drive. SRRVRR creates state\ and logs\
+    # inside it but never the folder itself. If the folder is missing or can't be
+    # written, SRRVRR uses its own folder instead and shows a flag. It refuses to
+    # start if the folder is shared on the network.
+    DataPath = ''
+
+    # How many days of logs to keep (7 to 366). Old files are removed once the event log arrives.
+    LogRetentionDays = 31
+
+    # How long the Maintenance checkbox stays on before it switches itself off,
+    # in hours (0.25 up to MaintenanceMaxHours).
+    MaintenanceHours = 2
+
+    # The longest Maintenance can stay on, in hours (1 to 24).
+    MaintenanceMaxHours = 8
 }

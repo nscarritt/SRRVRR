@@ -18,35 +18,30 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # --- Stop ---------------------------------------------------------------------
-# -Stop (what Stop SRRVRR.bat runs) ends whichever SRRVRR is running, the live
-# SRRVRR.ps1 or "SRRVRR - test.ps1", and closes its Start SRRVRR window. Windows
-# hides an administrator process's command line from programs that aren't, so when
-# nothing is found without administrator, this asks for it and looks again. Ending
-# the process skips SRRVRR's own cleanup, so this also stops its network-event
-# session (the next start would clear it anyway).
+# -Stop (what Stop SRRVRR.bat runs) stops the SRRVRR running from this folder only: it signals that copy's stop
+# event, so the copy saves and logs why it stopped, and ends the process only if it hasn't exited after 10 seconds
+# (modules\Control.psm1). A copy started as administrator can only be signalled by administrator, so when nothing
+# here can reach it, this asks for administrator and tries again. Its Start SRRVRR window is closed too.
 if ($Stop) {
+    Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
     $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    $running = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object {
-        $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)-File\s+"?[^"]*\bSRRVRR( - test)?\.ps1"?' -and $_.CommandLine -notmatch '(?i)\s-Stop\b'
-    })
-    if (-not $running -and -not $elevated) {
-        Write-Host 'Looking for an SRRVRR started as administrator; Windows will ask for administrator.'
+    $all = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'")
+    $windows = @(Select-SRRVRRProcess -Folder $PSScriptRoot -Processes $all | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.ParentProcessId)" -ErrorAction SilentlyContinue })
+    try { $result = Invoke-StopCommand -Folder $PSScriptRoot -Clock { [DateTimeOffset]::Now } } catch [UnauthorizedAccessException] { $result = @{ Action = 'denied' } }
+    if ($result.Action -in 'not running', 'denied' -and -not $elevated) {
+        Write-Host 'Looking for an SRRVRR started as administrator from this folder; Windows will ask for administrator.'
         try { Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Stop" }
         catch { Write-Host 'Not stopped: the administrator prompt was declined.'; exit 1 }
         exit 0
     }
-    if (-not $running) { Write-Host 'SRRVRR is not running.' }
-    foreach ($p in $running) {
-        $which = if ($p.CommandLine -match '(?i)SRRVRR - test\.ps1') { 'test version' } else { 'live version' }
-        $window = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.ParentProcessId)" -ErrorAction SilentlyContinue
-        try {
-            Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
-            # The Start SRRVRR window would otherwise wait at "Press any key".
-            if ($window -and $window.Name -eq 'cmd.exe' -and $window.CommandLine -match '(?i)Start SRRVRR.*\.bat') { Stop-Process -Id $window.ProcessId -Force -ErrorAction SilentlyContinue }
-            Write-Host "Stopped the SRRVRR $which (process $($p.ProcessId))."
-        } catch { Write-Host "Couldn't stop the SRRVRR $which (process $($p.ProcessId)): $($_.Exception.Message)" }
+    switch ($result.Action) {
+        'not running' { Write-Host "SRRVRR isn't running from $PSScriptRoot." }
+        'stopped'     { Write-Host 'Stopped SRRVRR: it saved and closed.' }
+        'forced'      { Write-Host "SRRVRR didn't stop within 10 seconds, so it was ended (process $($result.Ids -join ', '))." }
+        default       { Write-Host "Couldn't stop SRRVRR: $($result.Action)." }
     }
-    if ($running -and $elevated) { & logman.exe stop SRRVRRNet -ets *> $null }
+    # The Start SRRVRR window would otherwise wait at "Press any key".
+    foreach ($w in $windows) { if ($w -and $w.Name -eq 'cmd.exe' -and $w.CommandLine -match '(?i)Start SRRVRR.*\.bat') { Stop-Process -Id $w.ProcessId -Force -ErrorAction SilentlyContinue } }
     if (-not [Console]::IsOutputRedirected) { Start-Sleep -Seconds 4 }   # time to read the result before the window closes
     exit 0
 }
@@ -57,6 +52,41 @@ if ($Stop) {
 # background thread sits below the current step while it works. Messages go
 # through Write-Status so they don't collide with the spinner line. The spinner
 # is skipped when output goes to a file.
+# The crash and error log, logs\srrvrr-YYYY-MM-DD.log (modules\Logging.psm1): startup steps, settings problems,
+# sampler and worker errors, crashes with their details, and a last line saying why SRRVRR stopped. Only this
+# thread writes it.
+$srrLog = $null; $srrThrottle = $null
+try {
+    Import-Module -Name (Join-Path $PSScriptRoot 'modules\Logging.psm1') -Force -ErrorAction Stop
+    # No folder yet: lines wait in memory until the data folder is chosen, so a day's log stays in one place.
+    $srrLog = New-DailyLog -Folder '' -Prefix 'srrvrr' -Extension 'log' -Clock { [DateTimeOffset]::Now }
+    $srrThrottle = New-ErrorThrottle -Clock { [DateTimeOffset]::Now }
+} catch { }   # no log is better than no SRRVRR
+function Write-SrrLog([string]$Level, [string]$Source, [string]$Message, [switch]$Always) {
+    if (-not $srrLog) { return }
+    $srrLog.Write((Format-LogLine -Time ([DateTimeOffset]::Now) -Level $Level -Source $Source -Message $Message), [bool]$Always)
+    # A log write that failed on the data drive switches everything to SRRVRR's own folder (spec section 3).
+    if ($srrLog.Failed -and $script:dataFolder -and -not $script:dataFolder.IsFallback) {
+        $srrLog.Failed = $false
+        Switch-DataToFallback "writing the log to $($srrLog.Folder) failed"
+        $srrLog.Write((Format-LogLine -Time ([DateTimeOffset]::Now) -Level $Level -Source $Source -Message $Message), [bool]$Always)
+    }
+}
+# The data folder (modules\DataFolder.psm1) is set up after the settings; until then logs wait in memory.
+$dataFolder = $null
+function Switch-DataToFallback([string]$Why) {
+    $script:dataFolder.Path = $PSScriptRoot; $script:dataFolder.IsFallback = $true
+    if ($script:dataDrives) { $script:dataDrives.Paths = @($settings.DataPath, $PSScriptRoot) | Where-Object { $_ } }
+    $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs'))
+    Write-SrrLog 'FLAG' 'data' "$Why; history and logs now go to $PSScriptRoot until the next restart" -Always
+}
+# An error, written at most once a minute with a count of repeats (key: the error itself).
+function Write-SrrError([string]$Source, [string]$Message) {
+    if (-not $srrThrottle) { return }
+    $repeats = $srrThrottle.ShouldWrite("$Source|$Message")
+    if ($null -ne $repeats) { Write-SrrLog 'ERROR' $Source ($Message + $(if ($repeats) { " (repeated $repeats times)" })) }
+}
+
 $startup = [hashtable]::Synchronized(@{
     Step   = 0
     Steps  = 8        # number of Set-Step calls below
@@ -90,8 +120,11 @@ function Write-Status([string]$message, [switch]$Warning, [switch]$Step) {
         elseif ($Step) { Write-Host $message }
         else { Write-Host "      $message" }   # details sit under their step
     } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
+    Write-SrrLog $(if ($Warning) { 'WARN' } else { 'INFO' }) 'startup' $message   # every startup line goes in the log too
 }
 function Set-Step([string]$label) {
+    # A stop that arrives during the startup takes effect at the next step.
+    if ($script:stopEvent -and $script:stopEvent.WaitOne(0)) { Stop-StartupSpinner; Invoke-GracefulStop 'requested' }
     $startup.Step++
     Write-Status -Step "[$($startup.Step)/$($startup.Steps)] $label"
 }
@@ -123,14 +156,45 @@ function Stop-StartupSpinner {
         if ($startup.Active) { $startup.Active = $false; [Console]::Write("`r" + (' ' * $startup.Width) + "`r") }
     } finally { [System.Threading.Monitor]::Exit($startup.Lock) }
 }
+# The one way SRRVRR ends itself, so whatever started it can tell why from the exit code (spec section 5):
+# 0 a clean stop, 2 a settings error, 3 a refusal to start, anything else a crash.
+function Exit-SRRVRR([int]$Code, [string]$Reason) {
+    $script:srrExiting = $true   # the loop's finally then knows this isn't a Ctrl+C
+    if ($srrLog -and $null -ne $srrLog.Buffer) { $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs')) }   # stopped before a data folder was chosen
+    if ($srrThrottle) {
+        $pending = $srrThrottle.Flush()
+        foreach ($k in $pending.Keys) { $src, $msg = $k -split '\|', 2; Write-SrrLog 'ERROR' $src "$msg (repeated $($pending[$k]) more times)" -Always }
+    }
+    $line = if (Get-Command Format-StopLine -ErrorAction SilentlyContinue) { Format-StopLine -Reason $Reason -Code $Code } else { "stopped: $Reason (exit $Code)" }
+    Write-SrrLog $(if ($Code) { 'ERROR' } else { 'INFO' }) 'srrvrr' $line -Always
+    exit $Code
+}
+# What a clean stop saves first (history and Maintenance arrive in #49 and #50). A saver that fails is logged and
+# the stop goes on.
+$stopSavers = New-Object System.Collections.Generic.List[object]
+function Invoke-StopSavers {
+    foreach ($s in $stopSavers) { try { & $s.Save } catch { Write-SrrLog 'ERROR' 'stop' "couldn't save $($s.Name): $($_.Exception.Message)" -Always } }
+}
+# A requested stop (the stop event): save, then end with exit 0. Also checked between startup steps.
+function Invoke-GracefulStop([string]$Reason) {
+    Invoke-StopSavers
+    Write-Host ''; Write-Host "SRRVRR stopped ($Reason)."
+    Exit-SRRVRR -Code 0 -Reason $Reason
+}
+$stopEvent = $null
 # Any error that stops the script: clear the spinner and show one plain message
-# instead of PowerShell's error block.
+# instead of PowerShell's error block. Settings errors exit 2 and refusals 3 (modules\Settings.psm1).
 trap {
     Stop-StartupSpinner
     try { [Console]::CursorVisible = $true } catch { }
     Write-Host ''
     Write-Host "SRRVRR stopped: $($_.Exception.Message)" -ForegroundColor Red
-    exit 1
+    $details = if (Get-Command Format-SrrException -ErrorAction SilentlyContinue) { Format-SrrException -ErrorRecord $_ } else { "$($_.Exception.GetType().FullName): $($_.Exception.Message)" }
+    Write-SrrLog 'ERROR' 'srrvrr' $details -Always
+    if (Get-Command Get-SrrExitCode -ErrorAction SilentlyContinue) {
+        Exit-SRRVRR -Code (Get-SrrExitCode $_.Exception) -Reason (Get-SrrStopReason $_.Exception)
+    }
+    Exit-SRRVRR -Code 1 -Reason "crash: $($_.Exception.GetType().FullName)"
 }
 
 # --- Settings -----------------------------------------------------------------
@@ -139,9 +203,33 @@ Set-Step 'Reading settings'
 # so updates never overwrite it. Loading and validation are in modules\Settings.psm1.
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Settings.psm1') -Force
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Web.psm1') -Force
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Counters.psm1') -Force   # Get-TracerLogEntry, for the watcher
 $loaded = if ($PSBoundParameters.ContainsKey('Port')) { Import-SrrSettings -Folder $PSScriptRoot -Port $Port } else { Import-SrrSettings -Folder $PSScriptRoot }
 foreach ($n in $loaded.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
 $settings = $loaded.Settings
+
+# The data folder: DataPath if it's there and writable, else this folder; never inside a network share, one copy
+# at a time (the lock stays open while SRRVRR runs), and when elevated only SYSTEM and Administrators can write.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\DataFolder.psm1') -Force
+$shareList = try { Get-ShareList } catch { $null }
+$data = Resolve-DataPath -Setting $settings.DataPath -OwnFolder $PSScriptRoot -Shares $shareList -IsElevated (Test-Elevated)
+$dataLock = $data.Lock
+$dataFolder = New-DataFolder -Path $data.Path -FallbackPath $PSScriptRoot -IsFallback $data.IsFallback -OnFallback { param($why) Switch-DataToFallback $why }
+$srrLog.SetFolder((Join-Path $data.Path 'logs'))
+foreach ($n in $data.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
+if ($data.IsFallback) { Write-SrrLog 'FLAG' 'data' "DataPath $($settings.DataPath) is $($data.Reason); using $($data.Path)" -Always }
+Write-Status "History and logs go to $($data.Path)"
+
+# The stop event this copy waits on, tied to its folder (modules\Control.psm1). A name someone else made first
+# with open permissions is refused (exit 3). An old stop-requested marker from an earlier stop is cleared.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
+$stopEvent = New-StopEvent -Folder $PSScriptRoot -Elevated (Test-Elevated)
+Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'state\stop-requested') -ErrorAction SilentlyContinue
+# A test copy (tools\New-TestBuild.ps1 puts TESTBUILD.txt in its folder) has its own firewall rules and trace session.
+$copyKind = Get-SrrCopyKind -Folder $PSScriptRoot
+# The data drives the Storage card watches: the configured DataPath and the folder in use (they differ on fallback).
+$dataDrives = [hashtable]::Synchronized(@{ Paths = @($settings.DataPath, $data.Path) | Where-Object { $_ } })
+if ($copyKind -eq 'test') { Write-Status 'This is a test copy: it uses its own firewall rules and network trace, never the live copy''s.' }
 
 # --- Processes shown in the table under the graphs ----------------------------
 # name:  label on the page, and the switch name under Processes in the config
@@ -306,7 +394,10 @@ using System.Runtime.InteropServices;
 using System.Threading;
 
 public static class ProcessNetTrace {
-    const string SessionName = "SRRVRRNet";
+    // Set before Start(): the live copy's session is SRRVRRNet; a test copy's has its own name (modules\Control.psm1),
+    // and only the live copy clears the name used before the rename.
+    public static string SessionName = "SRRVRRNet";
+    public static bool StopLegacy = true;
     const string LegacySessionName = "SystemMonitorNet";   // name used before the rename to SRRVRR
     static readonly Guid KernelNetwork = new Guid("7DD42A49-5329-4832-8DFD-43D979153A88");
 
@@ -317,6 +408,18 @@ public static class ProcessNetTrace {
     public static string Error;
     public static long EventsSeen;           // every event delivered, for troubleshooting
     public static int TraceResult = -1;      // ProcessTrace's return code once it stops
+    // PowerShell can't run a handler on this class's own thread, so errors are kept here for the main loop to
+    // log (spec section 4): the last error's type and text, how many there have been, and whether the thread runs.
+    public static volatile string LastErrorType = "";
+    public static volatile string LastErrorText = "";
+    public static int ErrorCount;
+    public static volatile bool Alive;
+
+    static void Record(Exception e) {
+        LastErrorType = e.GetType().FullName;
+        LastErrorText = e.Message;
+        Interlocked.Increment(ref ErrorCount);
+    }
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
     static extern int StartTraceW(out ulong handle, string name, IntPtr properties);
@@ -363,7 +466,7 @@ public static class ProcessNetTrace {
     public static bool Start() {
         if (IntPtr.Size != 8) { Error = "needs 64-bit PowerShell"; return false; }
         Stop();                                  // clear a session left behind by an earlier run
-        StopSession(LegacySessionName);
+        if (StopLegacy) { StopSession(LegacySessionName); }
         ulong session;
         IntPtr props = NewProperties();
         int rc = StartTraceW(out session, SessionName, props);
@@ -383,13 +486,22 @@ public static class ProcessNetTrace {
         ulong trace = OpenTraceW(log);
         if (trace == ulong.MaxValue) { Error = "OpenTrace error " + Marshal.GetLastWin32Error(); Stop(); return false; }
 
-        Thread t = new Thread(() => { TraceResult = ProcessTrace(new ulong[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); });
+        Thread t = new Thread(() => {
+            Alive = true;
+            try { TraceResult = ProcessTrace(new ulong[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); }
+            catch (Exception e) { Record(e); }
+            finally { Alive = false; }
+        });
         t.IsBackground = true;
         t.Start();
         return true;
     }
 
     static void OnEvent(IntPtr record) {
+        try { Count(record); } catch (Exception e) { Record(e); }   // an exception must never cross into ETW
+    }
+
+    static void Count(IntPtr record) {
         Interlocked.Increment(ref EventsSeen);
         bool sent;
         switch ((ushort)Marshal.ReadInt16(record, 40)) {   // EventHeader.EventDescriptor.Id
@@ -418,6 +530,8 @@ public static class ProcessNetTrace {
     }
 }
 '@
+[ProcessNetTrace]::SessionName = Get-TraceSessionName -Folder $PSScriptRoot -Copy $copyKind
+[ProcessNetTrace]::StopLegacy = ($copyKind -eq 'live')
 $netPerProcess = [ProcessNetTrace]::Start()
 $state.netError = [ProcessNetTrace]::Error
 Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } else { "Per-program network tracking is off ($([ProcessNetTrace]::Error))." })
@@ -466,7 +580,9 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath)
+    # Select-DrivesToShow; a failure shows as drivesError on the page.
+    try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
     # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
@@ -623,8 +739,9 @@ public static class SrrvrrSensorLoader {
                     @{ bytes = 500e6; kind = 'drive' }                                            # unknown or virtual: a middle estimate
                 }
                 $drives = @()
-                foreach ($v in Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Sort-Object DeviceID) {
-                    if ([double]$v.Size -lt 1GB) { continue }   # tiny system/metadata partitions aren't storage people use
+                # Fixed drives of 1 GB or more (tiny system partitions aren't storage people use), plus the drive
+                # that holds the data folder, even removable, shown as Missing when it's gone (spec section 3).
+                foreach ($v in Select-DrivesToShow -Volumes @(Get-CimInstance Win32_LogicalDisk) -DataPaths $dataDrives.Paths) {
                     $disk = $null
                     $letter = $v.DeviceID.TrimEnd(':')
                     if ($diskOf.ContainsKey($letter)) { $disk = $health[$diskOf[$letter]] }
@@ -637,7 +754,7 @@ public static class SrrvrrSensorLoader {
                         size   = [double]$v.Size
                         free   = [double]$v.FreeSpace
                         disk   = if ($disk) { $disk.name } else { $null }
-                        health = if ($disk) { $disk.health } else { $null }
+                        health = if ($v.Missing) { 'Missing' } elseif ($disk) { $disk.health } else { $null }
                     }
                 }
                 $state.drives = $drives
@@ -764,7 +881,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1'))
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
@@ -781,20 +898,14 @@ Set-Step 'Setting up the Windows Firewall rule'
 # Other PCs can only reach the page through the firewall, so the rule is always
 # set up, and rebuilt on every start to match the current settings.
 try {
-    $firewallArgs = @{ Port = $settings.Port; Scope = $settings.FirewallScope; Addresses = $settings.FirewallAddresses }
-    Invoke-Reported -Arguments $firewallArgs -Script {
-        param($Port, $Scope, $Addresses)
-        $rule = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = $Port }
-        # Also removes the rules from before the rename to SRRVRR ('System Monitor').
-        Get-NetFirewallRule -DisplayName 'SRRVRR', 'SRRVRR (blocked)', 'System Monitor', 'System Monitor (blocked)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
-        switch ($Scope) {
-            'LocalSubnet' { New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null }
-            'Allowlist'   { New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress $Addresses -Action Allow -ErrorAction Stop | Out-Null }
-            'Blocklist'   {
-                # Local network, minus the listed addresses (Windows applies Block rules first).
-                New-NetFirewallRule -DisplayName 'SRRVRR' @rule -RemoteAddress LocalSubnet -Action Allow -ErrorAction Stop | Out-Null
-                New-NetFirewallRule -DisplayName 'SRRVRR (blocked)' @rule -RemoteAddress $Addresses -Action Block -ErrorAction Stop | Out-Null
-            }
+    # This copy's own rules only (modules\Control.psm1): a test copy's names never touch the live copy's.
+    $firewallPlan = Get-FirewallRulePlan -Copy $copyKind -Scope $settings.FirewallScope -Addresses $settings.FirewallAddresses -Port $settings.Port
+    Invoke-Reported -Arguments @{ Plan = $firewallPlan } -Script {
+        param($Plan)
+        Get-NetFirewallRule -DisplayName $Plan.Remove -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+        foreach ($r in $Plan.Add) {
+            New-NetFirewallRule -DisplayName $r.DisplayName -Group $r.Group -Direction Inbound -Protocol TCP -LocalPort $r.LocalPort `
+                -RemoteAddress $r.RemoteAddress -Action $r.Action -ErrorAction Stop | Out-Null
         }
     } | Out-Null
     $who = if ($settings.FirewallScope -in 'Allowlist', 'Blocklist') { "$($settings.FirewallScope): $($settings.FirewallAddresses -join ', ')" } else { $settings.FirewallScope }
@@ -804,10 +915,12 @@ try {
 }
 
 Set-Step 'Starting the web page server'
-# Listens on every address this machine has: its network IP, its name and localhost.
+# Elevated, it listens on every address this machine has: its network IP, its name and localhost. Not elevated,
+# on localhost only (Windows refuses the rest), so only this machine can open the page.
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://+:$($settings.Port)/")
+$listener.Prefixes.Add((Get-ListenerPrefix -Elevated (Test-Elevated) -Port $settings.Port))
 try {
+    if (-not (Test-Elevated)) { throw 'not elevated' }   # straight to the localhost listener below
     $listener.Start()
     $url = "http://$($env:COMPUTERNAME):$($settings.Port)"
     # Also show the network IP (of the adapter with the default route), which works even where names don't.
@@ -830,6 +943,7 @@ try {
 Set-Step 'Reticulating Splines...'
 Stop-StartupSpinner
 Write-Host "SRRVRR running at $url"
+Write-SrrLog 'INFO' 'startup' "serving at $url"
 
 # A spinner on the last console line shows the monitor is alive. Skipped when
 # output goes to a file instead of a console window.
@@ -857,10 +971,57 @@ $webContext = @{
 }
 $identityRead = [DateTime]::UtcNow
 
+# Once a second, between requests: log sampler errors (throttled), the network tracer's errors, and stop with a
+# crash code if a background worker has died, so whatever started SRRVRR starts it again (spec section 4).
+$workers = @(@{ Name = 'fast sampler'; PowerShell = $worker }, @{ Name = 'slow sampler'; PowerShell = $slowWorker })
+$tracerLogged = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $netPerProcess }
+$watched = [DateTime]::UtcNow
+$shareCheckedAt = [DateTime]::UtcNow; $shareFlagged = $false; $lastStateErrors = @{}
+function Invoke-Watch {
+    # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
+    # library would otherwise fill the log); errors that come and go are still held to once a minute.
+    foreach ($k in 'error', 'drivesError', 'tempError') {
+        $v = $state[$k]
+        if ($v -and $v -ne $script:lastStateErrors[$k]) { Write-SrrError $(if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }) "${k}: $v" }
+        $script:lastStateErrors[$k] = $v
+    }
+    if ($netPerProcess) {
+        $now = @{ ErrorText = [ProcessNetTrace]::LastErrorText; ErrorType = [ProcessNetTrace]::LastErrorType; ErrorCount = [ProcessNetTrace]::ErrorCount; Alive = [ProcessNetTrace]::Alive }
+        $entry = Get-TracerLogEntry -Current $now -LastLogged $script:tracerLogged
+        if ($entry) { Write-SrrLog $entry.Level 'network-tracer' $entry.Message; $script:tracerLogged = $now }
+    }
+    # Once a day: a share that appeared on the data folder since the start is flagged (once), not a stop.
+    if (([DateTime]::UtcNow - $script:shareCheckedAt).TotalHours -ge 24) {
+        $script:shareCheckedAt = [DateTime]::UtcNow
+        try {
+            $share = Test-PathInShare -Path $dataFolder.Path -Shares (Get-ShareList)
+            if ($share -and -not $script:shareFlagged) {
+                $script:shareFlagged = $true
+                Write-SrrLog 'FLAG' 'data' "the data folder $($dataFolder.Path) is now shared on the network (share '$($share.Name)'); stop sharing it" -Always
+            }
+        } catch { Write-SrrError 'data' "couldn't check the shared folders: $($_.Exception.Message)" }
+    }
+    $health = Test-WorkerHealth -Workers $workers
+    if (-not $health.Healthy) {
+        $why = $health.Reason + $(if ($state.error) { " ($($state.error))" })
+        foreach ($e in $health.Errors) { Write-SrrLog 'ERROR' 'worker' $e -Always }
+        Write-SrrLog 'ERROR' 'worker' $why -Always
+        Write-Host ''; Write-Host "SRRVRR stopped: $why" -ForegroundColor Red
+        Exit-SRRVRR -Code $health.ExitCode -Reason "crash: $($health.Reason)"
+    }
+}
+
 try {
     while ($listener.IsListening) {
         $pending = $listener.BeginGetContext($null, $null)
-        while (-not $pending.AsyncWaitHandle.WaitOne(50)) { Show-Spinner }   # short waits keep Ctrl+C responsive
+        # Wait for a request or the stop event, 50 ms at a time so Ctrl+C stays responsive.
+        while ($true) {
+            $woke = [System.Threading.WaitHandle]::WaitAny(@($pending.AsyncWaitHandle, $stopEvent), 50)
+            if ($woke -eq 0) { break }
+            if ($woke -eq 1) { Invoke-GracefulStop 'requested' }
+            Show-Spinner
+            if (([DateTime]::UtcNow - $watched).TotalSeconds -ge 1) { $watched = [DateTime]::UtcNow; Invoke-Watch }
+        }
         Show-Spinner
         $ctx = $listener.EndGetContext($pending)
         # Addresses can change (a new DHCP lease), so the allowlist is rebuilt once a minute.
@@ -869,13 +1030,18 @@ try {
             $identityRead = [DateTime]::UtcNow
         }
         Invoke-SrrRequest -ListenerContext $ctx -Context $webContext
+        if (([DateTime]::UtcNow - $watched).TotalSeconds -ge 1) { $watched = [DateTime]::UtcNow; Invoke-Watch }   # busy pages too
     }
 } finally {
     if ($spinner) { [Console]::WriteLine("`r  Stopped.                                "); try { [Console]::CursorVisible = $true } catch { } }
+    # Ctrl+C ends the loop without passing through Exit-SRRVRR; it's a clean stop too (spec section 5).
+    $ctrlC = -not $script:srrExiting
+    if ($ctrlC) { Invoke-StopSavers }
     $listener.Stop()
     if ($netPerProcess) { [ProcessNetTrace]::Stop() }
     $worker.Stop()
     $runspace.Close()
     $slowWorker.Stop()
     $slowRunspace.Close()
+    if ($ctrlC) { Exit-SRRVRR -Code 0 -Reason 'Ctrl+C' }
 }

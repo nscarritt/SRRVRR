@@ -127,6 +127,19 @@ function Get-ServiceRows {
     @{ Rows = $rows; CpuTimes = $nextCpuTimes }
 }
 
+# What to log about the network tracer, given its status now and when it was last logged (each a hashtable of
+# ErrorText, ErrorType, ErrorCount, Alive): $null, or @{ Level; Message } when the error count rose or the
+# tracer's thread stopped.
+function Get-TracerLogEntry {
+    param([hashtable]$Current, [hashtable]$LastLogged)
+    if ($LastLogged.Alive -and -not $Current.Alive) { return @{ Level = 'ERROR'; Message = "network tracer thread stopped$(if ($Current.ErrorText) { " (last error: $($Current.ErrorType): $($Current.ErrorText))" })" } }
+    if ($Current.ErrorCount -gt $LastLogged.ErrorCount) {
+        $new = $Current.ErrorCount - $LastLogged.ErrorCount   # errors since the last line, this one included
+        return @{ Level = 'ERROR'; Message = "network tracer: $($Current.ErrorType): $($Current.ErrorText)$(if ($new -gt 1) { " ($new more since the last line)" })" }
+    }
+    $null
+}
+
 # Everything the fast tick needs that isn't the state itself. CpuTimes is kept here between ticks.
 function New-FastTickContext {
     param(
@@ -179,4 +192,4 @@ function Invoke-FastTick {
 }
 
 Export-ModuleMember -Function Get-CounterDelta, Get-CounterSum, Get-CpuTotal, Get-GpuUsage, Get-GpuMemory, Get-DiskIO,
-    Get-PrivateMemory, Get-ServiceRows, New-FastTickContext, Invoke-FastTick
+    Get-PrivateMemory, Get-ServiceRows, Get-TracerLogEntry, New-FastTickContext, Invoke-FastTick
