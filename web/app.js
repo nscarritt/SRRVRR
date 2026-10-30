@@ -44,7 +44,7 @@ function since(sec) {               // 273600 -> "3 days, 4 hours"
 function showTemp(id, t, warn, hot, error, each, none) {
   const el = $(id), deg = String.fromCharCode(176) + 'C';
   el.textContent = t != null ? Math.round(t) + deg : error ? 'Temp n/a' : none ? 'No sensor' : '';
-  el.className = 'temp' + (t != null ? (t >= hot ? ' hot' : t >= warn ? ' warn' : '') : error ? ' warn' : none ? ' none' : '');
+  el.className = 'temp' + (t != null ? (t >= hot ? ' hot' : t >= warn ? ' warn' : '') : error || none ? ' none' : '');
   el.title = t == null && error ? 'Temperature unavailable: ' + error : t == null && none ? none : (each || []).map(x => x.name + ': ' + x.t + deg).join('\n');
 }
 // The sensors were read (the CPU answered) but no memory stick reported a temperature.
