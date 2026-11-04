@@ -60,7 +60,9 @@ function Get-HostIdentity {
 function New-StatsSnapshot {
     param([hashtable]$State, [DateTimeOffset]$BootTime, [DateTimeOffset]$Now)
     $snapshot = @{}
-    foreach ($k in @($State.Keys)) { $snapshot[$k] = $State[$k] }
+    # Under the table's lock: the samplers write to it every second, and a write ends any walk of its keys.
+    [Threading.Monitor]::Enter($State.SyncRoot)
+    try { foreach ($k in @($State.Keys)) { $snapshot[$k] = $State[$k] } } finally { [Threading.Monitor]::Exit($State.SyncRoot) }
     $snapshot.uptime = [int]($Now - $BootTime).TotalSeconds
     $snapshot
 }

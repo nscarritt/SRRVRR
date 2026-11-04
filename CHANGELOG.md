@@ -41,6 +41,8 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Changed
 
+- **Fixed:** the page now and then got an error instead of the numbers ("Collection was modified"):
+  `/stats` now copies the readings under their lock.
 - **Stopping is clean.** `Stop SRRVRR.bat` (`SRRVRR.ps1 -Stop`) now stops only the SRRVRR in its own
   folder, by signalling it to save and close, and ends it only if it hasn't closed after 10 seconds.
   Ctrl+C is a clean stop too. Closing the window is still a hard stop. A settings error now exits
