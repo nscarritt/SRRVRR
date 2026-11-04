@@ -669,6 +669,9 @@ line and the crash log in #48; their event-log side is tested in #50 (T50-13, T5
 | T50-54 | B1-B7, B10 | P | Test build, 60 s, 200 events in memory, `/events` and `/history` requested by a second thread | Within budgets; `/stats` size grows only by the events it carries (at most 50) | NTB, MS |
 | T50-55 | B8, M1-M6, FL1, N1, N2 | A | `docs\uat\50-events.md` | Tick Maintenance in one browser: the other shows it, no banners or dings, events logged with `"maintenance": true`, the log has the address. Valheim / Plex banners come from the server (open a page after an event: no replay). The Flagged list shows the last 31 days. Sound toggle per browser | UC |
 | T50-56 | B2 | P | 60-minute soak of the release candidate and of the previous release, same machine, same way (`Measure-SRRVRR.ps1 -SoakMinutes 60`) | Private bytes after 60 minutes within 25 MB of the previous release's; recorded in `tools\budgets.psd1` for the next release | NTB, MS |
+| T50-57 | L1, E3 | U | Review Focus 3: a fake clock across a spring-forward and a fall-back change (Central time) | Events in the missing and the repeated hour land in that local date's file; ids strictly increasing throughout | CLK |
+| T50-58 | B3, B7 | P | Review Focus 4: 10 clients polling `/stats` every 0.5 s for 60 s | `/stats` p95 within 30 ms; tick median within budget | NTB, MS |
+| T50-59 | M5 | U | Review Focus 5: `maintenance.json` with `untilMs` in the past at start | Maintenance off; one "Maintenance ended" (maintenance-off, expired) record with the original end time; the next join is bannered | FX maintenance, CLK |
 
 ### 6.5 #51 README: running SRRVRR at boot
 
@@ -698,7 +701,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 |---|---|---|---|
 | B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54 |
 | B2 | Budgets | Private bytes after 60 min within 25 MB of the previous release | T50-56 (soak before the release; the per-PR runs record the 60 s figure) |
-| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54 |
+| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58 |
 | B4 | Budgets | Page load 150 ms | T47-28 |
 | B5 | Budgets | Startup to serving 20 s | T47-28, T48-51 |
 | B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54 |
@@ -759,7 +762,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | E8 | 4 | Names, users, devices and titles in memory only; logs get counts | T50-07, T50-19 |
 | E9 | 4 | One writer: a shared queue drained by the main loop | T48-64, T50-05, T50-06 |
 | E10 | 4 | The published event array is never changed in place | T50-04, T50-05 |
-| L1 | 4 | `events-YYYY-MM-DD.jsonl` by local date, one object per line | T50-18, T50-26 |
+| L1 | 4 | `events-YYYY-MM-DD.jsonl` by local date, one object per line | T50-18, T50-26, T50-57 |
 | L2 | 4 | Cleanup: after start and daily; regular files only, exact pattern, name date, 7-day floor, skipped on a bad clock | T50-22, T50-23, T50-24, T50-25 |
 | C1 | 4 | Crash log content: steps, settings problems, sampler errors, worker failures | T48-21, T48-32, T48-64 |
 | C2 | 4 | The `trap` writes type, message, line and stack | T48-55, T48-56, T48-59 |
@@ -775,7 +778,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | M2 | 4 | Lasts `MaintenanceHours`, switches itself off | T50-27 |
 | M3 | 4 | While on: no banners or dings; events logged with `"maintenance": true` | T50-28, T50-47 |
 | M4 | 4 | "Maintenance until HH:MM" from `untilMs`, in the browser's time | T50-47 |
-| M5 | 4 | Saved to `state\maintenance.json`, survives a restart | T50-29, T50-52 |
+| M5 | 4 | Saved to `state\maintenance.json`, survives a restart | T50-29, T50-52, T50-59 |
 | M6 | 4 | Each change logged with the requesting address | T50-32 |
 | M7 | 4, 8 | The request guard; no preflight permission | T50-36, T50-37 |
 | M8 | 4 | Any device that can open the page may tick it (accepted risk) | T50-35 (behavior); the risk itself is the owner's call, not testable |
