@@ -81,4 +81,116 @@ function Invoke-QueueDrain {
     $kept.Count
 }
 
-Export-ModuleMember -Function New-EventId, New-SrrEvent, New-SrrError, New-SrrQueue, Add-SrrQueueItem, New-EventStore, Invoke-QueueDrain
+# The starting set of events (spec section 4): severity, whether it shows a banner, whether it's logged.
+$script:EventTypes = @{
+    'player-join' = @{ Severity = 'info'; Banner = $true; Logged = $false }
+    'player-leave' = @{ Severity = 'info'; Banner = $true; Logged = $false }
+    'plex-stream' = @{ Severity = 'info'; Banner = $true; Logged = $false }
+    'service-offline' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
+    'service-back' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
+    'query-stopped' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
+    'query-back' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
+    'restart-pending' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'drive-health' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'data-drive-missing' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'data-fallback' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'share-found' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'history-save-failed' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
+    'sampler-error' = @{ Severity = 'warn'; Banner = $false; Logged = $true }
+    'worker-stopped' = @{ Severity = 'warn'; Banner = $false; Logged = $true }
+    'maintenance-on' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'maintenance-off' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'started' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'stopped' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+}
+
+function Get-EventTypes { $script:EventTypes.Clone() }
+
+# An event of a known type, its severity, banner and logging taken from the table. Key defaults to the type.
+function New-TypedEvent {
+    param([string]$Type, [hashtable]$Data = @{}, [string]$Key)
+    $t = $script:EventTypes[$Type]
+    if (-not $t) { throw "Unknown event type '$Type'." }
+    if (-not $Key) { $Key = $Type }
+    New-SrrEvent -Type $Type -Severity $t.Severity -Key $Key -Data $Data -Banner $t.Banner -Logged $t.Logged
+}
+
+# A list comes back unrolled, so an empty one is $null: use Test-Field to ask whether it's there.
+function Get-Field([object]$Table, [string]$Name) {
+    if ($Table -is [Collections.IDictionary] -and $Table.Contains($Name)) { $Table[$Name] } else { $null }
+}
+function Test-Field([object]$Table, [string]$Name) { $Table -is [Collections.IDictionary] -and $Table.Contains($Name) }
+
+# What changed between two readings of the state. Nothing on the first observation (no replay): a section missing
+# from either reading raises nothing. Maintenance, start and stop, the data folder, history saves and errors are
+# raised by their owners with New-TypedEvent.
+function Get-StateEvents {
+    param([object]$Old, [object]$New)
+    $out = New-Object System.Collections.Generic.List[object]
+    if (-not $Old -or -not $New) { return }
+    $oa = Get-Field $Old 'activity'; $na = Get-Field $New 'activity'
+    foreach ($name in 'Valheim', 'Plex') {
+        $o = Get-Field $oa $name; $n = Get-Field $na $name
+        if (-not $o -or -not $n) { continue }
+        $oErr = Get-Field $o 'error'; $nErr = Get-Field $n 'error'
+        if (-not $oErr -and $nErr -and (Get-Field $n 'alert')) { $out.Add((New-TypedEvent -Type 'query-stopped' -Data @{ name = $name; error = [string]$nErr } -Key "query-stopped|$name")) }
+        elseif ($oErr -and (Get-Field $o 'alert') -and -not $nErr) { $out.Add((New-TypedEvent -Type 'query-back' -Data @{ name = $name } -Key "query-back|$name")) }
+        if ($oErr -or $nErr) { continue }
+        if ($name -eq 'Valheim') {
+            $op = Get-Field $o 'players'; $np = Get-Field $n 'players'
+            if ($null -eq $op -or $null -eq $np -or $op -eq $np) { continue }
+            $oNames = @(Get-Field $o 'names' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'name' })
+            $nNames = @(Get-Field $n 'names' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'name' })
+            $up = $np -gt $op
+            $who = if ($up) { @($nNames | Where-Object { $oNames -notcontains $_ }) } else { @($oNames | Where-Object { $nNames -notcontains $_ }) }
+            $type = if ($up) { 'player-join' } else { 'player-leave' }
+            $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who } -Key "$type|$np|$($who -join ',')"))
+        } else {
+            if (-not (Test-Field $o 'items') -or -not (Test-Field $n 'items')) { continue }
+            $oKeys = @(Get-Field $o 'items' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'key' })
+            foreach ($i in @(Get-Field $n 'items' | Where-Object { $_ })) {
+                $k = Get-Field $i 'key'
+                if (-not $k -or $oKeys -contains $k) { continue }
+                $data = @{}; foreach ($f in $i.Keys) { $data[$f] = $i[$f] }
+                $out.Add((New-TypedEvent -Type 'plex-stream' -Data $data -Key "plex-stream|$k"))
+            }
+        }
+    }
+    $os = @{}; foreach ($s in @(Get-Field $Old 'services' | Where-Object { $_ })) { $os[[string](Get-Field $s 'name')] = [bool](Get-Field $s 'online') }
+    foreach ($s in @(Get-Field $New 'services' | Where-Object { $_ })) {
+        $name = [string](Get-Field $s 'name'); $on = [bool](Get-Field $s 'online')
+        if (-not $os.ContainsKey($name) -or $os[$name] -eq $on) { continue }
+        $type = if ($on) { 'service-back' } else { 'service-offline' }
+        $out.Add((New-TypedEvent -Type $type -Data @{ name = $name } -Key "$type|$name"))
+    }
+    if ($Old -is [Collections.IDictionary] -and $Old.Contains('restartPending') -and -not $Old['restartPending'] -and (Get-Field $New 'restartPending')) {
+        $out.Add((New-TypedEvent -Type 'restart-pending' -Data @{ reason = [string](Get-Field $New 'restartReason') }))
+    }
+    $od = @{}; foreach ($d in @(Get-Field $Old 'drives' | Where-Object { $_ })) { $od[[string](Get-Field $d 'letter')] = [string](Get-Field $d 'health') }
+    foreach ($d in @(Get-Field $New 'drives' | Where-Object { $_ })) {
+        $letter = [string](Get-Field $d 'letter'); $health = [string](Get-Field $d 'health')
+        if (-not $od.ContainsKey($letter) -or $od[$letter] -eq $health) { continue }
+        $type = if ($health -eq 'Missing') { 'data-drive-missing' } else { 'drive-health' }
+        $out.Add((New-TypedEvent -Type $type -Data @{ letter = $letter; health = $health; was = $od[$letter] } -Key "$type|$letter|$health"))
+    }
+    $out
+}
+
+# The copy of an event that goes to a log: no player, user or device names and no titles, only counts (spec 4).
+function ConvertTo-LoggedEvent {
+    param([object]$Item)
+    $data = [ordered]@{}
+    foreach ($k in @($Item.data.Keys)) { if ($k -notin 'who', 'names', 'user', 'title', 'device', 'app', 'key') { $data[$k] = $Item.data[$k] } }
+    [ordered]@{ id = $Item.id; time = $Item.time; type = $Item.type; severity = $Item.severity; maintenance = $Item.maintenance; data = $data }
+}
+
+# The drain's Event writer for an events-YYYY-MM-DD.jsonl daily log: one JSON object per line, flags written past
+# the daily cap.
+function New-EventLogWriter {
+    param([Parameter(Mandatory)][object]$Log)
+    $convert = ${function:ConvertTo-LoggedEvent}
+    { param($e) $Log.Write((ConvertTo-Json -InputObject (& $convert $e) -Compress -Depth 5), ($e.severity -eq 'flag')) }.GetNewClosure()
+}
+
+Export-ModuleMember -Function New-EventId, New-SrrEvent, New-SrrError, New-SrrQueue, Add-SrrQueueItem, New-EventStore, Invoke-QueueDrain,
+    Get-EventTypes, New-TypedEvent, Get-StateEvents, ConvertTo-LoggedEvent, New-EventLogWriter
