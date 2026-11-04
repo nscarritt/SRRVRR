@@ -75,10 +75,12 @@ test('T49-28 visibleSlice shows the last 60 or 900 values', () => {
 });
 
 test('T49-28 toSegments splits the line at missing values (a gap, not a drop to zero)', () => {
-  const segs = app.toSegments([1, 2, null, null, 5, NaN, 7, 8]);
+  // Copied out of the sandbox: its arrays have their own Array prototype, which deepStrictEqual rejects.
+  const plain = x => JSON.parse(JSON.stringify(x));
+  const segs = plain(app.toSegments([1, 2, null, null, 5, NaN, 7, 8]));
   assert.deepStrictEqual(segs.map(s => s.map(p => p.i)), [[0, 1], [4], [6, 7]]);
   assert.deepStrictEqual(segs.map(s => s.map(p => p.v)), [[1, 2], [5], [7, 8]]);
-  assert.deepStrictEqual(app.toSegments([null, null]), []);
+  assert.deepStrictEqual(plain(app.toSegments([null, null])), []);
 });
 
 test('T49-27 site data blocked (no localStorage at all): 60, and saving does nothing', () => {
