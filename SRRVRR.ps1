@@ -78,7 +78,19 @@ function Switch-DataToFallback([string]$Why) {
     $script:dataFolder.Path = $PSScriptRoot; $script:dataFolder.IsFallback = $true
     if ($script:dataDrives) { $script:dataDrives.Paths = @($settings.DataPath, $PSScriptRoot) | Where-Object { $_ } }
     $srrLog.SetFolder((Join-Path $PSScriptRoot 'logs'))
+    if ($script:eventLog) { $script:eventLog.SetFolder((Join-Path $PSScriptRoot 'logs')) }
     Write-SrrLog 'FLAG' 'data' "$Why; history and logs now go to $PSScriptRoot until the next restart" -Always
+    Add-SrrEvent 'data-fallback' @{ reason = $Why }
+}
+# Raises an event (modules\Events.psm1); the main loop's drain gives it an id, logs it and publishes it.
+function Add-SrrEvent([string]$Type, [hashtable]$Data = @{}, [string]$Key) {
+    if (-not $script:eventQueue) { return }
+    Add-SrrQueueItem -Queue $script:eventQueue -Item (New-TypedEvent -Type $Type -Data $Data -Key $Key)
+}
+function Invoke-EventDrain {
+    if (-not $script:eventQueue) { return }
+    try { Invoke-QueueDrain -Queue $script:eventQueue -Store $script:eventStore -Writers $script:eventWriters -Clock { [DateTimeOffset]::Now } | Out-Null }
+    catch { Write-SrrError 'events' "couldn't handle the events: $($_.Exception.Message)" }
 }
 # An error, written at most once a minute with a count of repeats (key: the error itself).
 function Write-SrrError([string]$Source, [string]$Message) {
@@ -165,6 +177,8 @@ function Exit-SRRVRR([int]$Code, [string]$Reason) {
         $pending = $srrThrottle.Flush()
         foreach ($k in $pending.Keys) { $src, $msg = $k -split '\|', 2; Write-SrrLog 'ERROR' $src "$msg (repeated $($pending[$k]) more times)" -Always }
     }
+    Add-SrrEvent 'stopped' @{ reason = $Reason; exitCode = $Code }
+    Invoke-EventDrain
     $line = if (Get-Command Format-StopLine -ErrorAction SilentlyContinue) { Format-StopLine -Reason $Reason -Code $Code } else { "stopped: $Reason (exit $Code)" }
     Write-SrrLog $(if ($Code) { 'ERROR' } else { 'INFO' }) 'srrvrr' $line -Always
     exit $Code
@@ -220,6 +234,18 @@ foreach ($n in $data.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warnin
 if ($data.IsFallback) { Write-SrrLog 'FLAG' 'data' "DataPath $($settings.DataPath) is $($data.Reason); using $($data.Path)" -Always }
 Write-Status "History and logs go to $($data.Path)"
 
+# Events (modules\Events.psm1): any thread adds to the queue; the main loop drains it once a second, writing the
+# logged ones to logs\events-YYYY-MM-DD.jsonl and keeping the last 200 for /stats.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Events.psm1') -Force
+$eventLog = New-DailyLog -Folder (Join-Path $data.Path 'logs') -Prefix 'events' -Extension 'jsonl' -Clock { [DateTimeOffset]::Now }
+$eventQueue = New-SrrQueue
+$eventStore = New-EventStore -Clock { [DateTimeOffset]::Now }
+$eventWriters = @{
+    Event = New-EventLogWriter -Log $eventLog
+    Error = { param($source, $message) Write-SrrError $source $message }
+}
+if ($data.IsFallback) { Add-SrrEvent 'data-fallback' @{ reason = "DataPath $($settings.DataPath) is $($data.Reason)" } }
+
 # 15 minutes of graph history (modules\History.psm1): the fast sampler adds a reading a second; it's saved every
 # 5 minutes and on a clean stop, and loaded at the start when its newest reading is under 15 minutes old.
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\History.psm1') -Force
@@ -239,6 +265,7 @@ function Save-HistoryNow {
     } catch { $why = "couldn't save the history: $($_.Exception.Message)" }
     try { [Console]::WriteLine(''); Write-Host "  $why" -ForegroundColor Yellow } catch { }
     Write-SrrError 'history' $why
+    Add-SrrEvent 'history-save-failed' @{ error = $why }
 }
 $stopSavers.Add(@{ Name = 'the graph history'; Save = { Save-HistoryNow } })
 
@@ -964,6 +991,7 @@ Set-Step 'Reticulating Splines...'
 Stop-StartupSpinner
 Write-Host "SRRVRR running at $url"
 Write-SrrLog 'INFO' 'startup' "serving at $url"
+Add-SrrEvent 'started' @{ copy = $copyKind }
 
 # A spinner on the last console line shows the monitor is alive. Skipped when
 # output goes to a file instead of a console window.
@@ -989,6 +1017,8 @@ $webContext = @{
     BootTime = [DateTimeOffset]$bootTime
     Clock    = { [DateTimeOffset]::Now }
     LogError = { param($message) [Console]::WriteLine(''); Write-Host "  $message" -ForegroundColor Yellow }
+    Events   = $eventStore
+    LogRetentionDays = $settings.LogRetentionDays
 }
 $identityRead = [DateTime]::UtcNow
 
@@ -998,14 +1028,35 @@ $workers = @(@{ Name = 'fast sampler'; PowerShell = $worker }, @{ Name = 'slow s
 $tracerLogged = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $netPerProcess }
 $watched = [DateTime]::UtcNow
 $shareCheckedAt = [DateTime]::UtcNow; $shareFlagged = $false; $lastStateErrors = @{}
+$lastReading = $null
+# What event detection compares from one second to the next. The slow sampler changes its activity table in place,
+# so the Valheim and Plex entries (replaced whole on each reading) are copied out of it.
+function Get-DetectionReading {
+    $activity = $state.activity
+    @{
+        activity = if ($activity) { @{ Valheim = $activity['Valheim']; Plex = $activity['Plex'] } } else { $null }
+        services = $state.services; drives = $state.drives
+        restartPending = $state.restartPending; restartReason = $state.restartReason
+    }
+}
 function Invoke-Watch {
     # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
     # library would otherwise fill the log); errors that come and go are still held to once a minute.
     foreach ($k in 'error', 'drivesError', 'tempError') {
         $v = $state[$k]
-        if ($v -and $v -ne $script:lastStateErrors[$k]) { Write-SrrError $(if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }) "${k}: $v" }
+        if ($v -and $v -ne $script:lastStateErrors[$k]) {
+            $source = if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }
+            Write-SrrError $source "${k}: $v"
+            Add-SrrEvent 'sampler-error' @{ source = $source; error = "${k}: $v" } "sampler-error|$k|$v"
+        }
         $script:lastStateErrors[$k] = $v
     }
+    # Events decided on the server, with or without a page open (spec section 4).
+    $reading = Get-DetectionReading
+    try { foreach ($e in Get-StateEvents -Old $script:lastReading -New $reading) { Add-SrrQueueItem -Queue $eventQueue -Item $e } }
+    catch { Write-SrrError 'events' "couldn't compare the readings: $($_.Exception.Message)" }
+    $script:lastReading = $reading
+    Invoke-EventDrain
     if ($netPerProcess) {
         $now = @{ ErrorText = [ProcessNetTrace]::LastErrorText; ErrorType = [ProcessNetTrace]::LastErrorType; ErrorCount = [ProcessNetTrace]::ErrorCount; Alive = [ProcessNetTrace]::Alive }
         $entry = Get-TracerLogEntry -Current $now -LastLogged $script:tracerLogged
@@ -1019,6 +1070,7 @@ function Invoke-Watch {
             if ($share -and -not $script:shareFlagged) {
                 $script:shareFlagged = $true
                 Write-SrrLog 'FLAG' 'data' "the data folder $($dataFolder.Path) is now shared on the network (share '$($share.Name)'); stop sharing it" -Always
+                Add-SrrEvent 'share-found' @{ reason = 'the data folder is now shared on the network' }
             }
         } catch { Write-SrrError 'data' "couldn't check the shared folders: $($_.Exception.Message)" }
     }
@@ -1028,6 +1080,7 @@ function Invoke-Watch {
         $why = $health.Reason + $(if ($state.error) { " ($($state.error))" })
         foreach ($e in $health.Errors) { Write-SrrLog 'ERROR' 'worker' $e -Always }
         Write-SrrLog 'ERROR' 'worker' $why -Always
+        Add-SrrEvent 'worker-stopped' @{ error = $why }
         Write-Host ''; Write-Host "SRRVRR stopped: $why" -ForegroundColor Red
         Exit-SRRVRR -Code $health.ExitCode -Reason "crash: $($health.Reason)"
     }
