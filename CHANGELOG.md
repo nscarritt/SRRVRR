@@ -11,6 +11,12 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Added
 
+- **15 minutes of graph history.** SRRVRR keeps the last 15 minutes of CPU, memory, GPU and network
+  readings, so a page you open starts with full graphs, and a **60 s / 15 min** button (remembered per
+  browser) shows either range. Missing seconds show as gaps. The history is saved to
+  `state\history.json` every 5 minutes and on a clean stop, and comes back after a restart.
+  New: `GET /history`. ([#49](https://github.com/nscarritt/SRRVRR/issues/49))
+
 - **A crash and error log**, `logs\srrvrr-YYYY-MM-DD.log`: every startup step, settings problems,
   errors from the background readers, crashes with their details, and a last line saying why SRRVRR
   stopped and its exit code. 20 MB a day at most (old files are removed once the event log arrives).
