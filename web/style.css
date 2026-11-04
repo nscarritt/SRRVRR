@@ -82,6 +82,10 @@ tr.detail .warn{color:var(--warn)}
 /* Sound on/off for alerts (bell icons from Lucide) */
 #sound{font:inherit;font-size:12.5px;color:var(--muted);background:none;border:1px solid var(--border);border-radius:999px;padding:1px 9px;margin-left:10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 #sound:hover,#sound[data-on="1"]{color:var(--text)}
+#range{display:inline-flex;margin-left:10px;border:1px solid var(--border);border-radius:999px;overflow:hidden;vertical-align:middle}
+#range button{font:inherit;font-size:12.5px;color:var(--muted);background:none;border:0;padding:1px 9px;cursor:pointer;white-space:nowrap}
+#range button:hover,#range button[aria-pressed="true"]{color:var(--text)}
+#range button[aria-pressed="true"]{background:var(--border)}
 #sound .ticon{width:13px;height:13px}
 header{flex-wrap:wrap}
 #sound .v-on,#sound[data-on="1"] .v-off{display:none}

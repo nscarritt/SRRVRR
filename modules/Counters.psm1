@@ -144,12 +144,12 @@ function Get-TracerLogEntry {
 function New-FastTickContext {
     param(
         [scriptblock]$Reader, [scriptblock]$Processes, [scriptblock]$Tracer, [object[]]$Services, [double]$TotalRam,
-        [string]$GpuLuid, [int]$Cores, [string[]]$CpuCounter, $TickStopwatch, $IntervalStopwatch
+        [string]$GpuLuid, [int]$Cores, [string[]]$CpuCounter, $TickStopwatch, $IntervalStopwatch, $History
     )
     @{
         Reader = $Reader; Processes = $Processes; Tracer = $Tracer; Services = $Services; TotalRam = $TotalRam
         GpuLuid = $GpuLuid; Cores = $Cores; CpuCounter = $CpuCounter; TickStopwatch = $TickStopwatch
-        IntervalStopwatch = $IntervalStopwatch; CpuTimes = @{}
+        IntervalStopwatch = $IntervalStopwatch; CpuTimes = @{}; History = $History
     }
 }
 
@@ -183,6 +183,13 @@ function Invoke-FastTick {
             $State.tickMs = [int][math]::Round($Context.TickStopwatch.Elapsed.TotalMilliseconds)
             $State.error = $null
             $State.ready = $true
+            # The graph history (modules\History.psm1): memory as a percent of the total, like the page draws it.
+            if ($Context.History) {
+                $ms = $Now.ToUnixTimeMilliseconds(); $h = $Context.History
+                $h.Append('cpu', $State.cpu, $ms); $h.Append('gpu', $State.gpu, $ms)
+                $h.Append('mem', $(if ($Context.TotalRam) { [math]::Round(100 * $State.memUsed / $Context.TotalRam, 1) }), $ms)
+                $h.Append('rx', $State.rx, $ms); $h.Append('tx', $State.tx, $ms)
+            }
         }
         return $cur
     } catch {

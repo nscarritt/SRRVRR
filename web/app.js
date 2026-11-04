@@ -1,5 +1,30 @@
-const N = 60, hist = {cpu: [], mem: [], gpu: [], rx: [], tx: []};
-let lastTs = 0;
+// The graphs keep 15 minutes (900 seconds) and show the last 60 s or all 15 min, as chosen (remembered per browser).
+const N = 900, LINES = ['cpu', 'mem', 'gpu', 'rx', 'tx'];
+let hist = {cpu: [], mem: [], gpu: [], rx: [], tx: []};
+let lastTs = 0, range = 60;
+const missing = v => v == null || Number.isNaN(v);
+function rangeFromStorage(storage) {
+  try { return storage.getItem('srrvrr.range') === '900' ? 900 : 60; } catch (e) { return 60; }
+}
+function saveRange(storage, r) { try { storage.setItem('srrvrr.range', String(r)); } catch (e) {} }
+const visibleSlice = (buffer, r) => buffer.slice(-r);
+// [1, 2, null, 5] -> [[{i:0,v:1}, {i:1,v:2}], [{i:3,v:5}]]: a missing second is a gap in the line.
+function toSegments(values) {
+  const out = []; let cur = null;
+  values.forEach((v, i) => {
+    if (missing(v)) { cur = null; return; }
+    if (!cur) { cur = []; out.push(cur); }
+    cur.push({i, v});
+  });
+  return out;
+}
+// /history -> the page's buffers (only the lines the page draws; nulls kept as gaps).
+function fillFromHistory(json) {
+  const h = {newestMs: json.newestMs};
+  for (const n of LINES) h[n] = Array.isArray(json.lines && json.lines[n]) ? json.lines[n].slice(-N) : [];
+  return h;
+}
+const shouldRefetchHistory = (wasDown, nowOk) => wasDown && nowOk;
 const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const push = (a, v) => { a.push(v); if (a.length > N) a.shift(); };
@@ -15,7 +40,7 @@ function niceMax(v) {               // round the network scale up to 1/2/5 x 10^
   const b = Math.max(v * 8, 1e5), p = Math.pow(10, Math.floor(Math.log10(b)));
   for (const m of [1, 2, 5, 10]) if (b <= m * p) return m * p / 8;
 }
-function draw(id, series, max, scaleLabel) {
+function draw(id, series, max, scaleLabel, r) {
   const c = $(id), r = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
   if (c.width !== w * r || c.height !== h * r) { c.width = w * r; c.height = h * r; }
   const g = c.getContext('2d');
@@ -25,11 +50,13 @@ function draw(id, series, max, scaleLabel) {
   for (let i = 0; i <= 4; i++) { const y = Math.round((h - 1) * i / 4) + .5; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
   for (const s of series) {
     const d = s.data; if (!d.length) continue;
-    const x = i => w - (d.length - 1 - i) * w / (N - 1), y = v => h - 1 - Math.min(v / max, 1) * (h - 2);
-    g.beginPath();
-    d.forEach((v, i) => i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v)));
-    g.strokeStyle = s.color; g.lineWidth = 1.5; g.setLineDash(s.dash || []); g.stroke(); g.setLineDash([]);
-    if (s.fill) { g.lineTo(x(d.length - 1), h); g.lineTo(x(0), h); g.closePath(); g.globalAlpha = .15; g.fillStyle = s.color; g.fill(); g.globalAlpha = 1; }
+    const x = i => w - (d.length - 1 - i) * w / (r - 1), y = v => h - 1 - Math.min(v / max, 1) * (h - 2);
+    for (const seg of toSegments(d)) {
+      g.beginPath();
+      seg.forEach((p, k) => k ? g.lineTo(x(p.i), y(p.v)) : g.moveTo(x(p.i), y(p.v)));
+      g.strokeStyle = s.color; g.lineWidth = r > 60 ? 1 : 1.5; g.setLineDash(s.dash || []); g.stroke(); g.setLineDash([]);
+      if (s.fill) { g.lineTo(x(seg[seg.length - 1].i), h); g.lineTo(x(seg[0].i), h); g.closePath(); g.globalAlpha = .15; g.fillStyle = s.color; g.fill(); g.globalAlpha = 1; }
+    }
   }
   if (scaleLabel) { g.fillStyle = css('--muted'); g.font = '11px system-ui,sans-serif'; g.fillText(scaleLabel, 4, 12); }
 }
@@ -89,11 +116,7 @@ function render(s) {
   $('netV').textContent = bits(s.rx + s.tx);
   $('netS').innerHTML = '<span class="key"><i style="background:var(--rx)"></i>Receive ' + bits(s.rx) +
     '</span><span class="key"><i style="background:var(--tx)"></i>Send ' + bits(s.tx) + '</span>';
-  draw('cpuC', [{data: hist.cpu, color: css('--cpu'), fill: true}], 100);
-  draw('memC', [{data: hist.mem, color: css('--mem'), fill: true}], 100);
-  draw('gpuC', [{data: hist.gpu, color: css('--gpu'), fill: true}], 100);
-  const netMax = niceMax(Math.max(...hist.rx, ...hist.tx, 0));
-  draw('netC', [{data: hist.rx, color: css('--rx'), fill: true}, {data: hist.tx, color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax));
+  drawGraphs();
   renderProcs(s);
   renderDrives(s);
   watchValheim(s);
@@ -273,23 +296,63 @@ function watchPlex(s) {
   });
   plexKeys = items.map(i => i.key);
 }
+function drawGraphs() {
+  const v = n => visibleSlice(hist[n], range);
+  draw('cpuC', [{data: v('cpu'), color: css('--cpu'), fill: true}], 100, '', range);
+  draw('memC', [{data: v('mem'), color: css('--mem'), fill: true}], 100, '', range);
+  draw('gpuC', [{data: v('gpu'), color: css('--gpu'), fill: true}], 100, '', range);
+  const netMax = niceMax(Math.max(0, ...v('rx').concat(v('tx')).filter(x => !missing(x))));
+  draw('netC', [{data: v('rx'), color: css('--rx'), fill: true}, {data: v('tx'), color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax), range);
+}
+// --- The 60 s / 15 min buttons.
+function showRange() {
+  for (const b of document.querySelectorAll('#range button')) b.setAttribute('aria-pressed', String(+b.dataset.r === range));
+}
+range = rangeFromStorage(localStorage);
+for (const b of document.querySelectorAll('#range button')) {
+  b.onclick = () => { range = +b.dataset.r; saveRange(localStorage, range); showRange(); drawGraphs(); };
+}
+showRange();
+// --- The server keeps 15 minutes of readings, so a new page (or one coming back after a lost connection) starts
+// with full graphs. A second with no reading (SRRVRR stopped, or the page lost touch) is a gap in the line.
+let lastSecMs = 0, wasDown = false;
+async function loadHistory() {
+  try {
+    const h = fillFromHistory(await (await fetch('/history', {cache: 'no-store'})).json());
+    for (const n of LINES) hist[n] = h[n];
+    lastSecMs = h.newestMs || 0;
+  } catch (e) {}
+}
+function pushReading(s) {
+  const sec = Math.floor(s.ts / 1000) * 1000;
+  if (lastSecMs && sec <= lastSecMs) return;                       // already in the history
+  const skipped = lastSecMs ? Math.min(N, Math.round((sec - lastSecMs) / 1000) - 1) : 0;
+  for (let i = 0; i < skipped; i++) for (const n of LINES) push(hist[n], null);
+  push(hist.cpu, s.cpu); push(hist.mem, 100 * s.memUsed / s.memTotal); push(hist.gpu, s.gpu || 0);
+  push(hist.rx, s.rx); push(hist.tx, s.tx);
+  lastSecMs = sec;
+}
 async function tick() {
   try {
     const s = await (await fetch('/stats', {cache: 'no-store'})).json();
+    if (shouldRefetchHistory(wasDown, true)) await loadHistory();
+    wasDown = false;
     if (s.ready && s.ts !== lastTs) {
       lastTs = s.ts;
-      push(hist.cpu, s.cpu); push(hist.mem, 100 * s.memUsed / s.memTotal); push(hist.gpu, s.gpu || 0);
-      push(hist.rx, s.rx); push(hist.tx, s.tx);
+      pushReading(s);
       render(s);
     }
     $('status').className = s.error ? 'bad' : '';
     $('status').textContent = s.error ? 'Counter error: ' + s.error : (s.ready ? 'Live \u00b7 updates every second' : 'Starting\u2026');
   } catch (e) {
+    wasDown = true;
     $('status').className = 'bad';
     $('status').textContent = 'Disconnected, retrying\u2026';
   }
   setTimeout(tick, 500);
 }
-tick();
+loadHistory().then(tick);
 // For tests under Node: the page's pure functions (tests/js). Browsers have no 'module', so this does nothing there.
-if (typeof module !== 'undefined') { module.exports = { bits, niceMax, since, size, speed }; }
+if (typeof module !== 'undefined') {
+  module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory };
+}
