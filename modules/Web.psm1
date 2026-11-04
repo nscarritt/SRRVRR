@@ -114,7 +114,7 @@ function Get-EventsResult {
     if ($text -notmatch '^\d{1,4}$' -or -not [int]::TryParse($text, [ref]$days) -or $days -lt 1 -or $days -gt $max) {
         return New-Result 400 'text/plain; charset=utf-8' "days must be a whole number from 1 to $max"
     }
-    $events = @(& $Context['ReadEvents'] $days)
+    $events = @(& $Context['ReadEvents'] $days | ForEach-Object { $_ })   # flat whether the list came back whole or unrolled
     New-Result 200 'application/json; charset=utf-8' (ConvertTo-Json -InputObject @{ events = $events } -Compress -Depth 6)
 }
 
@@ -179,6 +179,13 @@ function Write-RouteError([hashtable]$Context, [string]$Message) {
 function Invoke-SrrRequest($ListenerContext, [hashtable]$Context) {
     try {
         $request = ConvertTo-SrrRequest -ListenerContext $ListenerContext
+        # POST /maintenance is the only request with a body, read only once the Host check has passed.
+        if ($request.Method -eq 'POST' -and $request.Path -eq '/maintenance' -and
+            (Test-HostAllowed -HostHeader $request.Headers['Host'] -Port $request.LocalPort -Identity $Context.Identity)) {
+            $body = Read-RequestBody -Request $ListenerContext.Request
+            if ($null -eq $body) { Send-SrrResponse -ListenerContext $ListenerContext -Result (New-Result 413 'text/plain; charset=utf-8' 'Request body too large'); return }
+            $request.Body = $body
+        }
         Send-SrrResponse -ListenerContext $ListenerContext -Result (Invoke-SrrRoute @request -Context $Context)
     } catch {
         try { $ListenerContext.Response.Abort() } catch { $null = $_ }   # usually the browser went away mid-response
@@ -198,6 +205,22 @@ function ConvertTo-SrrRequest($ListenerContext) {
         Method = $r.HttpMethod; Path = $r.Url.AbsolutePath; Query = $query; Headers = $headers; Body = ''
         RemoteAddress = [string]$r.RemoteEndPoint.Address; LocalPort = $r.LocalEndPoint.Port
     }
+}
+
+# A request's body as text, at most MaxBytes; $null when it's longer (or says it will be). The listener's EntityBody
+# timeout (set in SRRVRR.ps1) ends a body that never finishes.
+function Read-RequestBody($Request, [int]$MaxBytes = 1024) {
+    if (-not $Request.HasEntityBody) { return '' }
+    if ($Request.ContentLength64 -gt $MaxBytes) { return $null }
+    $buffer = New-Object byte[] ($MaxBytes + 1)
+    $total = 0
+    while ($total -lt $buffer.Length) {
+        $n = $Request.InputStream.Read($buffer, $total, $buffer.Length - $total)
+        if ($n -le 0) { break }
+        $total += $n
+    }
+    if ($total -gt $MaxBytes) { return $null }
+    [Text.Encoding]::UTF8.GetString($buffer, 0, $total)
 }
 
 function Send-SrrResponse($ListenerContext, [hashtable]$Result) {

@@ -116,6 +116,38 @@ Describe 'Test builds' -Tag 'Smoke' {
         Test-Path (Join-Path $folder 'state\stop-requested') | Should -BeTrue
         @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Match 'INFO srrvrr: stopped: requested \(exit 0\)$'
     }
+    It 'T50-53 a start and a -Stop log "started" and "stopped" (requested) as events, and the crash log ends "stopped: requested (exit 0)"' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        $null = $p.Handle
+        Start-Sleep -Seconds 2   # the drain runs once a second
+        & cmd /c "`"$folder\Stop SRRVRR.bat`"" | Out-Null
+        $p.WaitForExit(10000) | Should -BeTrue
+        $events = @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'events-*.jsonl' | Get-Content | ForEach-Object { $_ | ConvertFrom-Json })
+        @($events | ForEach-Object type) | Should -Contain 'started'
+        $stopped = @($events | Where-Object type -eq 'stopped')
+        $stopped.Count | Should -Be 1
+        $stopped[0].data.reason | Should -Be 'requested'
+        $events[-1].type | Should -Be 'stopped'
+        @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Match 'INFO srrvrr: stopped: requested \(exit 0\)$'
+    }
+    It 'T50-52 Maintenance turned on stays on across a restart, with the same untilMs' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        try {
+            $headers = @{ Origin = "http://localhost:$port"; 'X-SRRVRR' = '1' }
+            $r = Invoke-WebRequest -Uri "http://localhost:$port/maintenance" -Method Post -Headers $headers -ContentType 'application/json' -Body '{"on":true}' -UseBasicParsing
+            $r.StatusCode | Should -Be 200
+            $until = ($r.Content | ConvertFrom-Json).untilMs
+            $until | Should -BeGreaterThan 0
+            & cmd /c "`"$folder\Stop SRRVRR.bat`"" | Out-Null
+            $p.WaitForExit(10000) | Should -BeTrue
+            $p = Start-Build $folder $port
+            $doc = (Invoke-TestRequest -Url "http://localhost:$port/stats").Body | ConvertFrom-Json
+            $doc.maintenance.on | Should -BeTrue
+            $doc.maintenance.untilMs | Should -Be $until
+        } finally { Stop-Build $p }
+    }
     It 'T48-53 one copy''s -Stop never stops another copy' {
         $pa = Get-FreePort; $pb = Get-FreePort
         $a = New-Build 'HEAD' $pa; $b = New-Build 'HEAD' $pb

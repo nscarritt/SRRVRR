@@ -230,5 +230,19 @@ function New-RateLimiter {
     $l
 }
 
+# POST /maintenance from start to finish: the guard (header, content type, Origin), then the body, then the rate
+# limit, then the change. Returns @{ Status; Body (for JSON); Change (the change record, or $null) }. The address
+# is the connection's own (a forwarded-for header is never read).
+function Invoke-MaintenanceChange {
+    param($Headers, [string]$Body, [string]$Address, [object]$State, [object]$Limiter, [hashtable]$Identity, [int]$Port)
+    $guard = Test-MaintenanceRequest -Headers $Headers -Identity $Identity -Port $Port
+    if (-not $guard.Ok) { return @{ Status = $guard.Status; Body = @{ error = 'refused' }; Change = $null } }
+    $parsed = ConvertFrom-MaintenanceBody -Body $Body
+    if (-not $parsed.Ok) { return @{ Status = $parsed.Status; Body = @{ error = 'send {"on": true} or {"on": false}' }; Change = $null } }
+    if (-not $Limiter.Allow($Address)) { return @{ Status = 429; Body = @{ error = 'too many changes; try again in a few seconds' }; Change = $null } }
+    $change = if ($parsed.On) { $State.SetOn($Address) } else { $State.SetOff($Address) }
+    @{ Status = 200; Body = @{ on = $State.IsOn(); untilMs = [long]$State.UntilMs }; Change = $change }
+}
+
 Export-ModuleMember -Function New-MaintenanceState, Save-Maintenance, Import-Maintenance, ConvertFrom-MaintenanceBody,
-    Test-MaintenanceRequest, New-RateLimiter
+    Test-MaintenanceRequest, New-RateLimiter, Invoke-MaintenanceChange

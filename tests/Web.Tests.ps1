@@ -358,3 +358,128 @@ Describe 'T50-38 to T50-41 events on /stats and /events, and the methods each pa
         [object]::ReferenceEquals($before, $c.Events.Published) | Should -BeTrue
     }
 }
+Describe 'T50-34 to T50-37 and T50-42 to T50-44: POST /maintenance and /events through the router' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Events.psm1') -Force
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\EventLog.psm1') -Force
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Maintenance.psm1') -Force
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Logging.psm1') -Force
+        $script:Now50 = [DateTimeOffset]::new(2026, 1, 5, 12, 0, 0, [TimeSpan]::Zero)
+        $script:Root50 = New-WebRoot
+        function New-MaintContext {
+            $c = New-Context $Root50
+            $c.Clock = { $script:Now50 }
+            $c.Events = New-EventStore -Clock { $script:Now50 }
+            $c.LogRetentionDays = 31
+            $c.Maintenance = New-MaintenanceState -Clock { $script:Now50 } -Hours 2 -MaxHours 8
+            $c.Limiter = New-RateLimiter -Clock { $script:Now50 }
+            $c.Changes = New-Object System.Collections.Generic.List[object]
+            $ctx = $c
+            $c.HandleMaintenance = {
+                param($headers, $body, $address)
+                $r = Invoke-MaintenanceChange -Headers $headers -Body $body -Address $address -State $ctx.Maintenance -Limiter $ctx.Limiter -Identity $ctx.Identity -Port 8091
+                if ($r.Change) { $ctx.Changes.Add($r.Change) }
+                $r
+            }.GetNewClosure()
+            $c
+        }
+        function Send-Maint($Context, [hashtable]$Headers, [string]$Body = '{"on":true}', [string]$From = '203.0.113.7') {
+            Invoke-SrrRoute -Method 'POST' -Path '/maintenance' -Query @{} -Headers $Headers -Body $Body -RemoteAddress $From -LocalPort 8091 -Context $Context
+        }
+        $script:Good = @{ Host = 'localhost:8091'; Origin = 'http://localhost:8091'; 'X-SRRVRR' = '1'; 'Content-Type' = 'application/json' }
+        # An index over a temp log folder: Count logged events spread evenly over the last 31 days.
+        function New-FullIndex([int]$Count, [hashtable[]]$Extra = @()) {
+            $dir = New-TestDataPath
+            $span = [TimeSpan]::FromDays(30.9).TotalMilliseconds
+            $byDay = @{}
+            for ($i = 0; $i -lt $Count; $i++) {
+                $t = $Now50.AddMilliseconds(-$span + $span * $i / $Count)
+                $line = '{"id":' + ($t.ToUnixTimeMilliseconds() + $i) + ',"time":' + $t.ToUnixTimeMilliseconds() + ',"type":"drive-health","severity":"flag","maintenance":false,"data":{"n":' + $i + '}}'
+                $name = 'events-' + $t.ToString('yyyy-MM-dd') + '.jsonl'
+                if (-not $byDay[$name]) { $byDay[$name] = New-Object System.Collections.Generic.List[string] }
+                $byDay[$name].Add($line)
+            }
+            foreach ($k in $byDay.Keys) { [IO.File]::WriteAllLines((Join-Path $dir $k), [string[]]$byDay[$k]) }
+            Initialize-EventIndex -LogDir $dir -Days 31 -Now $Now50
+        }
+    }
+    It 'T50-34 a valid POST turns it on, and another client''s /stats shows the same untilMs' {
+        $c = New-MaintContext
+        $r = Send-Maint $c $Good
+        $r.Status | Should -Be 200
+        $body = $r.Body | ConvertFrom-Json
+        $body.on | Should -BeTrue
+        $body.untilMs | Should -Be $Now50.AddHours(2).ToUnixTimeMilliseconds()
+        $s = Invoke-SrrRoute -Method 'GET' -Path '/stats' -Query @{} -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '203.0.113.8' -LocalPort 8091 -Context $c
+        $doc = $s.Body | ConvertFrom-Json
+        $doc.maintenance.on | Should -BeTrue
+        $doc.maintenance.untilMs | Should -Be $body.untilMs
+    }
+    It 'T50-35 a correct Origin from 127.0.0.1 is accepted and recorded with its address' {
+        $c = New-MaintContext
+        $h = @{ Host = '127.0.0.1:8091'; Origin = 'http://127.0.0.1:8091'; 'X-SRRVRR' = '1'; 'Content-Type' = 'application/json' }
+        (Send-Maint $c $h -From '127.0.0.1').Status | Should -Be 200
+        $c.Changes[0].data.address | Should -Be '127.0.0.1'
+    }
+    It 'T50-37 DNS rebinding: a foreign Host is 421 before the guard runs, and nothing changes' {
+        $c = New-MaintContext
+        $h = @{ Host = 'evil.example:8091'; Origin = 'http://evil.example:8091'; 'X-SRRVRR' = '1'; 'Content-Type' = 'application/json' }
+        (Send-Maint $c $h).Status | Should -Be 421
+        $c.Maintenance.IsOn() | Should -BeFalse
+        $c.Changes.Count | Should -Be 0
+    }
+    It 'T50-36 through the router: no X-SRRVRR is 403, a bad body 400, a second change within 10 s 429' {
+        $c = New-MaintContext
+        $h = $Good.Clone(); $h.Remove('X-SRRVRR')
+        (Send-Maint $c $h).Status | Should -Be 403
+        (Send-Maint $c $Good '{"on":"yes"}').Status | Should -Be 400
+        (Send-Maint $c $Good).Status | Should -Be 200
+        (Send-Maint $c $Good '{"on":false}').Status | Should -Be 429
+        $c.Changes.Count | Should -Be 1
+    }
+    It 'T50-42 with 5,000 events over 31 days, /events?days=31 returns the newest 1,000, newest first' {
+        $c = New-MaintContext
+        $index = New-FullIndex 5000
+        $now = $Now50; $c.ReadEvents = { param($days) Get-IndexedEvents -Index $index -Days $days -Now $now }.GetNewClosure()
+        $r = Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c
+        $r.Status | Should -Be 200
+        $events = @(($r.Body | ConvertFrom-Json).events)
+        $events.Count | Should -Be 1000
+        $events[0].data.n | Should -Be 4999
+        $events[999].data.n | Should -Be 4000
+    }
+    It 'T50-43 /events?days=31 over 5,000 events answers within 50 ms at p95, and /stats within 30 ms' {
+        $c = New-MaintContext
+        $index = New-FullIndex 5000
+        $now = $Now50; $c.ReadEvents = { param($days) Get-IndexedEvents -Index $index -Days $days -Now $now }.GetNewClosure()
+        $ev = foreach ($i in 1..50) { (Measure-Command { Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }).TotalMilliseconds }
+        $st = foreach ($i in 1..50) { (Measure-Command { Invoke-SrrRoute -Method 'GET' -Path '/stats' -Query @{ since = '0' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }).TotalMilliseconds }
+        (Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c).Status | Should -Be 200
+        $p95 = { param($v) @($v | Sort-Object)[[int][Math]::Ceiling(0.95 * @($v).Count) - 1] }
+        Write-Host ("    /events p95 {0:N1} ms, /stats p95 {1:N1} ms" -f (& $p95 $ev), (& $p95 $st))
+        if (-not $env:GITHUB_ACTIONS) {   # informational on CI's shared runners, a budget on the server
+            (& $p95 $ev) | Should -BeLessThan 50
+            (& $p95 $st) | Should -BeLessThan 30
+        }
+    }
+    It 'T50-44 /events never carries a player, user, device or title name' {
+        $dir = New-TestDataPath
+        try {
+            $clock = { $script:Now50 }
+            $log = New-DailyLog -Folder $dir -Prefix 'events' -Extension 'jsonl' -Clock $clock
+            $index = Initialize-EventIndex -LogDir $dir -Days 31 -Now $Now50
+            $write = New-EventLogWriter -Log $log
+            $q = New-SrrQueue; $store = New-EventStore -Clock $clock
+            $old = @{ activity = @{ Valheim = @{ players = 0; names = @() }; Plex = @{ items = @() } } }
+            $new = @{ activity = @{ Valheim = @{ players = 1; names = @(@{ name = 'CanaryVikingQx' }) }; Plex = @{ items = @(@{ key = 's1'; user = 'CanaryUserWv'; title = 'CanaryFilmYp'; device = 'CanaryTvKj'; app = 'CanaryAppRr' }) } } }
+            foreach ($e in Get-StateEvents -Old $old -New $new) { $e.logged = $true; Add-SrrQueueItem -Queue $q -Item $e }
+            $writers = @{ Event = { param($e) & $write $e; [void]$index.Add((ConvertTo-LoggedEvent $e)) }.GetNewClosure() }
+            Invoke-QueueDrain -Queue $q -Store $store -Writers $writers -Clock $clock | Should -Be 2
+            $c = New-MaintContext
+            $now = $Now50; $c.ReadEvents = { param($days) Get-IndexedEvents -Index $index -Days $days -Now $now }.GetNewClosure()
+            $r = Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '1' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c
+            @(($r.Body | ConvertFrom-Json).events).Count | Should -Be 2
+            $r.Body | Should -Not -Match 'Canary'
+        } finally { Remove-TestDataPath $dir }
+    }
+}
