@@ -229,10 +229,16 @@ if ($historyLoad.Loaded) { Write-Status 'Graph history from before the restart l
 elseif ($historyLoad.Reason -in 'stale', 'future') { Write-SrrLog 'INFO' 'history' "history.json not used: it's $($historyLoad.Reason)" }
 elseif ($historyLoad.Reason -ne 'none') { Write-SrrError 'history' "history.json not used ($($historyLoad.Reason)); it was renamed history.json.bad" }
 $historySavedAt = [DateTimeOffset]::Now
+# A failed save is never fatal (spec H8): one console line and the error log, and it's tried again in 5 minutes.
 function Save-HistoryNow {
-    $r = Save-History -Store $history -StatePath (Join-Path $dataFolder.Path 'state')
-    if (-not $r.Ok) { Write-SrrError 'history' $r.Error }
     $script:historySavedAt = [DateTimeOffset]::Now
+    try {
+        $r = Save-History -Store $history -StatePath ([IO.Path]::Combine($dataFolder.Path, 'state'))
+        if ($r.Ok) { return }
+        $why = $r.Error
+    } catch { $why = "couldn't save the history: $($_.Exception.Message)" }
+    try { [Console]::WriteLine(''); Write-Host "  $why" -ForegroundColor Yellow } catch { }
+    Write-SrrError 'history' $why
 }
 $stopSavers.Add(@{ Name = 'the graph history'; Save = { Save-HistoryNow } })
 
@@ -571,10 +577,8 @@ $sampler = {
         -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
     $prev = $null
     while ($true) {
-        $started = [DateTime]::UtcNow
         $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
-        $wait = 1000 - ([DateTime]::UtcNow - $started).TotalMilliseconds
-        if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
+        Start-Sleep -Milliseconds (Get-TickWait -Now ([DateTime]::UtcNow))
     }
 }
 

@@ -26,6 +26,11 @@ const sandbox = {
 vm.runInNewContext(source, sandbox);
 const app = sandbox.module.exports;
 
+test('T49-26 the whole of app.js parses (a syntax error would leave the page on Connecting...)', () => {
+  assert.doesNotThrow(() => new vm.Script(source));
+  assert.strictEqual(typeof app.fillFromHistory, 'function');
+});
+
 function memoryStorage(initial) {
   const m = new Map(Object.entries(initial || {}));
   return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), map: m };
@@ -74,4 +79,17 @@ test('T49-28 toSegments splits the line at missing values (a gap, not a drop to 
   assert.deepStrictEqual(segs.map(s => s.map(p => p.i)), [[0, 1], [4], [6, 7]]);
   assert.deepStrictEqual(segs.map(s => s.map(p => p.v)), [[1, 2], [5], [7, 8]]);
   assert.deepStrictEqual(app.toSegments([null, null]), []);
+});
+
+test('T49-27 site data blocked (no localStorage at all): 60, and saving does nothing', () => {
+  assert.strictEqual(app.rangeFromStorage(null), 60);
+  assert.doesNotThrow(() => app.saveRange(null, 900));
+});
+
+test('T49-26 a gap of more than 5 s (a throttled background tab) fetches /history again', () => {
+  assert.strictEqual(app.needsHistory(0, 10000), false);           // nothing yet: the first load does it
+  assert.strictEqual(app.needsHistory(10000, 11000), false);
+  assert.strictEqual(app.needsHistory(10000, 15900), false);
+  assert.strictEqual(app.needsHistory(10000, 16000), true);
+  assert.strictEqual(app.needsHistory(10000, 70000), true);
 });

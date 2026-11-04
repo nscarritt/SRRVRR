@@ -188,3 +188,15 @@ Describe 'T49-18 the fast tick feeds the history' {
         $c.Lines['mem'][-1] | Should -Be ([math]::Round(100 * $state.memUsed / 1000, 1))
     }
 }
+Describe 'T49-18 ticks on whole seconds' {
+    It 'T49-18 the wait reaches 20 ms past the next whole second, whatever time the tick ended' {
+        foreach ($ms in 0, 19, 20, 21, 500, 980, 999) {
+            $now = [DateTime]::new(2026, 1, 5, 12, 0, 0, $ms, 'Utc')
+            $wait = Get-TickWait -Now $now
+            $next = $now.AddMilliseconds($wait)
+            $next.Millisecond | Should -Be 20 -Because "ended at .$ms"
+            $wait | Should -BeGreaterThan 0
+            $wait | Should -BeLessOrEqual 1000
+        }
+    }
+}

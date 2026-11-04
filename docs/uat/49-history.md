@@ -4,8 +4,8 @@ About 15 minutes. You test; nothing merges until you say so.
 
 ## Setup
 1. Build a test copy of the PR's branch in its own folder, outside the live install:
-   `.\tools\New-TestBuild.ps1 -Ref feature/49-history -Destination H:\Repos\_testbuilds\SRRVRR-test-49`
-2. Start it with `H:\Repos\_testbuilds\SRRVRR-test-49\Start SRRVRR.bat`. Say **No** to the administrator prompt.
+   `.\tools\New-TestBuild.ps1 -Ref feature/49-history -Destination <test folder>`
+2. Start it with `<test folder>\Start SRRVRR.bat`. Say **No** to the administrator prompt.
    It listens on port 8091; the live copy keeps running on its own port. Leave it running 5 minutes.
 
 ## Steps
@@ -28,4 +28,4 @@ Story #49 UAT on <date>: steps 1-6 pass / step <x> failed: <what happened>
 ```
 
 ## Clean up
-Stop the test copy with `H:\Repos\_testbuilds\SRRVRR-test-49\Stop SRRVRR.bat` and delete the folder.
+Stop the test copy with `<test folder>\Stop SRRVRR.bat` and delete the folder.

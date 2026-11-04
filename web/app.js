@@ -25,6 +25,10 @@ function fillFromHistory(json) {
   return h;
 }
 const shouldRefetchHistory = (wasDown, nowOk) => wasDown && nowOk;
+// More than 5 s since the last reading (a background tab whose timers the browser slowed): the server has them all.
+const needsHistory = (lastMs, ts) => lastMs > 0 && Math.floor(ts / 1000) * 1000 - lastMs > 5000;
+// Reading localStorage itself throws when site data is blocked, so it's fetched through this.
+const store = () => { try { return localStorage; } catch (e) { return null; } };
 const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const push = (a, v) => { a.push(v); if (a.length > N) a.shift(); };
@@ -40,7 +44,7 @@ function niceMax(v) {               // round the network scale up to 1/2/5 x 10^
   const b = Math.max(v * 8, 1e5), p = Math.pow(10, Math.floor(Math.log10(b)));
   for (const m of [1, 2, 5, 10]) if (b <= m * p) return m * p / 8;
 }
-function draw(id, series, max, scaleLabel, r) {
+function draw(id, series, max, scaleLabel, span) {
   const c = $(id), r = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
   if (c.width !== w * r || c.height !== h * r) { c.width = w * r; c.height = h * r; }
   const g = c.getContext('2d');
@@ -50,11 +54,11 @@ function draw(id, series, max, scaleLabel, r) {
   for (let i = 0; i <= 4; i++) { const y = Math.round((h - 1) * i / 4) + .5; g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
   for (const s of series) {
     const d = s.data; if (!d.length) continue;
-    const x = i => w - (d.length - 1 - i) * w / (r - 1), y = v => h - 1 - Math.min(v / max, 1) * (h - 2);
+    const x = i => w - (d.length - 1 - i) * w / (span - 1), y = v => h - 1 - Math.min(v / max, 1) * (h - 2);
     for (const seg of toSegments(d)) {
       g.beginPath();
       seg.forEach((p, k) => k ? g.lineTo(x(p.i), y(p.v)) : g.moveTo(x(p.i), y(p.v)));
-      g.strokeStyle = s.color; g.lineWidth = r > 60 ? 1 : 1.5; g.setLineDash(s.dash || []); g.stroke(); g.setLineDash([]);
+      g.strokeStyle = s.color; g.lineWidth = span > 60 ? 1 : 1.5; g.setLineDash(s.dash || []); g.stroke(); g.setLineDash([]);
       if (s.fill) { g.lineTo(x(seg[seg.length - 1].i), h); g.lineTo(x(seg[0].i), h); g.closePath(); g.globalAlpha = .15; g.fillStyle = s.color; g.fill(); g.globalAlpha = 1; }
     }
   }
@@ -308,9 +312,9 @@ function drawGraphs() {
 function showRange() {
   for (const b of document.querySelectorAll('#range button')) b.setAttribute('aria-pressed', String(+b.dataset.r === range));
 }
-range = rangeFromStorage(localStorage);
+range = rangeFromStorage(store());
 for (const b of document.querySelectorAll('#range button')) {
-  b.onclick = () => { range = +b.dataset.r; saveRange(localStorage, range); showRange(); drawGraphs(); };
+  b.onclick = () => { range = +b.dataset.r; saveRange(store(), range); showRange(); drawGraphs(); };
 }
 showRange();
 // --- The server keeps 15 minutes of readings, so a new page (or one coming back after a lost connection) starts
@@ -335,7 +339,7 @@ function pushReading(s) {
 async function tick() {
   try {
     const s = await (await fetch('/stats', {cache: 'no-store'})).json();
-    if (shouldRefetchHistory(wasDown, true)) await loadHistory();
+    if (shouldRefetchHistory(wasDown, true) || needsHistory(lastSecMs, s.ts)) await loadHistory();
     wasDown = false;
     if (s.ready && s.ts !== lastTs) {
       lastTs = s.ts;
@@ -354,5 +358,5 @@ async function tick() {
 loadHistory().then(tick);
 // For tests under Node: the page's pure functions (tests/js). Browsers have no 'module', so this does nothing there.
 if (typeof module !== 'undefined') {
-  module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory };
+  module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory };
 }

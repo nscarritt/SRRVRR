@@ -146,15 +146,17 @@ function ConvertTo-HistoryJson([SrrHistoryCopy]$Copy) { [SrrHistoryStore]::ToJso
 # Writes history.json.tmp, then swaps it in. Returns @{ Ok; Error } and never throws.
 function Save-History {
     param([SrrHistoryStore]$Store, [string]$StatePath)
-    $target = Join-Path $StatePath 'history.json'
-    $tmp = "$target.tmp"
+    $tmp = $null
     try {
+        # [IO.Path]::Combine, not Join-Path: Join-Path fails on a drive that's gone (an unplugged USB data drive).
+        $target = [IO.Path]::Combine($StatePath, 'history.json')
+        $tmp = "$target.tmp"
         [IO.File]::WriteAllText($tmp, (ConvertTo-HistoryJson $Store.Copy()), (New-Object Text.UTF8Encoding($false)))
         # [NullString]::Value: a plain $null would arrive as an empty backup path.
         if ([IO.File]::Exists($target)) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }
         @{ Ok = $true; Error = $null }
     } catch {
-        try { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { }
+        try { if ($tmp -and [IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { }
         @{ Ok = $false; Error = "couldn't save the history: $($_.Exception.Message)" }
     }
 }

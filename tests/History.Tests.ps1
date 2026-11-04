@@ -225,3 +225,16 @@ Describe 'T49-17 when to save' {
         $due | Should -Be @(5, 10, 15)
     }
 }
+
+Describe 'Review fixes for #49' {
+    It 'T49-10 a missing drive: a failure result, never an exception, even with ErrorActionPreference Stop' {
+        $s = New-HistoryStore -Slots 3 -Lines @('cpu'); $s.Append('cpu', 1, $T0Ms)
+        $ErrorActionPreference = 'Stop'
+        $free = [char[]](90..68) | Where-Object { -not (Test-Path "$($_):\") } | Select-Object -First 1
+        { $script:Out = @(Save-History -Store $s -StatePath "$($free):\SRRVRR\state" 2>&1) } | Should -Not -Throw
+        @($Out | Where-Object { $_ -is [Management.Automation.ErrorRecord] }).Count | Should -Be 0 -Because 'nothing may escape, not even a non-terminating error'
+        $script:R = $Out[-1]
+        $R.Ok | Should -BeFalse
+        $R.Error | Should -Not -BeNullOrEmpty
+    }
+}
