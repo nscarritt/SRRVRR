@@ -179,6 +179,33 @@ Describe 'Test builds' -Tag 'Smoke' {
             @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content)[-1] | Should -Match 'stopped: refused: The stop event name .* \(exit 3\)$'
         } finally { $squat.Dispose() }
     }
+    It 'T49-23 the history survives a clean restart, with a gap for the time it was stopped' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        $p = Start-Build $folder $port
+        Start-Sleep -Seconds 20
+        $null = Invoke-InChildPowerShell -File (Join-Path $folder 'SRRVRR.ps1') -Arguments @('-Stop')
+        $p.WaitForExit(30000) | Should -BeTrue
+        Test-Path (Join-Path $folder 'state\history.json') | Should -BeTrue
+        Start-Sleep -Seconds 10
+        $p = Start-Build $folder $port
+        try {
+            $cpu = @(((Invoke-TestRequest -Url "http://localhost:$port/history").Body | ConvertFrom-Json).lines.cpu)
+            $kinds = (($cpu | ForEach-Object { if ($null -eq $_) { 'g' } else { 'd' } }) -join '') -replace '(.)\1*', '$1'
+            $kinds | Should -Match 'dgd?$' -Because 'the earlier readings, then a gap, then (soon) new readings'
+            @($cpu | Where-Object { $null -ne $_ }).Count | Should -BeGreaterThan 10
+        } finally { Stop-Build $p }
+    }
+    It 'T49-24 a damaged history.json is renamed .bad, logged once, and the copy serves' {
+        $port = Get-FreePort; $folder = New-Build 'HEAD' $port
+        New-Item -ItemType Directory -Force (Join-Path $folder 'state') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $folder 'state\history.json'), '{"version":1,"newe')
+        $p = Start-Build $folder $port
+        try {
+            Test-Path (Join-Path $folder 'state\history.json.bad') | Should -BeTrue
+            (Invoke-TestRequest -Url "http://localhost:$port/history").Status | Should -Be 200
+            @(Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content | Select-String 'ERROR history: history.json not used \(damaged\)').Count | Should -Be 1
+        } finally { Stop-Build $p }
+    }
     It 'T48-21 the log holds the settings source, every startup step in order and the serving line' {
         $port = Get-FreePort
         $folder = New-Build 'HEAD' $port
