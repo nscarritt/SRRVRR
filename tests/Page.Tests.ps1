@@ -57,3 +57,13 @@ Describe 'T47-19 the page is unchanged by the move' {
         $css | Should -Not -Match 'url\(data:'
     }
 }
+
+Describe 'T50-51 banners come from server events' {
+    It 'T50-51 app.js has no page-side comparison of activity left' {
+        $js = [IO.File]::ReadAllText((Join-Path $Web 'app.js'))
+        foreach ($name in 'lastValheim', 'plexKeys', 'watchValheim', 'watchPlex') {
+            $js | Should -Not -Match $name -Because "$name compared one /stats reading with the next"
+        }
+        $js | Should -Match 'function bannerFor\('
+    }
+}
