@@ -265,3 +265,96 @@ Describe 'T49-19 to T49-21 GET /history' {
         (Invoke-Route -Path '/history' -Context (New-Context (New-WebRoot))).Status | Should -Be 404
     }
 }
+Describe 'T50-38 to T50-41 events on /stats and /events, and the methods each path takes' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Events.psm1') -Force
+        $script:WebRoot50 = New-WebRoot
+        # A store holding Count events with ids 1000, 1001, ... (the clock is frozen at 1000 ms)
+        function New-FilledStore([int]$Count) {
+            $q = New-SrrQueue
+            $s = New-EventStore -Clock { [DateTimeOffset]::FromUnixTimeMilliseconds(1000) } -Size 200
+            foreach ($i in 1..$Count) { Add-SrrQueueItem -Queue $q -Item (New-SrrEvent -Type 'test' -Severity 'info' -Key "k$i" -Banner $true) }
+            Invoke-QueueDrain -Queue $q -Store $s -Clock { [DateTimeOffset]::FromUnixTimeMilliseconds(1000) } | Out-Null
+            $s
+        }
+        function New-EventsContext([int]$Count, [int]$Retention = 31) {
+            $c = New-Context $WebRoot50
+            $c.Events = New-FilledStore $Count
+            $c.LogRetentionDays = $Retention
+            $c.Maintenance = [pscustomobject]@{ UntilMs = 0L } | Add-Member ScriptMethod IsOn { $false } -PassThru
+            $calls = New-Object System.Collections.Generic.List[int]
+            $c.ReadEvents = { param($days) $calls.Add($days); , @(@{ id = 7; type = 'drive-health'; days = $days }) }.GetNewClosure()
+            $c.ReadCalls = $calls
+            $c
+        }
+        function Get-Stats($Context, [hashtable]$Query = @{}) {
+            $r = Invoke-SrrRoute -Method 'GET' -Path '/stats' -Query $Query -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $Context
+            $r.Status | Should -Be 200
+            $r.Body | ConvertFrom-Json
+        }
+        function Get-Events($Context, [object]$Days) {
+            $q = @{}; if ($null -ne $Days) { $q.days = $Days }
+            Invoke-SrrRoute -Method 'GET' -Path '/events' -Query $q -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $Context
+        }
+    }
+    It 'T50-39 no since: events empty, lastEventId the newest id, maintenance on/untilMs, the old fields kept' {
+        $doc = Get-Stats (New-EventsContext 30)
+        @($doc.events).Count | Should -Be 0
+        $doc.lastEventId | Should -Be 1029
+        $doc.maintenance.on | Should -BeFalse
+        $doc.maintenance.untilMs | Should -Be 0
+        $doc.logRetentionDays | Should -Be 31
+        $doc.cpu | Should -Be 3
+        $doc.PSObject.Properties.Name | Should -Contain 'uptime'
+    }
+    It 'T50-40 since a recent id: the 10 newer, oldest first, not truncated' {
+        $doc = Get-Stats (New-EventsContext 120) @{ since = '1109' }
+        @($doc.events | ForEach-Object id) | Should -Be (1110..1119)
+        $doc.PSObject.Properties.Name | Should -Not -Contain 'eventsTruncated'
+    }
+    It 'T50-40 since an old id: the oldest 50 after it, truncated' {
+        $doc = Get-Stats (New-EventsContext 120) @{ since = '1019' }
+        @($doc.events | ForEach-Object id) | Should -Be (1020..1069)
+        $doc.eventsTruncated | Should -BeTrue
+    }
+    It 'T50-40 since the newest id: nothing' {
+        @((Get-Stats (New-EventsContext 120) @{ since = '1119' }).events).Count | Should -Be 0
+    }
+    It 'T50-40 an unknown, future, non-numeric or empty since: the newest 50' {
+        foreach ($since in '999', '5000', 'abc', '') {
+            $doc = Get-Stats (New-EventsContext 120) @{ since = $since }
+            @($doc.events | ForEach-Object id) | Should -Be (1070..1119) -Because "since=$since"
+            $doc.eventsTruncated | Should -BeTrue
+        }
+    }
+    It 'T50-40 Get-EventsSince on its own' {
+        $s = New-FilledStore 5
+        $r = Get-EventsSince -Store $s -Since 1002
+        @($r.Events | ForEach-Object id) | Should -Be @(1003, 1004)
+        $r.Truncated | Should -BeFalse
+        (Get-EventsSince -Store (New-EventStore -Clock { [DateTimeOffset]::Now }) -Since 0).Events.Count | Should -Be 0
+    }
+    It 'T50-41 /events?days=n: 1 and 31 answer from the index, the rest are 400' {
+        $c = New-EventsContext 0
+        foreach ($d in '1', '31') {
+            $r = Get-Events $c $d
+            $r.Status | Should -Be 200
+            ($r.Body | ConvertFrom-Json).events[0].days | Should -Be ([int]$d)
+        }
+        foreach ($d in '32', '0', '-1', '1.5', 'abc', '', $null) { (Get-Events $c $d).Status | Should -Be 400 -Because "days=$d" }
+        $c.ReadCalls | Should -Be @(1, 31)
+        $c60 = New-EventsContext 0 60
+        (Get-Events $c60 '60').Status | Should -Be 200
+    }
+    It 'T50-38 the wrong method is 405 with no CORS headers, and changes nothing' {
+        $c = New-EventsContext 3
+        $before = $c.Events.Published
+        foreach ($m in 'GET', 'PUT', 'DELETE', 'OPTIONS') {
+            $r = Invoke-Route $m '/maintenance' -Context $c
+            $r.Status | Should -Be 405 -Because "$m /maintenance"
+            @($r.Headers.Keys | Where-Object { $_ -like 'Access-Control-*' }).Count | Should -Be 0
+        }
+        foreach ($p in '/stats', '/history', '/events', '/') { (Invoke-Route 'POST' $p -Context $c).Status | Should -Be 405 -Because "POST $p" }
+        [object]::ReferenceEquals($before, $c.Events.Published) | Should -BeTrue
+    }
+}
