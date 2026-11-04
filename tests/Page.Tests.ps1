@@ -14,9 +14,10 @@ BeforeAll {
         # The one deliberate change since: #48 UAT shows a missing temperature in gray, not amber.
         ($assign.Right.Expression.Value -replace "`r`n", "`n").Replace(": error ? ' warn' : none ? ' none' : '');", ": error || none ? ' none' : '');")
     }
-    # The new files put back together: the CSS and script inlined, and each /img/ URL turned back into its data URI.
+    # The moved files put back together: the CSS and script inlined, and each /img/ URL turned back into its data URI.
     function Get-NewPage {
-        $read = { param($name) [IO.File]::ReadAllText((Join-Path $Web $name)) -replace "`r`n", "`n" }
+        # The text files as of the #48 merge (5961666), the last page before #49 changed it on purpose; images as they are.
+        $read = { param($name) ((& git -C $Root show "5961666:web/$name") -join "`n") + "`n" }
         $css = [regex]::Replace((& $read 'style.css'), 'url\(/img/([a-z0-9-]+)\.(svg|png)\)', {
             param($m)
             $type = if ($m.Groups[2].Value -eq 'svg') { 'image/svg+xml' } else { 'image/png' }

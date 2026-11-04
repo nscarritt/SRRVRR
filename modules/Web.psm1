@@ -91,6 +91,10 @@ function Invoke-SrrRoute {
             $doc = New-StatsSnapshot -State $Context.State -BootTime $Context.BootTime -Now (& $Context.Clock)
             return New-Result 200 'application/json; charset=utf-8' ($doc | ConvertTo-Json -Compress -Depth 6)
         }
+        # 15 minutes of graph history: a copy taken under the store's lock, then written to JSON (modules\History.psm1).
+        if ($Path -eq '/history' -and $Context.History) {
+            return New-Result 200 'application/json; charset=utf-8' ([SrrHistoryStore]::ToJson($Context.History.Copy()))
+        }
         $route = Get-StaticRoute $Path
         if (-not $route) { return New-Result 404 'text/plain; charset=utf-8' 'Not found' }
         $file = Join-Path $Context.WebRoot $route.File

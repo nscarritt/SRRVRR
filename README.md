@@ -35,7 +35,10 @@ Current version: **0.6.0**. See the [changelog](CHANGELOG.md) for what changed i
 
 ## What it shows
 
-Updated every second, each with a 60-second graph:
+Updated every second, each with a graph of the last 60 seconds or, with the **15 min** button at the
+top, the last 15 minutes (each browser remembers its choice). SRRVRR keeps those 15 minutes itself, so
+a page you open, or one that comes back after losing its connection, starts with full graphs. A
+second with no reading (SRRVRR stopped, or the page lost touch) shows as a gap in the line.
 
 | Card    | Details |
 |---------|---------|
@@ -193,6 +196,10 @@ It creates those two, never `DataPath` itself.
   minute), crashes with their details, and a last line saying why SRRVRR stopped, e.g.
   `stopped: requested (exit 0)`. Each day's file stops growing at 20 MB. Removing files older than
   `LogRetentionDays` comes with the event log in a later release; until then old files stay.
+- **The graph history**, `state\history.json`: the last 15 minutes of CPU, memory, GPU and network
+  readings (numbers only, about 50 KB), saved every 5 minutes and when SRRVRR stops cleanly. At the
+  start it's used if its newest reading is under 15 minutes old. A damaged file, one over 2 MB or one
+  from a newer version is renamed `history.json.bad` and history starts empty; nothing else breaks.
 - **If `DataPath` is missing or can't be written**, at start or later, SRRVRR uses its own folder until
   the next restart and logs a flag saying so. The Storage card keeps watching the drive that holds
   `DataPath`, even a USB drive, and shows it as Missing when it's gone.

@@ -169,3 +169,34 @@ Describe 'T47-14 the fast tick in a runspace' -Tag 'Integration' {
         $state.ts | Should -Be ([DateTimeOffset]::new(2026, 1, 5, 12, 0, 4, [TimeSpan]::Zero).ToUnixTimeMilliseconds())
     }
 }
+
+Describe 'T49-18 the fast tick feeds the history' {
+    It 'T49-18 each tick appends cpu, mem (percent of total), gpu, rx and tx' {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\History.psm1') -Force
+        $h = New-HistoryStore -Slots 5
+        $state = @{}
+        $snap = New-FakeSnapshot @{ 'Processor' = @{ '% Processor Time' = @{ '_Total' = 1 } }; 'Memory' = @{ 'Available Bytes' = @{ '' = 250 } } }
+        $ctx = New-FastTickContext -Reader (New-FakeCounterReader @($snap, $snap, $snap, $snap)) -Processes { @() } -Tracer { $null } `
+            -Services @() -TotalRam 1000 -GpuLuid $null -Cores 4 -CpuCounter @('Processor', '% Processor Time') `
+            -TickStopwatch (New-FakeStopwatch 5) -IntervalStopwatch (New-FakeStopwatch 1000) -History $h
+        $t = [DateTimeOffset]::new(2026, 1, 5, 12, 0, 0, [TimeSpan]::Zero)
+        $prev = $null
+        for ($i = 0; $i -lt 4; $i++) { $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now $t.AddSeconds($i) }
+        $c = $h.Copy()
+        $c.NewestMs | Should -Be $t.AddSeconds(3).ToUnixTimeMilliseconds()
+        foreach ($n in 'cpu', 'mem', 'gpu', 'rx', 'tx') { @($c.Lines[$n] | Where-Object { -not [double]::IsNaN($_) }).Count | Should -Be 3 -Because $n }
+        $c.Lines['mem'][-1] | Should -Be ([math]::Round(100 * $state.memUsed / 1000, 1))
+    }
+}
+Describe 'T49-18 ticks on whole seconds' {
+    It 'T49-18 the wait reaches 20 ms past the next whole second, whatever time the tick ended' {
+        foreach ($ms in 0, 19, 20, 21, 500, 980, 999) {
+            $now = [DateTime]::new(2026, 1, 5, 12, 0, 0, $ms, 'Utc')
+            $wait = Get-TickWait -Now $now
+            $next = $now.AddMilliseconds($wait)
+            $next.Millisecond | Should -Be 20 -Because "ended at .$ms"
+            $wait | Should -BeGreaterThan 0
+            $wait | Should -BeLessOrEqual 1000
+        }
+    }
+}

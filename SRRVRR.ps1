@@ -220,6 +220,28 @@ foreach ($n in $data.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warnin
 if ($data.IsFallback) { Write-SrrLog 'FLAG' 'data' "DataPath $($settings.DataPath) is $($data.Reason); using $($data.Path)" -Always }
 Write-Status "History and logs go to $($data.Path)"
 
+# 15 minutes of graph history (modules\History.psm1): the fast sampler adds a reading a second; it's saved every
+# 5 minutes and on a clean stop, and loaded at the start when its newest reading is under 15 minutes old.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\History.psm1') -Force
+$history = New-HistoryStore
+$historyLoad = Import-History -StatePath (Join-Path $data.Path 'state') -Store $history -Now ([DateTimeOffset]::Now)
+if ($historyLoad.Loaded) { Write-Status 'Graph history from before the restart loaded' }
+elseif ($historyLoad.Reason -in 'stale', 'future') { Write-SrrLog 'INFO' 'history' "history.json not used: it's $($historyLoad.Reason)" }
+elseif ($historyLoad.Reason -ne 'none') { Write-SrrError 'history' "history.json not used ($($historyLoad.Reason)); it was renamed history.json.bad" }
+$historySavedAt = [DateTimeOffset]::Now
+# A failed save is never fatal (spec H8): one console line and the error log, and it's tried again in 5 minutes.
+function Save-HistoryNow {
+    $script:historySavedAt = [DateTimeOffset]::Now
+    try {
+        $r = Save-History -Store $history -StatePath ([IO.Path]::Combine($dataFolder.Path, 'state'))
+        if ($r.Ok) { return }
+        $why = $r.Error
+    } catch { $why = "couldn't save the history: $($_.Exception.Message)" }
+    try { [Console]::WriteLine(''); Write-Host "  $why" -ForegroundColor Yellow } catch { }
+    Write-SrrError 'history' $why
+}
+$stopSavers.Add(@{ Name = 'the graph history'; Save = { Save-HistoryNow } })
+
 # The stop event this copy waits on, tied to its folder (modules\Control.psm1). A name someone else made first
 # with open permissions is refused (exit 3). An old stop-requested marker from an earlier stop is cleared.
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
@@ -541,7 +563,7 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history)
     # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
     # it on "Starting..." with no reason.
     try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
@@ -552,13 +574,11 @@ $sampler = {
     $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
     $ctx = New-FastTickContext -Reader $reader -Processes { Get-Process } -Tracer $tracer -Services $services `
         -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
-        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew())
+        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
     $prev = $null
     while ($true) {
-        $started = [DateTime]::UtcNow
         $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
-        $wait = 1000 - ([DateTime]::UtcNow - $started).TotalMilliseconds
-        if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
+        Start-Sleep -Milliseconds (Get-TickWait -Now ([DateTime]::UtcNow))
     }
 }
 
@@ -570,7 +590,7 @@ $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1'))
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history)
 [void]$worker.BeginInvoke()
 Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 
@@ -963,6 +983,7 @@ if ($spinner) { try { [Console]::CursorVisible = $false } catch { } }
 # A request whose Host names anything but this machine is refused (Get-HostIdentity, modules\Web.psm1).
 $webContext = @{
     State    = $state
+    History  = $history
     WebRoot  = Join-Path $PSScriptRoot 'web'
     Identity = Get-HostIdentity
     BootTime = [DateTimeOffset]$bootTime
@@ -1001,6 +1022,7 @@ function Invoke-Watch {
             }
         } catch { Write-SrrError 'data' "couldn't check the shared folders: $($_.Exception.Message)" }
     }
+    if (Test-HistorySaveDue -LastSave $script:historySavedAt -Now ([DateTimeOffset]::Now)) { Save-HistoryNow }
     $health = Test-WorkerHealth -Workers $workers
     if (-not $health.Healthy) {
         $why = $health.Reason + $(if ($state.error) { " ($($state.error))" })

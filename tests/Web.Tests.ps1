@@ -233,3 +233,35 @@ Describe 'T48-73 /stats while the samplers write' {
         $errors | Should -Be 0
     }
 }
+Describe 'T49-19 to T49-21 GET /history' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\History.psm1') -Force
+        $script:Hist = New-HistoryStore
+        $t0 = [DateTimeOffset]::new(2026, 1, 5, 12, 0, 0, [TimeSpan]::Zero).ToUnixTimeMilliseconds()
+        for ($i = 0; $i -lt 900; $i++) { foreach ($n in $Hist.Names) { $Hist.Append($n, $i * 1234567.891, $t0 + $i * 1000) } }
+        $script:HCtx = New-Context (New-WebRoot); $HCtx.History = $Hist
+    }
+    It 'T49-19 answers with every line at 900 values, as JSON, not cached, under 150 KB' {
+        $r = Invoke-Route -Path '/history' -Context $HCtx
+        $r.Status | Should -Be 200
+        $r.ContentType | Should -Be 'application/json; charset=utf-8'
+        $r.Headers['Cache-Control'] | Should -Be 'no-store'
+        $r.Body.Length | Should -BeLessThan 150KB
+        $o = $r.Body | ConvertFrom-Json
+        $o.version | Should -Be 1; $o.stepMs | Should -Be 1000
+        foreach ($n in 'cpu', 'mem', 'gpu', 'rx', 'tx') { @($o.lines.$n).Count | Should -Be 900 -Because $n }
+    }
+    It 'T49-20 50 requests: p95 under 50 ms' {
+        $times = foreach ($i in 1..50) { (Measure-Command { $null = Invoke-Route -Path '/history' -Context $HCtx }).TotalMilliseconds }
+        $p95 = ($times | Sort-Object)[47]
+        Write-Host ("    T49-20: /history p95 {0:N1} ms" -f $p95)
+        $p95 | Should -BeLessThan 50
+    }
+    It 'T49-21 POST is refused with 405 and a foreign Host with 421' {
+        (Invoke-Route -Method 'POST' -Path '/history' -Context $HCtx).Status | Should -Be 405
+        (Invoke-Route -Path '/history' -Headers @{ Host = 'evil.example:8091' } -Context $HCtx).Status | Should -Be 421
+    }
+    It 'T49-19 a copy with no history store answers 404' {
+        (Invoke-Route -Path '/history' -Context (New-Context (New-WebRoot))).Status | Should -Be 404
+    }
+}
