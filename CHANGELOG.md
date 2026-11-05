@@ -72,6 +72,11 @@ called out under **Changed** or **Removed** with upgrade notes.
   sensor" (hover names the sticks) instead of leaving the temperature blank, which looked broken.
   Most DDR4 has no sensor; DDR5 does.
 
+### Removed
+
+- **Plex stream alerts.** A banner for every new stream was too much with short episodes. The
+  Plex row in Processes still shows streams, with details on hover. Valheim alerts are unchanged.
+
 ## [0.6.0] - 2026-10-28
 
 Hardware identity and temperatures: the CPU and Memory tiles name the parts, show the maker's

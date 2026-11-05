@@ -332,11 +332,9 @@ until you come back), or click × to close it.
 - **Valheim:** a player joined or left, e.g. "Ivar joined Valheim · 2 players online". Names
   appear when the server reports them; otherwise "A player joined". Checked every 10 seconds,
   with the player count.
-- **Plex:** a stream started, with what's playing, who, on which device, and how: e.g.
-  "Plex: The Office - Dinner Party · Alex on Living Room TV (Plex for Roku) · Transcoding
-  1080p → 720p on the GPU · 4.0 Mbps", or "Direct play · 1080p". Transcoding on the CPU instead
-  of the GPU is worth noticing: it's what makes a server struggle. Pausing and resuming doesn't
-  count as a new stream.
+
+Plex streams don't raise alerts (short episodes made them constant). The Plex row in Processes
+still shows the stream count, and its hover lists who's watching what, on which device, and how.
 
 **Sound:** click **Sound off** in the header to turn on a soft ding with each alert (you hear a
 sample). Browsers only play sound after you've clicked or tapped the page, so after a reload the

@@ -124,7 +124,6 @@ function render(s) {
   renderProcs(s);
   renderDrives(s);
   watchValheim(s);
-  watchPlex(s);
 }
 function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
   const TB = 1099511627776, GB = 1073741824;
@@ -281,25 +280,8 @@ function watchValheim(s) {
   }
   lastValheim = {players: a.players, names: names};
 }
-// Plex: a banner for each new stream, told apart by Plex's session ID, so pausing and
-// resuming doesn't count. Says what, who, on which device, and how it's being played.
+// Plex: the device a stream plays on, with the app when it differs (for the row's hover).
 const plexDevice = i => !i.device ? i.app || '' : i.app && i.app !== i.device ? i.device + ' (' + i.app + ')' : i.device;
-const plexRes = r => /^\d+$/.test(r || '') ? r + 'p' : r === '4k' ? '4K' : String(r || '').toUpperCase();
-let plexKeys = null;
-function watchPlex(s) {
-  const a = (s.activity || {}).Plex;
-  if (!a || a.error) return;
-  const items = a.items || [];
-  if (plexKeys) items.filter(i => i.key && !plexKeys.includes(i.key)).forEach(i => {
-    const arrow = ' ' + String.fromCharCode(8594) + ' ';
-    const how = i.playback === 'transcode'
-      ? 'Transcoding ' + plexRes(i.source) + (i.target ? arrow + plexRes(i.target) : '') + (i.hardware ? ' on the GPU' : ' on the CPU')
-      : (i.playback === 'direct stream' ? 'Direct stream' : 'Direct play') + (i.source ? ' ' + String.fromCharCode(183) + ' ' + plexRes(i.source) : '');
-    const rate = i.kbps ? ' ' + String.fromCharCode(183) + ' ' + (i.kbps >= 1000 ? (i.kbps / 1000).toFixed(1) + ' Mbps' : i.kbps + ' Kbps') : '';
-    notify('plex', 'Plex: ' + i.title, [(i.user || 'Someone') + (plexDevice(i) ? ' on ' + plexDevice(i) : ''), how + rate]);
-  });
-  plexKeys = items.map(i => i.key);
-}
 function drawGraphs() {
   const v = n => visibleSlice(hist[n], range);
   draw('cpuC', [{data: v('cpu'), color: css('--cpu'), fill: true}], 100, '', range);
