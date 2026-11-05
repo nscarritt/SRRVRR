@@ -12,7 +12,7 @@ called out under **Changed** or **Removed** with upgrade notes.
 ### Added
 
 - **Alerts decided on the server, an event log, Maintenance and a Flagged list.** SRRVRR now spots
-  players joining and leaving, new Plex streams, Valheim or Plex going offline or not answering, drive
+  Valheim players joining and leaving, Valheim or Plex going offline or not answering, drive
   health changes, a missing data drive, Windows waiting to restart and its own problems by itself,
   with no page open, and every page shows the same banners. Warnings and flags go to
   `logs\events-YYYY-MM-DD.jsonl` (counts only, never names). Logs older than `LogRetentionDays` are
@@ -81,6 +81,11 @@ called out under **Changed** or **Removed** with upgrade notes.
 - **Memory sticks without a temperature sensor now say so.** The Memory tile shows a gray "No
   sensor" (hover names the sticks) instead of leaving the temperature blank, which looked broken.
   Most DDR4 has no sensor; DDR5 does.
+
+### Removed
+
+- **Plex stream alerts.** A banner for every new stream was too much with short episodes. The
+  Plex row in Processes still shows streams, with details on hover. Valheim alerts are unchanged.
 
 ## [0.6.0] - 2026-10-28
 

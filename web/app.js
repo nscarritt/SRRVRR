@@ -278,7 +278,7 @@ function nextSince(s, current) {
   for (const id of ids) if (typeof id === 'number' && (n == null || id > n)) n = id;
   return n;
 }
-const shouldBanner = (e, m) => !!(e && e.banner && !e.maintenance && !(m && m.on));
+const shouldBanner =(e, m) => !!(e && e.banner && !e.maintenance && !(m && m.on));
 // One /stats answer -> the banners to show, the next `since`, whether to say some were skipped (more than 50 new
 // events), and whether a logged event arrived (the Flagged list then reloads). Ids up to `current` were seen already.
 function takeEvents(s, current) {
@@ -289,18 +289,9 @@ function takeEvents(s, current) {
   return {since: next, banners: fresh.filter(e => shouldBanner(e, s.maintenance)).map(bannerFor),
     more: !!(s && s.eventsTruncated) && !quiet, flagged: fresh.some(e => e.logged)};
 }
-// Plex: says what, who, on which device, and how it's being played.
+// Plex: the device a stream plays on, with the app when it differs (for the row's hover). Plex streams raise no
+// alerts (#57: short episodes made them constant).
 const plexDevice = i => !i.device ? i.app || '' : i.app && i.app !== i.device ? i.device + ' (' + i.app + ')' : i.device;
-const plexRes = r => /^\d+$/.test(r || '') ? r + 'p' : r === '4k' ? '4K' : String(r || '').toUpperCase();
-function plexBanner(d) {
-  const dot = ' ' + String.fromCharCode(183) + ' ', arrow = ' ' + String.fromCharCode(8594) + ' ';
-  const how = d.playback === 'transcode'
-    ? 'Transcoding ' + plexRes(d.source) + (d.target ? arrow + plexRes(d.target) : '') + (d.hardware ? ' on the GPU' : ' on the CPU')
-    : (d.playback === 'direct stream' ? 'Direct stream' : 'Direct play') + (d.source ? dot + plexRes(d.source) : '');
-  const rate = d.kbps ? dot + (d.kbps >= 1000 ? (d.kbps / 1000).toFixed(1) + ' Mbps' : d.kbps + ' Kbps') : '';
-  return {icon: 'plex', title: 'Plex: ' + (d.title || 'a new stream'),
-    lines: [(d.user || 'Someone') + (plexDevice(d) ? ' on ' + plexDevice(d) : ''), how + rate]};
-}
 // Valheim: who joined or left (names when the server reports them), and how many are on now.
 function playerBanner(d, up) {
   const who = [].concat(d.who || []), n = Math.abs(d.change) || 1;
@@ -315,7 +306,6 @@ function bannerFor(e) {
   switch (e && e.type) {
     case 'player-join': return playerBanner(d, true);
     case 'player-leave': return playerBanner(d, false);
-    case 'plex-stream': return plexBanner(d);
     case 'service-offline': return b(serviceIcon(name), name + ' went offline', ['It is no longer running.']);
     case 'service-back': return b(serviceIcon(name), name + ' is back online', ['It is running again.']);
     case 'query-stopped': return b(serviceIcon(name), name + ' stopped answering', ['It is running, but not answering status checks.', d.error && 'Reason: ' + d.error]);
@@ -472,6 +462,6 @@ loadHistory().then(tick);
 // For tests under Node: the page's pure functions (tests/js). Browsers have no 'module', so this does nothing there.
 if (typeof module !== 'undefined') {
   module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory,
-    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexRes, plexDevice, maintenanceText, maintenanceError,
+    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexDevice, maintenanceText, maintenanceError,
     flaggedDays, flaggedHtml, flaggedError, soundFromStorage, saveSound };
 }

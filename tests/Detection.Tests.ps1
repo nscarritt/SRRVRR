@@ -39,14 +39,11 @@ Describe 'T50-07 Valheim players' {
 }
 
 Describe 'T50-08 Plex streams' {
-    It 'T50-08 one event for a new key, nothing for pause and resume, nothing on the first observation' {
+    # Plex stream alerts were turned off in #57 (a banner for every short episode was constant): a new stream, a pause
+    # and a resume raise nothing. Plex going offline or not answering still does (T50-09, T50-10).
+    It 'T50-08 a new stream, a pause and a resume raise no event' {
         Get-Types (New-Plex @()) (New-Plex @()) | Should -BeNullOrEmpty
-        $new = @(Get-StateEvents -Old (New-Plex @()) -New (New-Plex @(New-Stream 's1')))
-        $new.Count | Should -Be 1
-        $new[0].type | Should -Be 'plex-stream'
-        $new[0].banner | Should -BeTrue
-        $new[0].logged | Should -BeFalse
-        $new[0].data.title | Should -Be 'CanaryFilmYp'
+        Get-Types (New-Plex @()) (New-Plex @(New-Stream 's1')) | Should -BeNullOrEmpty
         Get-Types (New-Plex @(New-Stream 's1')) (New-Plex @(New-Stream 's1' 'direct stream')) | Should -BeNullOrEmpty
         Get-Types $null (New-Plex @(New-Stream 's1')) | Should -BeNullOrEmpty
         Get-Types @{ activity = @{} } (New-Plex @(New-Stream 's1')) | Should -BeNullOrEmpty
@@ -154,9 +151,9 @@ Describe 'T50-15 Maintenance, start and stop' {
 
 Describe 'T50-16 the spec''s table' {
     It 'T50-16 every event type the module defines matches the spec, and none is missing' {
-        # Copied from the spec, section 4: type, severity, banner, logged.
+        # Copied from the spec, section 4: type, severity, banner, logged (less Plex streams, turned off in #57).
         $spec = @{
-            'player-join' = 'info', $true, $false; 'player-leave' = 'info', $true, $false; 'plex-stream' = 'info', $true, $false
+            'player-join' = 'info', $true, $false; 'player-leave' = 'info', $true, $false
             'service-offline' = 'warn', $true, $true; 'service-back' = 'warn', $true, $true
             'query-stopped' = 'warn', $true, $true; 'query-back' = 'warn', $true, $true
             'restart-pending' = 'info', $false, $true

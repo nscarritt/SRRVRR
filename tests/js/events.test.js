@@ -114,8 +114,8 @@ test('T50-47 "Maintenance until HH:MM" in the browser\'s own time zone (two zone
   assert.ok(app.maintenanceError(0).length > 0);
 });
 
-// Golden values: what the v0.6.0 page's watchValheim / watchPlex (commit 90afdd6) passed to notify for the same change.
-const MID = '\u00b7', ARROW = '\u2192';
+// Golden values: what the v0.6.0 page's watchValheim (commit 90afdd6) passed to notify for the same change. Plex streams no
+// longer raise alerts (#57).
 const golden = [
   ['Valheim: one joins, named (1 Ragnar -> 2 Ragnar, Lagertha)', { type: 'player-join', data: { players: 2, change: 1, who: ['Lagertha'] } },
     'valheim', 'Lagertha joined Valheim', ['2 players online']],
@@ -131,20 +131,6 @@ const golden = [
     'valheim', 'A player left Valheim', ['2 players online']],
   ['Valheim: everyone leaves, no names (2 -> 0)', { type: 'player-leave', data: { players: 0, change: 2, who: [] } },
     'valheim', '2 players left Valheim', ['No players online']],
-  ['Plex: transcoding on the GPU, over 1000 Kbps', { type: 'plex-stream', data: { key: 'k1', user: 'Ragnar', title: 'Big Buck Bunny',
-    device: 'Living Room TV', app: 'Plex for Roku', playback: 'transcode', source: '1080', target: '720', hardware: true, kbps: 4500 } },
-    'plex', 'Plex: Big Buck Bunny', ['Ragnar on Living Room TV (Plex for Roku)', 'Transcoding 1080p ' + ARROW + ' 720p on the GPU ' + MID + ' 4.5 Mbps']],
-  ['Plex: transcoding on the CPU, no target, exactly 1000 Kbps', { type: 'plex-stream', data: { key: 'k2', user: 'Lagertha', title: 'Sintel',
-    device: 'Shield', app: '', playback: 'transcode', source: '4k', hardware: false, kbps: 1000 } },
-    'plex', 'Plex: Sintel', ['Lagertha on Shield', 'Transcoding 4K on the CPU ' + MID + ' 1.0 Mbps']],
-  ['Plex: direct play, no user or device, under 1000 Kbps', { type: 'plex-stream', data: { key: 'k3', user: '', title: 'Tears of Steel',
-    device: '', app: 'Plex Web', playback: 'direct play', source: '4k', kbps: 999 } },
-    'plex', 'Plex: Tears of Steel', ['Someone on Plex Web', 'Direct play ' + MID + ' 4K ' + MID + ' 999 Kbps']],
-  ['Plex: direct stream, same device and app, no rate', { type: 'plex-stream', data: { key: 'k4', user: 'Bjorn', title: 'Elephants Dream',
-    device: 'Phone', app: 'Phone', playback: 'direct stream', source: 'sd', kbps: 0 } },
-    'plex', 'Plex: Elephants Dream', ['Bjorn on Phone', 'Direct stream ' + MID + ' SD']],
-  ['Plex: nothing known but the user', { type: 'plex-stream', data: { key: 'k5', user: 'Bjorn', title: 'Cosmos Laundromat' } },
-    'plex', 'Plex: Cosmos Laundromat', ['Bjorn', 'Direct play']],
 ];
 for (const [name, e, icon, title, lines] of golden) {
   test('T50-48 ' + name + ': the same banner as v0.6.0', () => {

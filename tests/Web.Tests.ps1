@@ -474,11 +474,11 @@ Describe 'T50-34 to T50-37 and T50-42 to T50-44: POST /maintenance and /events t
             $new = @{ activity = @{ Valheim = @{ players = 1; names = @(@{ name = 'CanaryVikingQx' }) }; Plex = @{ items = @(@{ key = 's1'; user = 'CanaryUserWv'; title = 'CanaryFilmYp'; device = 'CanaryTvKj'; app = 'CanaryAppRr' }) } } }
             foreach ($e in Get-StateEvents -Old $old -New $new) { $e.logged = $true; Add-SrrQueueItem -Queue $q -Item $e }
             $writers = @{ Event = { param($e) & $write $e; [void]$index.Add((ConvertTo-LoggedEvent $e)) }.GetNewClosure() }
-            Invoke-QueueDrain -Queue $q -Store $store -Writers $writers -Clock $clock | Should -Be 2
+            Invoke-QueueDrain -Queue $q -Store $store -Writers $writers -Clock $clock | Should -Be 1   # the join (Plex streams raise none, #57)
             $c = New-MaintContext
             $now = $Now50; $c.ReadEvents = { param($days) Get-IndexedEvents -Index $index -Days $days -Now $now }.GetNewClosure()
             $r = Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '1' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c
-            @(($r.Body | ConvertFrom-Json).events).Count | Should -Be 2
+            @(($r.Body | ConvertFrom-Json).events).Count | Should -Be 1
             $r.Body | Should -Not -Match 'Canary'
         } finally { Remove-TestDataPath $dir }
     }

@@ -86,7 +86,6 @@ function Invoke-QueueDrain {
 $script:EventTypes = @{
     'player-join' = @{ Severity = 'info'; Banner = $true; Logged = $false }
     'player-leave' = @{ Severity = 'info'; Banner = $true; Logged = $false }
-    'plex-stream' = @{ Severity = 'info'; Banner = $true; Logged = $false }
     'service-offline' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
     'service-back' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
     'query-stopped' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
@@ -116,11 +115,10 @@ function New-TypedEvent {
     New-SrrEvent -Type $Type -Severity $t.Severity -Key $Key -Data $Data -Banner $t.Banner -Logged $t.Logged -Group $Group
 }
 
-# A list comes back unrolled, so an empty one is $null: use Test-Field to ask whether it's there.
+# A list comes back unrolled, so an empty one is $null.
 function Get-Field([object]$Table, [string]$Name) {
     if ($Table -is [Collections.IDictionary] -and $Table.Contains($Name)) { $Table[$Name] } else { $null }
 }
-function Test-Field([object]$Table, [string]$Name) { $Table -is [Collections.IDictionary] -and $Table.Contains($Name) }
 # The Field value of each row (a hashtable) in Rows, as a list.
 function Get-RowValues([object]$Rows, [string]$Field) {
     $values = New-Object System.Collections.Generic.List[object]
@@ -142,29 +140,18 @@ function Get-StateEvents {
         $oErr = Get-Field $o 'error'; $nErr = Get-Field $n 'error'
         if (-not $oErr -and $nErr -and (Get-Field $n 'alert')) { $out.Add((New-TypedEvent -Type 'query-stopped' -Data @{ name = $name; error = [string]$nErr } -Key "query-stopped|$name" -Group "query|$name")) }
         elseif ($oErr -and (Get-Field $o 'alert') -and -not $nErr) { $out.Add((New-TypedEvent -Type 'query-back' -Data @{ name = $name } -Key "query-back|$name" -Group "query|$name")) }
-        if ($oErr -or $nErr) { continue }
-        if ($name -eq 'Valheim') {
-            $op = Get-Field $o 'players'; $np = Get-Field $n 'players'
-            if ($null -eq $op -or $null -eq $np -or $op -eq $np) { continue }
-            $oNames = Get-RowValues (Get-Field $o 'names') 'name'
-            $nNames = Get-RowValues (Get-Field $n 'names') 'name'
-            $up = $np -gt $op
-            $who = New-Object System.Collections.Generic.List[object]
-            if ($up) { foreach ($x in $nNames) { if (-not $oNames.Contains($x)) { $who.Add($x) } } }
-            else { foreach ($x in $oNames) { if (-not $nNames.Contains($x)) { $who.Add($x) } } }
-            $type = if ($up) { 'player-join' } else { 'player-leave' }
-            $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who.ToArray() } -Key "$type|$np|$($who -join ',')" -Group 'valheim-players'))
-        } else {
-            if (-not (Test-Field $o 'items') -or -not (Test-Field $n 'items')) { continue }
-            $oKeys = Get-RowValues $o['items'] 'key'
-            foreach ($i in $n['items']) {
-                if ($i -isnot [Collections.IDictionary]) { continue }
-                $k = $i['key']
-                if (-not $k -or $oKeys.Contains($k)) { continue }
-                $data = @{}; foreach ($f in $i.Keys) { $data[$f] = $i[$f] }
-                $out.Add((New-TypedEvent -Type 'plex-stream' -Data $data -Key "plex-stream|$k"))
-            }
-        }
+        # Plex streams raise no event (#57: a banner for every short episode was constant); only Valheim players do.
+        if ($oErr -or $nErr -or $name -ne 'Valheim') { continue }
+        $op = Get-Field $o 'players'; $np = Get-Field $n 'players'
+        if ($null -eq $op -or $null -eq $np -or $op -eq $np) { continue }
+        $oNames = Get-RowValues (Get-Field $o 'names') 'name'
+        $nNames = Get-RowValues (Get-Field $n 'names') 'name'
+        $up = $np -gt $op
+        $who = New-Object System.Collections.Generic.List[object]
+        if ($up) { foreach ($x in $nNames) { if (-not $oNames.Contains($x)) { $who.Add($x) } } }
+        else { foreach ($x in $oNames) { if (-not $nNames.Contains($x)) { $who.Add($x) } } }
+        $type = if ($up) { 'player-join' } else { 'player-leave' }
+        $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who.ToArray() } -Key "$type|$np|$($who -join ',')" -Group 'valheim-players'))
     }
     # Plain loops below, not pipelines: this runs every second, and Where-Object / ForEach-Object cost about 10 ms.
     $os = @{}
