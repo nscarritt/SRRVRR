@@ -179,12 +179,18 @@ function Write-RouteError([hashtable]$Context, [string]$Message) {
 function Invoke-SrrRequest($ListenerContext, [hashtable]$Context) {
     try {
         $request = ConvertTo-SrrRequest -ListenerContext $ListenerContext
-        # POST /maintenance is the only request with a body, read only once the Host check has passed.
+        # POST /maintenance is the only request with a body. It's read only once the Host check has passed and the
+        # X-SRRVRR header is there (the full guard runs after), and only within one short deadline: the listener has
+        # one thread, so a body trickled in slowly must not hold up every other request.
         if ($request.Method -eq 'POST' -and $request.Path -eq '/maintenance' -and
             (Test-HostAllowed -HostHeader $request.Headers['Host'] -Port $request.LocalPort -Identity $Context.Identity)) {
-            $body = Read-RequestBody -Request $ListenerContext.Request
-            if ($null -eq $body) { Send-SrrResponse -ListenerContext $ListenerContext -Result (New-Result 413 'text/plain; charset=utf-8' 'Request body too large'); return }
-            $request.Body = $body
+            if ($request.Headers['X-SRRVRR'] -cne '1') {
+                Send-SrrResponse -ListenerContext $ListenerContext -Result (New-Result 403 'application/json; charset=utf-8' '{"error":"refused"}'); return
+            }
+            $read = Read-RequestBody -Request $ListenerContext.Request
+            if ($read.Status -eq 408) { $ListenerContext.Response.Abort(); return }
+            if (-not $read.Ok) { Send-SrrResponse -ListenerContext $ListenerContext -Result (New-Result $read.Status 'text/plain; charset=utf-8' $read.Error); return }
+            $request.Body = $read.Body
         }
         Send-SrrResponse -ListenerContext $ListenerContext -Result (Invoke-SrrRoute @request -Context $Context)
     } catch {
@@ -207,20 +213,26 @@ function ConvertTo-SrrRequest($ListenerContext) {
     }
 }
 
-# A request's body as text, at most MaxBytes; $null when it's longer (or says it will be). The listener's EntityBody
-# timeout (set in SRRVRR.ps1) ends a body that never finishes.
-function Read-RequestBody($Request, [int]$MaxBytes = 1024) {
-    if (-not $Request.HasEntityBody) { return '' }
-    if ($Request.ContentLength64 -gt $MaxBytes) { return $null }
-    $buffer = New-Object byte[] ($MaxBytes + 1)
+# A request's body as text: at most MaxBytes, with a stated length, all of it within DeadlineMs. Returns @{ Ok; Body;
+# Status; Error }: 411 with no length, 413 when too long, 408 when the deadline passed (the caller drops the
+# connection).
+function Read-RequestBody($Request, [int]$MaxBytes = 1024, [int]$DeadlineMs = 2000) {
+    if (-not $Request.HasEntityBody) { return @{ Ok = $true; Body = '' } }
+    $length = $Request.ContentLength64
+    if ($length -lt 0) { return @{ Ok = $false; Status = 411; Error = 'A Content-Length is required' } }
+    if ($length -gt $MaxBytes) { return @{ Ok = $false; Status = 413; Error = 'Request body too large' } }
+    $buffer = New-Object byte[] $length
     $total = 0
-    while ($total -lt $buffer.Length) {
-        $n = $Request.InputStream.Read($buffer, $total, $buffer.Length - $total)
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while ($total -lt $length) {
+        $left = $DeadlineMs - [int]$clock.ElapsedMilliseconds
+        $pending = $Request.InputStream.BeginRead($buffer, $total, $length - $total, $null, $null)
+        if ($left -le 0 -or -not $pending.AsyncWaitHandle.WaitOne($left)) { return @{ Ok = $false; Status = 408; Error = 'Request body too slow' } }
+        $n = $Request.InputStream.EndRead($pending)
         if ($n -le 0) { break }
         $total += $n
     }
-    if ($total -gt $MaxBytes) { return $null }
-    [Text.Encoding]::UTF8.GetString($buffer, 0, $total)
+    @{ Ok = $true; Body = [Text.Encoding]::UTF8.GetString($buffer, 0, $total) }
 }
 
 function Send-SrrResponse($ListenerContext, [hashtable]$Result) {

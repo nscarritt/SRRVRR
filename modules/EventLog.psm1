@@ -129,16 +129,20 @@ function Remove-OldLogs {
     }
     if (-not $logs.Count) { return $result }
 
+    # Today's files don't count as evidence the clock is right: SRRVRR writes today's log before cleanup runs, so a
+    # clock that jumped ahead has always just made one. The check uses the newest file from before today.
     $today = $Now.Date
-    $newest = ($logs | ForEach-Object { $_.Date } | Sort-Object | Select-Object -Last 1)
+    $dates = @($logs | ForEach-Object { $_.Date } | Sort-Object -Unique)
+    $before = @($dates | Where-Object { $_ -lt $today })
     $clockError = $null
-    if ($today -lt $newest) {
-        $clockError = "log cleanup skipped: the clock ($($today.ToString('yyyy-MM-dd'))) is earlier than the newest log file's date ($($newest.ToString('yyyy-MM-dd')))"
-    } elseif (($today - $newest).Days -gt $RetentionDays) {
-        $clockError = "log cleanup skipped: the clock ($($today.ToString('yyyy-MM-dd'))) is more than $RetentionDays days past the newest log file's date ($($newest.ToString('yyyy-MM-dd')))"
+    if ($dates[-1] -gt $today) {
+        $clockError = "log cleanup skipped: the clock ($($today.ToString('yyyy-MM-dd'))) is earlier than the newest log file's date ($($dates[-1].ToString('yyyy-MM-dd')))"
+    } elseif ($before.Count -and ($today - $before[-1]).Days -gt $RetentionDays) {
+        $clockError = "log cleanup skipped: the clock ($($today.ToString('yyyy-MM-dd'))) is more than $RetentionDays days past the newest earlier log file's date ($($before[-1].ToString('yyyy-MM-dd')))"
     }
     if ($clockError) { $result.Errors = [string[]]@($clockError); $result.Skipped = $true; return $result }
 
+    $newest = $dates[-1]
     foreach ($log in @($logs | Sort-Object { $_.Date })) {
         if (($today - $log.Date).Days -lt $RetentionDays) { continue }
         if (($newest - $log.Date).Days -lt $FloorDays) { continue }

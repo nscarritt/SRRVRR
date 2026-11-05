@@ -10,17 +10,18 @@ function New-EventId {
 }
 
 # An event before the drain gives it an id and a time. Banner and Logged say where it goes; the drain marks it
-# maintenance when Maintenance is on.
+# maintenance when Maintenance is on. Group names the thing the event is about (default: its key); a key is a repeat only
+# when it's also the last kept in its group, so offline, back, offline again are three events.
 function New-SrrEvent {
     param(
         [string]$Type, [ValidateSet('info', 'warn', 'flag')][string]$Severity, [string]$Key, [hashtable]$Data = @{},
-        [bool]$Banner = $false, [bool]$Logged = $false
+        [bool]$Banner = $false, [bool]$Logged = $false, [string]$Group
     )
     if (-not $Type) { throw 'An event needs a type.' }
     if (-not $Severity) { throw 'An event needs a severity.' }
     if (-not $Key) { throw "Event '$Type' needs a key for repeat suppression." }
     [pscustomobject]@{
-        id = 0L; time = 0L; type = $Type; severity = $Severity; key = $Key; data = $Data
+        id = 0L; time = 0L; type = $Type; severity = $Severity; key = $Key; group = $(if ($Group) { $Group } else { $Key }); data = $Data
         maintenance = $false; banner = $Banner; logged = $Logged
     }
 }
@@ -61,9 +62,9 @@ function Invoke-QueueDrain {
         }
         $now = & $Clock
         $nowMs = $now.ToUnixTimeMilliseconds()
-        $last = $Store.LastKept[$item.key]
-        if ($null -ne $last -and ($nowMs - $last) -lt $Store.SuppressFor.TotalMilliseconds) { continue }
-        $Store.LastKept[$item.key] = $nowMs
+        $last = $Store.LastKept[$item.group]
+        if ($last -and $last.Key -eq $item.key -and ($nowMs - $last.Ms) -lt $Store.SuppressFor.TotalMilliseconds) { continue }
+        $Store.LastKept[$item.group] = @{ Key = $item.key; Ms = $nowMs }
         $item.id = New-EventId -NowMs $nowMs -LastId $Store.LastId
         $item.time = $nowMs
         if ($Maintenance) { $item.maintenance = [bool](& $Maintenance) }
@@ -108,11 +109,11 @@ function Get-EventTypes { $script:EventTypes.Clone() }
 
 # An event of a known type, its severity, banner and logging taken from the table. Key defaults to the type.
 function New-TypedEvent {
-    param([string]$Type, [hashtable]$Data = @{}, [string]$Key)
+    param([string]$Type, [hashtable]$Data = @{}, [string]$Key, [string]$Group)
     $t = $script:EventTypes[$Type]
     if (-not $t) { throw "Unknown event type '$Type'." }
     if (-not $Key) { $Key = $Type }
-    New-SrrEvent -Type $Type -Severity $t.Severity -Key $Key -Data $Data -Banner $t.Banner -Logged $t.Logged
+    New-SrrEvent -Type $Type -Severity $t.Severity -Key $Key -Data $Data -Banner $t.Banner -Logged $t.Logged -Group $Group
 }
 
 # A list comes back unrolled, so an empty one is $null: use Test-Field to ask whether it's there.
@@ -133,8 +134,8 @@ function Get-StateEvents {
         $o = Get-Field $oa $name; $n = Get-Field $na $name
         if (-not $o -or -not $n) { continue }
         $oErr = Get-Field $o 'error'; $nErr = Get-Field $n 'error'
-        if (-not $oErr -and $nErr -and (Get-Field $n 'alert')) { $out.Add((New-TypedEvent -Type 'query-stopped' -Data @{ name = $name; error = [string]$nErr } -Key "query-stopped|$name")) }
-        elseif ($oErr -and (Get-Field $o 'alert') -and -not $nErr) { $out.Add((New-TypedEvent -Type 'query-back' -Data @{ name = $name } -Key "query-back|$name")) }
+        if (-not $oErr -and $nErr -and (Get-Field $n 'alert')) { $out.Add((New-TypedEvent -Type 'query-stopped' -Data @{ name = $name; error = [string]$nErr } -Key "query-stopped|$name" -Group "query|$name")) }
+        elseif ($oErr -and (Get-Field $o 'alert') -and -not $nErr) { $out.Add((New-TypedEvent -Type 'query-back' -Data @{ name = $name } -Key "query-back|$name" -Group "query|$name")) }
         if ($oErr -or $nErr) { continue }
         if ($name -eq 'Valheim') {
             $op = Get-Field $o 'players'; $np = Get-Field $n 'players'
@@ -144,7 +145,7 @@ function Get-StateEvents {
             $up = $np -gt $op
             $who = if ($up) { @($nNames | Where-Object { $oNames -notcontains $_ }) } else { @($oNames | Where-Object { $nNames -notcontains $_ }) }
             $type = if ($up) { 'player-join' } else { 'player-leave' }
-            $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who } -Key "$type|$np|$($who -join ',')"))
+            $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who } -Key "$type|$np|$($who -join ',')" -Group 'valheim-players'))
         } else {
             if (-not (Test-Field $o 'items') -or -not (Test-Field $n 'items')) { continue }
             $oKeys = @(Get-Field $o 'items' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'key' })
@@ -161,9 +162,10 @@ function Get-StateEvents {
         $name = [string](Get-Field $s 'name'); $on = [bool](Get-Field $s 'online')
         if (-not $os.ContainsKey($name) -or $os[$name] -eq $on) { continue }
         $type = if ($on) { 'service-back' } else { 'service-offline' }
-        $out.Add((New-TypedEvent -Type $type -Data @{ name = $name } -Key "$type|$name"))
+        $out.Add((New-TypedEvent -Type $type -Data @{ name = $name } -Key "$type|$name" -Group "service|$name"))
     }
-    if ($Old -is [Collections.IDictionary] -and $Old.Contains('restartPending') -and -not $Old['restartPending'] -and (Get-Field $New 'restartPending')) {
+    # Only a real false counts as "was not pending": $null means the slow sampler hasn't checked yet.
+    if ((Get-Field $Old 'restartPending') -is [bool] -and -not (Get-Field $Old 'restartPending') -and (Get-Field $New 'restartPending') -eq $true) {
         $out.Add((New-TypedEvent -Type 'restart-pending' -Data @{ reason = [string](Get-Field $New 'restartReason') }))
     }
     $od = @{}; foreach ($d in @(Get-Field $Old 'drives' | Where-Object { $_ })) { $od[[string](Get-Field $d 'letter')] = [string](Get-Field $d 'health') }
@@ -171,7 +173,7 @@ function Get-StateEvents {
         $letter = [string](Get-Field $d 'letter'); $health = [string](Get-Field $d 'health')
         if (-not $od.ContainsKey($letter) -or $od[$letter] -eq $health) { continue }
         $type = if ($health -eq 'Missing') { 'data-drive-missing' } else { 'drive-health' }
-        $out.Add((New-TypedEvent -Type $type -Data @{ letter = $letter; health = $health; was = $od[$letter] } -Key "$type|$letter|$health"))
+        $out.Add((New-TypedEvent -Type $type -Data @{ letter = $letter; health = $health; was = $od[$letter] } -Key "$type|$letter|$health" -Group "drive|$letter"))
     }
     $out
 }

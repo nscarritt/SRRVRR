@@ -293,6 +293,27 @@ Describe 'T50-24 a wrong clock skips cleanup' {
             (Get-Names $dir).Count | Should -Be 3
         } finally { Remove-TestDataPath (Split-Path -Parent $dir) }
     }
+    It 'T50-24 a clock a year ahead with today''s file already written (as SRRVRR writes it before cleanup): skipped, nothing deleted' {
+        $dir = Join-Path (New-TestDataPath) 'logs'
+        try {
+            $real = 0..9 | ForEach-Object { 'events-' + $T0.AddYears(-1).AddDays(-$_).ToString('yyyy-MM-dd') + '.jsonl' }
+            New-Files $dir ($real + @(('srrvrr-' + $T0.ToString('yyyy-MM-dd') + '.log'), ('events-' + $T0.ToString('yyyy-MM-dd') + '.jsonl')))
+            $r = Remove-OldLogs -LogDir $dir -RetentionDays 31 -Now $T0
+            $r.Skipped | Should -BeTrue
+            $r.Deleted.Count | Should -Be 0
+            (Get-Names $dir).Count | Should -Be 12
+        } finally { Remove-TestDataPath (Split-Path $dir) }
+    }
+    It 'T50-24 with today''s file present, old files still go when the clock is right' {
+        $dir = Join-Path (New-TestDataPath) 'logs'
+        try {
+            $recent = 0..8 | ForEach-Object { 'srrvrr-' + $T0.AddDays(-$_).ToString('yyyy-MM-dd') + '.log' }
+            New-Files $dir ($recent + @(('srrvrr-' + $T0.AddDays(-60).ToString('yyyy-MM-dd') + '.log')))
+            $r = Remove-OldLogs -LogDir $dir -RetentionDays 31 -Now $T0
+            $r.Skipped | Should -BeFalse
+            @($r.Deleted) | Should -Be @('srrvrr-' + $T0.AddDays(-60).ToString('yyyy-MM-dd') + '.log')
+        } finally { Remove-TestDataPath (Split-Path $dir) }
+    }
     It 'T50-24 a clock more than the days kept past the newest file''s date: skipped with one error line, nothing deleted' {
         $dir = Join-Path (New-TestDataPath) 'logs'
         try {
@@ -322,7 +343,8 @@ Describe 'T50-25 when cleanup runs, and a file it cannot delete' {
         $dir = Join-Path (New-TestDataPath) 'logs'
         $ro = [IO.Path]::Combine($dir, 'events-2025-01-01.jsonl')
         try {
-            New-Files $dir @('events-2025-01-01.jsonl', 'events-2025-01-02.jsonl', 'srrvrr-2025-01-03.log', 'events-2026-03-01.jsonl')
+            # A file from yesterday too: with only today's beside them, old files look like a clock that jumped (kept).
+            New-Files $dir @('events-2025-01-01.jsonl', 'events-2025-01-02.jsonl', 'srrvrr-2025-01-03.log', 'events-2026-02-28.jsonl', 'events-2026-03-01.jsonl')
             [IO.File]::SetAttributes($ro, [IO.FileAttributes]::ReadOnly)
             $r = Remove-OldLogs -LogDir $dir -RetentionDays 31 -Now $T0
             @($r.Deleted | Sort-Object) | Should -Be @('events-2025-01-02.jsonl', 'srrvrr-2025-01-03.log')

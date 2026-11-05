@@ -99,6 +99,9 @@ Describe 'T50-11 Windows waiting to restart' {
         $e[0].data.reason | Should -Be 'Windows Update'
         Get-Types @{ restartPending = $true } @{ restartPending = $true } | Should -BeNullOrEmpty
     }
+    It 'T50-11 not read yet ($null, before the slow sampler''s first check) to true is a first observation: nothing' {
+        Get-Types @{ restartPending = $null } @{ restartPending = $true } | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'T50-12 drive health' {

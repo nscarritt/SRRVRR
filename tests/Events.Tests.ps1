@@ -69,6 +69,28 @@ Describe 'T50-03 repeat suppression' {
     }
 }
 
+Describe 'T50-03 a second change of the same thing is not a repeat' {
+    It 'T50-03 offline, back, offline again within 10 minutes: all three kept; the same alert twice in a row is still suppressed' {
+        Set-Now $T0
+        $q = New-SrrQueue; $store = New-EventStore -Clock $Clock
+        $steps = @(
+            @{ At = 0; Type = 'service-offline' }, @{ At = 2; Type = 'service-back' }, @{ At = 4; Type = 'service-offline' },
+            @{ At = 5; Type = 'service-offline' })
+        foreach ($s in $steps) {
+            Set-Now ($T0.AddMinutes($s.At))
+            Add-SrrQueueItem -Queue $q -Item (New-TypedEvent -Type $s.Type -Data @{ name = 'Valheim' } -Key "$($s.Type)|Valheim" -Group 'service|Valheim')
+            Invoke-QueueDrain -Queue $q -Store $store -Clock $Clock | Out-Null
+        }
+        @($store.Published | ForEach-Object type) | Should -Be @('service-offline', 'service-back', 'service-offline')
+    }
+    It 'T50-03 detection puts each service, status query and drive in its own group' {
+        $e = @(Get-StateEvents -Old @{ services = @(@{ name = 'Plex'; online = $true }) } -New @{ services = @(@{ name = 'Plex'; online = $false }) })
+        $e[0].group | Should -Be 'service|Plex'
+        $d = @(Get-StateEvents -Old @{ drives = @(@{ letter = 'H:'; health = 'Healthy' }) } -New @{ drives = @(@{ letter = 'H:'; health = 'Missing' }) })
+        $d[0].group | Should -Be 'drive|H:'
+    }
+}
+
 Describe 'T50-04 the store' {
     It 'T50-04 keeps the newest 200 and publishes a new array each drain' {
         Set-Now $T0

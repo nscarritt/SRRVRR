@@ -483,3 +483,36 @@ Describe 'T50-34 to T50-37 and T50-42 to T50-44: POST /maintenance and /events t
         } finally { Remove-TestDataPath $dir }
     }
 }
+Describe 'T50-38 a slow POST body can''t hold up the server' {
+    It 'T50-38 a body sent a byte at a time is cut off after its deadline, and /stats still answers within seconds' {
+        $c = New-Context (New-WebRoot)
+        $server = Start-TestServer -Context $c
+        try {
+            $tcp = New-Object Net.Sockets.TcpClient('localhost', $server.Port)
+            $stream = $tcp.GetStream()
+            $head = "POST /maintenance HTTP/1.1`r`nHost: localhost:$($server.Port)`r`nX-SRRVRR: 1`r`nContent-Type: application/json`r`nContent-Length: 100`r`n`r`n{"
+            $bytes = [Text.Encoding]::ASCII.GetBytes($head); $stream.Write($bytes, 0, $bytes.Length); $stream.Flush()
+            Start-Sleep -Milliseconds 300
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $r = Invoke-TestRequest -Url "http://localhost:$($server.Port)/stats"
+            $sw.Stop()
+            $r.Status | Should -Be 200
+            $sw.Elapsed.TotalSeconds | Should -BeLessThan 5
+            $tcp.Close()
+        } finally { Stop-TestServer $server }
+    }
+    It 'T50-38 a POST without X-SRRVRR: 1 is refused before any body is read' {
+        $c = New-Context (New-WebRoot)
+        $server = Start-TestServer -Context $c
+        try {
+            $tcp = New-Object Net.Sockets.TcpClient('localhost', $server.Port)
+            $stream = $tcp.GetStream()
+            $head = "POST /maintenance HTTP/1.1`r`nHost: localhost:$($server.Port)`r`nContent-Type: application/json`r`nContent-Length: 100`r`n`r`n"
+            $bytes = [Text.Encoding]::ASCII.GetBytes($head); $stream.Write($bytes, 0, $bytes.Length); $stream.Flush()
+            $stream.ReadTimeout = 3000
+            $reader = New-Object IO.StreamReader($stream)
+            $reader.ReadLine() | Should -Match '^HTTP/1\.1 403'
+            $tcp.Close()
+        } finally { Stop-TestServer $server }
+    }
+}
