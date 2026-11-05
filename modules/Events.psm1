@@ -121,6 +121,12 @@ function Get-Field([object]$Table, [string]$Name) {
     if ($Table -is [Collections.IDictionary] -and $Table.Contains($Name)) { $Table[$Name] } else { $null }
 }
 function Test-Field([object]$Table, [string]$Name) { $Table -is [Collections.IDictionary] -and $Table.Contains($Name) }
+# The Field value of each row (a hashtable) in Rows, as a list.
+function Get-RowValues([object]$Rows, [string]$Field) {
+    $values = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $Rows) { if ($r -is [Collections.IDictionary] -and $null -ne $r[$Field]) { $values.Add($r[$Field]) } }
+    , $values
+}
 
 # What changed between two readings of the state. Nothing on the first observation (no replay): a section missing
 # from either reading raises nothing. Maintenance, start and stop, the data folder, history saves and errors are
@@ -140,26 +146,32 @@ function Get-StateEvents {
         if ($name -eq 'Valheim') {
             $op = Get-Field $o 'players'; $np = Get-Field $n 'players'
             if ($null -eq $op -or $null -eq $np -or $op -eq $np) { continue }
-            $oNames = @(Get-Field $o 'names' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'name' })
-            $nNames = @(Get-Field $n 'names' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'name' })
+            $oNames = Get-RowValues (Get-Field $o 'names') 'name'
+            $nNames = Get-RowValues (Get-Field $n 'names') 'name'
             $up = $np -gt $op
-            $who = if ($up) { @($nNames | Where-Object { $oNames -notcontains $_ }) } else { @($oNames | Where-Object { $nNames -notcontains $_ }) }
+            $who = New-Object System.Collections.Generic.List[object]
+            if ($up) { foreach ($x in $nNames) { if (-not $oNames.Contains($x)) { $who.Add($x) } } }
+            else { foreach ($x in $oNames) { if (-not $nNames.Contains($x)) { $who.Add($x) } } }
             $type = if ($up) { 'player-join' } else { 'player-leave' }
-            $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who } -Key "$type|$np|$($who -join ',')" -Group 'valheim-players'))
+            $out.Add((New-TypedEvent -Type $type -Data @{ players = [int]$np; change = [int][Math]::Abs($np - $op); who = $who.ToArray() } -Key "$type|$np|$($who -join ',')" -Group 'valheim-players'))
         } else {
             if (-not (Test-Field $o 'items') -or -not (Test-Field $n 'items')) { continue }
-            $oKeys = @(Get-Field $o 'items' | Where-Object { $_ } | ForEach-Object { Get-Field $_ 'key' })
-            foreach ($i in @(Get-Field $n 'items' | Where-Object { $_ })) {
-                $k = Get-Field $i 'key'
-                if (-not $k -or $oKeys -contains $k) { continue }
+            $oKeys = Get-RowValues $o['items'] 'key'
+            foreach ($i in $n['items']) {
+                if ($i -isnot [Collections.IDictionary]) { continue }
+                $k = $i['key']
+                if (-not $k -or $oKeys.Contains($k)) { continue }
                 $data = @{}; foreach ($f in $i.Keys) { $data[$f] = $i[$f] }
                 $out.Add((New-TypedEvent -Type 'plex-stream' -Data $data -Key "plex-stream|$k"))
             }
         }
     }
-    $os = @{}; foreach ($s in @(Get-Field $Old 'services' | Where-Object { $_ })) { $os[[string](Get-Field $s 'name')] = [bool](Get-Field $s 'online') }
-    foreach ($s in @(Get-Field $New 'services' | Where-Object { $_ })) {
-        $name = [string](Get-Field $s 'name'); $on = [bool](Get-Field $s 'online')
+    # Plain loops below, not pipelines: this runs every second, and Where-Object / ForEach-Object cost about 10 ms.
+    $os = @{}
+    foreach ($s in (Get-Field $Old 'services')) { if ($s -is [Collections.IDictionary]) { $os[[string]$s['name']] = [bool]$s['online'] } }
+    foreach ($s in (Get-Field $New 'services')) {
+        if ($s -isnot [Collections.IDictionary]) { continue }
+        $name = [string]$s['name']; $on = [bool]$s['online']
         if (-not $os.ContainsKey($name) -or $os[$name] -eq $on) { continue }
         $type = if ($on) { 'service-back' } else { 'service-offline' }
         $out.Add((New-TypedEvent -Type $type -Data @{ name = $name } -Key "$type|$name" -Group "service|$name"))
@@ -168,9 +180,11 @@ function Get-StateEvents {
     if ((Get-Field $Old 'restartPending') -is [bool] -and -not (Get-Field $Old 'restartPending') -and (Get-Field $New 'restartPending') -eq $true) {
         $out.Add((New-TypedEvent -Type 'restart-pending' -Data @{ reason = [string](Get-Field $New 'restartReason') }))
     }
-    $od = @{}; foreach ($d in @(Get-Field $Old 'drives' | Where-Object { $_ })) { $od[[string](Get-Field $d 'letter')] = [string](Get-Field $d 'health') }
-    foreach ($d in @(Get-Field $New 'drives' | Where-Object { $_ })) {
-        $letter = [string](Get-Field $d 'letter'); $health = [string](Get-Field $d 'health')
+    $od = @{}
+    foreach ($d in (Get-Field $Old 'drives')) { if ($d -is [Collections.IDictionary]) { $od[[string]$d['letter']] = [string]$d['health'] } }
+    foreach ($d in (Get-Field $New 'drives')) {
+        if ($d -isnot [Collections.IDictionary]) { continue }
+        $letter = [string]$d['letter']; $health = [string]$d['health']
         if (-not $od.ContainsKey($letter) -or $od[$letter] -eq $health) { continue }
         $type = if ($health -eq 'Missing') { 'data-drive-missing' } else { 'drive-health' }
         $out.Add((New-TypedEvent -Type $type -Data @{ letter = $letter; health = $health; was = $od[$letter] } -Key "$type|$letter|$health" -Group "drive|$letter"))
