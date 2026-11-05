@@ -250,7 +250,7 @@ Describe 'Test builds' -Tag 'Smoke' {
             $text | Should -Match "INFO startup: serving at http://(localhost|$env:COMPUTERNAME):$port"   # elevated (as in CI) it serves by name
         } finally { Stop-Build $p }
     }
-    It 'T47-18 v0.6.0 and HEAD side by side: the same /stats shape apart from tickMs, and the same headers' {
+    It 'T47-18 v0.6.0 and HEAD side by side: the same /stats shape apart from tickMs and #50''s event fields, and the same headers' {
         $oldPort = Get-FreePort; $newPort = Get-FreePort
         $old = Start-Build (New-Build 'v0.6.0' $oldPort) $oldPort
         try {
@@ -261,7 +261,8 @@ Describe 'Test builds' -Tag 'Smoke' {
                 $pa = @(Get-JsonPaths ($a.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
                 $pb = @(Get-JsonPaths ($b.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
                 @($pa | Where-Object { $pb -notcontains $_ }) | Should -BeNullOrEmpty
-                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('tickMs')
+                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39).
+                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs')
                 foreach ($path in '/', '/stats') {
                     $x = Invoke-TestRequest -Url "http://localhost:$oldPort$path"; $y = Invoke-TestRequest -Url "http://localhost:$newPort$path"
                     $y.Headers['Content-Type'] | Should -Be $x.Headers['Content-Type']

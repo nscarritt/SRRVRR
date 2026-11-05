@@ -11,6 +11,16 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Added
 
+- **Alerts decided on the server, an event log, Maintenance and a Flagged list.** SRRVRR now spots
+  players joining and leaving, new Plex streams, Valheim or Plex going offline or not answering, drive
+  health changes, a missing data drive, Windows waiting to restart and its own problems by itself,
+  with no page open, and every page shows the same banners. Warnings and flags go to
+  `logs\events-YYYY-MM-DD.jsonl` (counts only, never names). Logs older than `LogRetentionDays` are
+  removed (the newest 7 days always stay). A **Maintenance** checkbox silences banners and dings in
+  every browser for `MaintenanceHours`, survives a restart, and logs who changed it; the **Flagged**
+  card lists the last 31 days. New: `/stats?since=`, `/events?days=n`, `POST /maintenance`.
+  ([#50](https://github.com/nscarritt/SRRVRR/issues/50))
+
 - **15 minutes of graph history.** SRRVRR keeps the last 15 minutes of CPU, memory, GPU and network
   readings, so a page you open starts with full graphs, and a **60 s / 15 min** button (remembered per
   browser) shows either range. Missing seconds show as gaps. The history is saved to
@@ -19,7 +29,7 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 - **A crash and error log**, `logs\srrvrr-YYYY-MM-DD.log`: every startup step, settings problems,
   errors from the background readers, crashes with their details, and a last line saying why SRRVRR
-  stopped and its exit code. 20 MB a day at most (old files are removed once the event log arrives).
+  stopped and its exit code. 20 MB a day at most.
   ([#48](https://github.com/nscarritt/SRRVRR/issues/48))
 - **`DataPath`:** keep the `state` and `logs` folders on another local drive. If it's missing or
   can't be written, SRRVRR uses its own folder until the next restart and logs a flag; the Storage

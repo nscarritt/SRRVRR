@@ -232,7 +232,7 @@ function New-RateLimiter {
 
 # POST /maintenance from start to finish: the guard (header, content type, Origin), then the body, then the rate
 # limit, then the change. Returns @{ Status; Body (for JSON); Change (the change record, or $null) }. The address
-# is the connection's own (a forwarded-for header is never read).
+# is the connection's own; no header can change it.
 function Invoke-MaintenanceChange {
     param($Headers, [string]$Body, [string]$Address, [object]$State, [object]$Limiter, [hashtable]$Identity, [int]$Port)
     $guard = Test-MaintenanceRequest -Headers $Headers -Identity $Identity -Port $Port
