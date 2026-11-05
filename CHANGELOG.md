@@ -9,6 +9,13 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-05
+
+The core: SRRVRR becomes modules with tests, keeps 15 minutes of graph history, decides alerts on the server
+with a 31-day event log and a crash log, adds Maintenance and a Flagged list, and stops cleanly with exit
+codes a boot launcher can act on. **Upgrading:** replace the code folders and files (see the README's
+Settings), and install a boot launcher release that knows the new `modules` and `web` files first.
+
 ### Added
 
 - **Alerts decided on the server, an event log, Maintenance and a Flagged list.** SRRVRR now spots
@@ -337,7 +344,8 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/nscarritt/SRRVRR/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nscarritt/SRRVRR/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nscarritt/SRRVRR/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/nscarritt/SRRVRR/compare/v0.4.0...v0.4.1
