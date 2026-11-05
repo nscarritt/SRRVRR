@@ -194,8 +194,17 @@ It creates those two, never `DataPath` itself.
 - **The log**, `logs\srrvrr-YYYY-MM-DD.log`, one file per day: every startup step, settings problems,
   errors from the background readers (each written when it appears or changes, and at most once a
   minute), crashes with their details, and a last line saying why SRRVRR stopped, e.g.
-  `stopped: requested (exit 0)`. Each day's file stops growing at 20 MB. Removing files older than
-  `LogRetentionDays` comes with the event log in a later release; until then old files stay.
+  `stopped: requested (exit 0)`. Each day's file stops growing at 20 MB.
+- **The event log**, `logs\events-YYYY-MM-DD.jsonl`, one JSON object per line: warnings and flags (a
+  service offline or back, a status query that stopped answering, drive health, the data folder),
+  Windows waiting to restart, Maintenance on and off with the address that asked, and every start and
+  stop with its reason. Player names, Plex users and devices, and titles never reach it, only counts.
+  Each day's file stops growing at 20 MB, except for flags.
+- **Old logs** (both kinds) are removed once they're older than `LogRetentionDays`, after the start and
+  once a day. Only files directly in `logs` with those exact names are touched; the newest 7 days are
+  always kept, and nothing is removed if the clock looks wrong.
+- **Maintenance**, `state\maintenance.json`, so a restart in the middle of maintenance doesn't set off
+  alerts.
 - **The graph history**, `state\history.json`: the last 15 minutes of CPU, memory, GPU and network
   readings (numbers only, about 50 KB), saved every 5 minutes and when SRRVRR stops cleanly. At the
   start it's used if its newest reading is under 15 minutes old. A damaged file, one over 2 MB or one
@@ -336,15 +345,29 @@ until you come back), or click × to close it.
 Plex streams don't raise alerts (short episodes made them constant). The Plex row in Processes
 still shows the stream count, and its hover lists who's watching what, on which device, and how.
 
+There are banners too when Valheim or Plex goes offline or comes back, when one stops answering
+its status query, when a drive's health changes or the data drive goes missing, when SRRVRR falls
+back to its own folder or finds the data folder shared, and when it can't save the graph history.
+
 **Sound:** click **Sound off** in the header to turn on a soft ding with each alert (you hear a
 sample). Browsers only play sound after you've clicked or tapped the page, so after a reload the
 button says "Sound on: tap to allow" until you click or tap anywhere on the page. The choice is remembered in each
 browser.
 
-Alerts come from the open page, so they appear (and ding) in every browser that has the
-dashboard open, and in none when no one has it open. What was already going on when the page
-opens never pops up. Browsers check less often in background tabs, so an alert there can be up
-to a minute late.
+Alerts are decided on the server, so they're caught with no page open, every open page shows the
+same ones, and what happened before a page opened never pops up. Browsers check less often in
+background tabs, so an alert there can be up to a minute late; if more than 50 arrive while a tab
+sleeps, it says so once instead of showing them all.
+
+**Maintenance:** tick **Maintenance** in the header before working on the server. For the next
+`MaintenanceHours` (2 by default) no page shows banners or dings; the header says "Maintenance until
+15:30" in each browser's own time, in every browser at once, and it survives a restart. Events are
+still logged, marked as during maintenance. Untick it to end it early. Any device that can open the
+page can tick it; each change is logged with its address, and one address can change it at most once
+every 10 seconds and 60 times a day.
+
+**Flagged:** the Flagged card lists the logged events of the last 31 days (or `LogRetentionDays`, if
+fewer), newest first.
 
 ## Administrator vs. not
 
@@ -379,6 +402,9 @@ A background loop reads Windows performance counters once per second
 `Process`) and keeps the latest values in memory. A small built-in web server (`HttpListener`)
 serves the dashboard page at `/` and the latest readings as JSON at `/stats`, which the page polls.
 `/stats` also reports `tickMs`, the time each reading takes, so SRRVRR's own cost stays visible.
+`/stats?since=<id>` adds the events after that id (at most 50), `/events?days=n` returns the logged
+events of the last n days, newest first, and `POST /maintenance` (with an `X-SRRVRR: 1` header, a JSON
+body and this page's own origin) turns Maintenance on or off.
 
 The code is `SRRVRR.ps1` plus modules in `modules\` (the counter math, settings, and the web server's
 request handling), always loaded from SRRVRR's own folder, never by name. The page is plain files in

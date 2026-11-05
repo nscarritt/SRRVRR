@@ -123,7 +123,6 @@ function render(s) {
   drawGraphs();
   renderProcs(s);
   renderDrives(s);
-  watchValheim(s);
 }
 function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
   const TB = 1099511627776, GB = 1073741824;
@@ -213,8 +212,11 @@ function renderProcs(s) {
 // Browsers only play sound after someone has clicked or tapped the page, so the header
 // button turns sound on (remembered in this browser), and after a reload one click
 // anywhere on the page allows it again.
-let audio = null, soundOn = false, lastDing = 0;
-try { soundOn = localStorage.getItem('srrvrr.sound') === '1'; } catch (e) {}
+function soundFromStorage(storage) {
+  try { return storage.getItem('srrvrr.sound') === '1'; } catch (e) { return false; }
+}
+function saveSound(storage, on) { try { storage.setItem('srrvrr.sound', on ? '1' : '0'); } catch (e) {} }
+let audio = null, soundOn = soundFromStorage(store()), lastDing = 0;
 const soundAllowed = () => !navigator.userActivation || navigator.userActivation.hasBeenActive;
 function ding() {
   if (!soundOn || !soundAllowed() || Date.now() - lastDing < 500) return;   // several alerts at once: one ding
@@ -240,7 +242,7 @@ function showSound() {
 $('sound').onclick = () => {
   if (!(soundOn && !armed)) {        // when sound is on but not yet allowed, this click only allows it
     soundOn = !soundOn;
-    try { localStorage.setItem('srrvrr.sound', soundOn ? '1' : '0'); } catch (e) {}
+    saveSound(store(), soundOn);
   }
   armed = true; showSound(); ding(); // a sample ding
 };
@@ -248,8 +250,8 @@ document.addEventListener('click', () => { if (!armed) { armed = true; showSound
 showSound();
 // A banner: title, a line or two of detail, and a close button. It closes by itself
 // after 15 seconds of the page being on screen, so alerts that arrive in a background
-// tab are still there when you come back.
-function notify(icon, title, lines) {
+// tab are still there when you come back. quiet: no ding (for small notes).
+function notify(icon, title, lines, quiet) {
   const el = document.createElement('div');
   el.className = 'toast';
   el.innerHTML = (icon ? '<i class="plogo plogo-' + icon + '"></i>' : '') + '<div><b>' + esc(title) + '</b>' +
@@ -262,26 +264,144 @@ function notify(icon, title, lines) {
   $('toasts').prepend(el);
   while ($('toasts').children.length > 4) $('toasts').lastChild.remove();
   requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
-  ding();
+  if (!quiet) ding();
 }
-// Valheim: compare each new answer from the server (every 10 seconds) with the last one.
-// The first answer after the page opens only sets the starting point, so nothing old
-// pops up. Names are used when the server reports them.
-let lastValheim = null;
-function watchValheim(s) {
-  const a = (s.activity || {}).Valheim;
-  if (!a || a.error || a.players == null) return;
-  const names = (a.names || []).map(n => n.name);
-  if (lastValheim && a.players !== lastValheim.players) {
-    const up = a.players > lastValheim.players, n = Math.abs(a.players - lastValheim.players);
-    const who = up ? names.filter(x => !lastValheim.names.includes(x)) : lastValheim.names.filter(x => !names.includes(x));
-    notify('valheim', (who.length ? who.join(', ') : n === 1 ? 'A player' : n + ' players') + (up ? ' joined' : ' left') + ' Valheim',
-      [(a.players ? plural(a.players, 'player') : 'No players') + ' online']);
-  }
-  lastValheim = {players: a.players, names: names};
+// --- Events are decided on the server (spec section 4). The page asks /stats?since=<the newest id it has seen> and
+// shows a banner for each new event the server marks for one. The first answer only sets the starting point, so
+// nothing old pops up when the page opens; while Maintenance is on, nothing shows and nothing dings.
+const statsUrl = id => id == null ? '/stats' : '/stats?since=' + id;
+// The newest id in a /stats answer (lastEventId or any event's id), never going backwards; null until there is one.
+function nextSince(s, current) {
+  let n = typeof current === 'number' ? current : null;
+  const ids = ((s && s.events) || []).map(e => e && e.id);
+  if (s) ids.push(s.lastEventId);
+  for (const id of ids) if (typeof id === 'number' && (n == null || id > n)) n = id;
+  return n;
 }
-// Plex: the device a stream plays on, with the app when it differs (for the row's hover).
+const shouldBanner =(e, m) => !!(e && e.banner && !e.maintenance && !(m && m.on));
+// One /stats answer -> the banners to show, the next `since`, whether to say some were skipped (more than 50 new
+// events), and whether a logged event arrived (the Flagged list then reloads). Ids up to `current` were seen already.
+function takeEvents(s, current) {
+  const next = nextSince(s, current), quiet = !!(s && s.maintenance && s.maintenance.on);
+  if (current == null) return {since: next, banners: [], more: false, flagged: false};
+  const seen = new Set();
+  const fresh = ((s && s.events) || []).filter(e => e && typeof e.id === 'number' && e.id > current && !seen.has(e.id) && seen.add(e.id));
+  return {since: next, banners: fresh.filter(e => shouldBanner(e, s.maintenance)).map(bannerFor),
+    more: !!(s && s.eventsTruncated) && !quiet, flagged: fresh.some(e => e.logged)};
+}
+// Plex: the device a stream plays on, with the app when it differs (for the row's hover). Plex streams raise no
+// alerts (#57: short episodes made them constant).
 const plexDevice = i => !i.device ? i.app || '' : i.app && i.app !== i.device ? i.device + ' (' + i.app + ')' : i.device;
+// Valheim: who joined or left (names when the server reports them), and how many are on now.
+function playerBanner(d, up) {
+  const who = [].concat(d.who || []), n = Math.abs(d.change) || 1;
+  return {icon: 'valheim', title: (who.length ? who.join(', ') : n === 1 ? 'A player' : n + ' players') + (up ? ' joined' : ' left') + ' Valheim',
+    lines: [(d.players ? plural(d.players, 'player') : 'No players') + ' online']};
+}
+const serviceIcon = n => n === 'Valheim' ? 'valheim' : n === 'Plex' ? 'plex' : '';
+// An event -> {icon, title, lines} for its banner, and for its row in the Flagged list (types with no banner too).
+function bannerFor(e) {
+  const d = (e && e.data) || {}, name = d.name || 'A service', drive = 'Drive ' + (d.letter || '');
+  const b = (icon, title, lines) => ({icon: icon, title: title, lines: lines.filter(Boolean)});
+  switch (e && e.type) {
+    case 'player-join': return playerBanner(d, true);
+    case 'player-leave': return playerBanner(d, false);
+    case 'service-offline': return b(serviceIcon(name), name + ' went offline', ['It is no longer running.']);
+    case 'service-back': return b(serviceIcon(name), name + ' is back online', ['It is running again.']);
+    case 'query-stopped': return b(serviceIcon(name), name + ' stopped answering', ['It is running, but not answering status checks.', d.error && 'Reason: ' + d.error]);
+    case 'query-back': return b(serviceIcon(name), name + ' is answering again', []);
+    case 'drive-health': return b('', drive + ' health: ' + (d.health || 'unknown'), [d.was && 'It was ' + d.was + ' before.']);
+    case 'data-drive-missing': return b('', drive + ' is missing', ['Windows can no longer see it.', d.was && 'It was ' + d.was + ' before.']);
+    case 'data-fallback': return b('', 'Saving to the local data folder', ['SRRVRR could not use its usual data folder.', d.reason]);
+    case 'share-found': return b('', 'The data folder is shared on the network', ['Other computers may be able to read or change its files.', d.reason]);
+    case 'history-save-failed': return b('', 'Could not save the graph history', ['The live graphs still work.', d.error]);
+    case 'restart-pending': return b('', 'Windows is waiting to restart', [d.reason]);
+    case 'sampler-error': return b('', 'A reading failed', [d.error]);
+    case 'worker-stopped': return b('', 'A background task stopped', [d.name, d.error]);
+    case 'maintenance-on': return b('', 'Maintenance turned on', []);
+    case 'maintenance-off': return b('', 'Maintenance turned off', []);
+    case 'started': return b('', 'SRRVRR started', [d.reason]);
+    case 'stopped': return b('', 'SRRVRR stopped', [d.reason]);
+  }
+  return b('', String((e && e.type) || 'Event').replace(/-/g, ' '), []);
+}
+// --- Maintenance: a checkbox kept on the server, so it applies to every browser. "Maintenance until 15:30" is in
+// the browser's own time zone (the tests pass one).
+function clock(ms, timeZone) {
+  if (typeof ms !== 'number') return '';
+  try { return new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: timeZone}).format(ms); } catch (e) { return ''; }
+}
+function maintenanceText(m, timeZone) {
+  if (!m || !m.on) return '';
+  const t = clock(m.untilMs, timeZone);
+  return t ? 'Maintenance until ' + t : 'Maintenance on';
+}
+function maintenanceError(status) {
+  return status === 429 ? 'Too many changes, try again in a few seconds.'
+    : status === 403 ? 'The server refused the change from this page (403).'
+    : status === 400 ? 'The server did not accept the change (400).'
+    : status ? 'Could not change Maintenance (error ' + status + ').' : 'Could not reach SRRVRR to change Maintenance.';
+}
+let maint = {on: false, untilMs: 0}, maintBusy = false;
+function showMaint(m) {
+  if (m) maint = m;
+  if (maintBusy) return;              // a change is on its way: don't flip the box back meanwhile
+  $('maintBox').checked = !!maint.on;
+  $('maint').dataset.on = maint.on ? '1' : '';
+  $('maintText').textContent = maintenanceText(maint) || 'Maintenance';
+}
+async function setMaintenance(on) {
+  let err = '';
+  maintBusy = true; $('maintBox').disabled = true;
+  try {
+    const r = await fetch('/maintenance', {method: 'POST', cache: 'no-store',
+      headers: {'X-SRRVRR': '1', 'Content-Type': 'application/json'}, body: JSON.stringify({on: on})});
+    if (r.ok) maint = await r.json(); else err = maintenanceError(r.status);
+  } catch (e) { err = maintenanceError(0); }
+  maintBusy = false; $('maintBox').disabled = false;
+  $('maintErr').textContent = err; $('maintErr').hidden = !err;
+  showMaint();
+}
+$('maintBox').onchange = () => setMaintenance($('maintBox').checked);
+// --- The Flagged list: the logged events of the last 31 days (fewer if the logs are kept fewer), newest first.
+const flaggedDays = keep => Math.min(31, keep >= 1 ? Math.floor(keep) : 31);
+const SEVERITY = {flag: 'Flag', warn: 'Warning', info: 'Info'};
+function stamp(ms, timeZone) {        // "4 Nov, 15:30"
+  if (typeof ms !== 'number') return '';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: timeZone}).format(ms);
+  } catch (e) { return ''; }
+}
+const flaggedError = status => '<div class="ferr">Couldn\'t load the Flagged list' +
+  (status === 400 ? ': the server didn\'t accept the request (400).' : status ? ' (error ' + status + ').' : '.') + '</div>';
+function flaggedHtml(events, days, timeZone) {
+  if (!Array.isArray(events)) return flaggedError(0);
+  const list = events.filter(e => e && typeof e === 'object').sort((x, y) => (y.id || 0) - (x.id || 0));
+  if (!list.length) return '<div class="fnone">Nothing flagged in the last ' + plural(days, 'day') + '.</div>';
+  return list.slice(0, 100).map(e => {
+    const sev = ['flag', 'warn', 'info'].includes(e.severity) ? e.severity : 'info', t = bannerFor(e);
+    return '<div class="frow"><span class="fsev ' + sev + '">' + SEVERITY[sev] + '</span><span class="ftime">' + esc(stamp(e.time, timeZone)) +
+      '</span><span class="ftext" title="' + t.lines.map(esc).join('&#10;') + '">' + esc(t.title) +
+      (e.maintenance ? ' <small>(during maintenance)</small>' : '') + '</span></div>';
+  }).join('') + (list.length > 100 ? '<div class="fnone">and ' + (list.length - 100) + ' older</div>' : '');
+}
+async function loadFlagged(keep) {
+  const days = flaggedDays(keep);
+  try {
+    const r = await fetch('/events?days=' + days, {cache: 'no-store'});
+    $('flagged').innerHTML = r.ok ? flaggedHtml((await r.json()).events, days) : flaggedError(r.status);
+  } catch (e) { $('flagged').innerHTML = flaggedError(0); }
+}
+let eventSince = null, flaggedAsked = false;
+function showEvents(s) {
+  const r = takeEvents(s, eventSince);
+  eventSince = r.since;
+  for (const b of r.banners) notify(b.icon, b.title, b.lines);
+  if (r.more) notify('', 'More events than shown', ['Some alerts were skipped. The logged ones are in the Flagged list.'], true);
+  if (s.maintenance) showMaint(s.maintenance);
+  // The first answer gives how many days the logs keep, so the list loads then, and again when a logged event arrives.
+  if (!flaggedAsked || r.flagged) { flaggedAsked = true; loadFlagged(s.logRetentionDays); }
+}
 function drawGraphs() {
   const v = n => visibleSlice(hist[n], range);
   draw('cpuC', [{data: v('cpu'), color: css('--cpu'), fill: true}], 100, '', range);
@@ -320,7 +440,7 @@ function pushReading(s) {
 }
 async function tick() {
   try {
-    const s = await (await fetch('/stats', {cache: 'no-store'})).json();
+    const s = await (await fetch(statsUrl(eventSince), {cache: 'no-store'})).json();
     if (shouldRefetchHistory(wasDown, true) || needsHistory(lastSecMs, s.ts)) await loadHistory();
     wasDown = false;
     if (s.ready && s.ts !== lastTs) {
@@ -328,6 +448,7 @@ async function tick() {
       pushReading(s);
       render(s);
     }
+    showEvents(s);
     $('status').className = s.error ? 'bad' : '';
     $('status').textContent = s.error ? 'Counter error: ' + s.error : (s.ready ? 'Live \u00b7 updates every second' : 'Starting\u2026');
   } catch (e) {
@@ -340,5 +461,7 @@ async function tick() {
 loadHistory().then(tick);
 // For tests under Node: the page's pure functions (tests/js). Browsers have no 'module', so this does nothing there.
 if (typeof module !== 'undefined') {
-  module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory };
+  module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory,
+    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexDevice, maintenanceText, maintenanceError,
+    flaggedDays, flaggedHtml, flaggedError, soundFromStorage, saveSound };
 }

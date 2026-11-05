@@ -87,6 +87,23 @@ tr.detail .warn{color:var(--warn)}
 #range button:hover,#range button[aria-pressed="true"]{color:var(--text)}
 #range button[aria-pressed="true"]{background:var(--border)}
 #sound .ticon{width:13px;height:13px}
+/* Maintenance: a checkbox pill like the sound button; amber while it's on */
+#maint{font-size:12.5px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 9px;margin-left:10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+#maint:hover{color:var(--text)}
+#maint[data-on="1"]{color:var(--warn);border-color:var(--warn)}
+#maint input{margin:0;width:12px;height:12px;accent-color:var(--warn);cursor:pointer}
+#maintErr{color:var(--bad);font-size:12.5px;margin-left:10px}
+/* The Flagged list: severity, time, what happened (details on hover) */
+#flagged{margin-top:6px;max-height:320px;overflow-y:auto}
+.frow{display:grid;grid-template-columns:5.5em 7.5em minmax(0,1fr);gap:10px;padding:6px 0;font-variant-numeric:tabular-nums}
+.frow+.frow{border-top:1px solid var(--border)}
+.fsev{font-weight:600;font-size:12.5px}
+.fsev.flag{color:var(--bad)} .fsev.warn{color:var(--warn)} .fsev.info{color:var(--muted)}
+.ftime{color:var(--muted);white-space:nowrap}
+.ftext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ftext small{color:var(--muted)}
+.fnone{color:var(--muted);font-size:12.5px;padding:4px 0}
+.ferr{color:var(--bad);font-size:12.5px;padding:4px 0}
 header{flex-wrap:wrap}
 #sound .v-on,#sound[data-on="1"] .v-off{display:none}
 #sound[data-on="1"] .v-on{display:block}
