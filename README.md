@@ -8,9 +8,9 @@ A tiny live CPU / memory / GPU / network dashboard for Windows, in the spirit of
 Task Manager's Performance tab. Run it on one machine and watch it from any
 browser on your network.
 
-One PowerShell script. Nothing to install.
+A PowerShell script and its modules. Nothing to install.
 
-Current version: **0.6.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
+Current version: **0.7.0**. See the [changelog](CHANGELOG.md) for what changed in each version.
 
 ## Contents
 

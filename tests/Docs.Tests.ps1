@@ -120,9 +120,17 @@ Describe 'T51-08 links in the docs' {
 }
 
 Describe 'T51-09 the changelog' {
-    It 'T51-09 [Unreleased] has an entry for each of #47 to #51' {
+    It 'T51-09 #47 to #51 each have an entry, under [Unreleased] or under 0.7.0 once released' {
         $changelog = [IO.File]::ReadAllText((Join-Path $Root 'CHANGELOG.md'))
-        $unreleased = [regex]::Match($changelog, '(?s)## \[Unreleased\](.*?)(?=^## \[|\z)', 'Multiline').Groups[1].Value
-        foreach ($n in 47..51) { $unreleased | Should -Match "issues/$n\)" -Because "#$n needs an entry" }
+        $section = { param($name) [regex]::Match($changelog, '(?ms)^## \[' + [regex]::Escape($name) + '\][^\n]*\n(.*?)(?=^## \[|\z)').Groups[1].Value }
+        $text = (& $section 'Unreleased') + (& $section '0.7.0')
+        foreach ($n in 47..51) { $text | Should -Match "issues/$n\)" -Because "#$n needs an entry" }
+    }
+    It 'T51-09 the README''s version is the newest released section, and it has its compare link' {
+        $changelog = [IO.File]::ReadAllText((Join-Path $Root 'CHANGELOG.md'))
+        $version = [regex]::Match($Readme, 'Current version: \*\*([\d.]+)\*\*').Groups[1].Value
+        $newest = [regex]::Match($changelog, '(?m)^## \[(\d+\.\d+\.\d+)\]').Groups[1].Value
+        $version | Should -Be $newest
+        $changelog | Should -Match ('(?m)^\[' + [regex]::Escape($newest) + '\]: https://github\.com/nscarritt/SRRVRR/')
     }
 }

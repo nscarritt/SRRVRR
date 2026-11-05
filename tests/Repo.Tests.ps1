@@ -182,8 +182,11 @@ Describe 'T48-68 the README on stopping' {
 }
 
 Describe 'T47-34 changelog' {
-    It 'T47-34 CHANGELOG.md has an [Unreleased] section with an entry' {
+    It 'T47-34 CHANGELOG.md has an [Unreleased] section with an entry (empty only in a release PR)' {
         $text = [IO.File]::ReadAllText((Join-Path $Root 'CHANGELOG.md'))
-        $text | Should -Match '(?s)## \[Unreleased\]\s+### \w+\s+- '
+        # A release PR moves the entries under the new version and bumps the README to it.
+        $version = [regex]::Match([IO.File]::ReadAllText((Join-Path $Root 'README.md')), 'Current version: \*\*([\d.]+)\*\*').Groups[1].Value
+        $released = $text -match ('(?s)## \[Unreleased\]\s+## \[' + [regex]::Escape($version) + '\]')
+        if (-not $released) { $text | Should -Match '(?s)## \[Unreleased\]\s+### \w+\s+- ' }
     }
 }
