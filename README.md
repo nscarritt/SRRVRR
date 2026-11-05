@@ -28,6 +28,7 @@ Current version: **0.6.0**. See the [changelog](CHANGELOG.md) for what changed i
 - [Processes table](#processes-table)
 - [Alerts](#alerts)
 - [Administrator vs. not](#administrator-vs-not)
+- [Running SRRVRR at boot](#running-srrvrr-at-boot)
 - [Troubleshooting](#troubleshooting)
 - [How it works](#how-it-works)
 - [Checks and tests](#checks-and-tests)
@@ -150,11 +151,14 @@ All settings live in `SRRVRR.config.psd1`, next to `SRRVRR.ps1`. Restart the
 monitor after changing it.
 
 That file is listed in `.gitignore`, so it is never committed to the repository and pulling or
-copying a new version of the code never overwrites it. When updating, replace
-`SRRVRR.ps1`, the `modules` and `web` folders (whole: delete the old ones first, so no old file is
-left behind), `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.example.psd1`,
-`Install Temperature Sensors.bat` and `Install-TemperatureSensors.ps1` (the `lib` folder the
-installer creates stays as it is).
+copying a new version of the code never overwrites it.
+
+When updating, replace the code folders and files and nothing else. Stop SRRVRR first, delete the old
+`modules` and `web` folders and copy in the new ones whole (so no old file is left behind), then
+replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.example.psd1`,
+`Install Temperature Sensors.bat`, `Install-TemperatureSensors.ps1`, `README.md`, `CHANGELOG.md`,
+`SECURITY.md` and `LICENSE`. Never replace your `SRRVRR.config.psd1`, or the `state`, `logs` and
+`lib` folders: they hold your settings, your data and the temperature sensor library.
 
 | Setting | Default | Values |
 |---------|---------|--------|
@@ -375,6 +379,42 @@ fewer), newest first.
   rule is managed, and per-process network and CPU/memory temperatures work.
 - **Not as administrator:** it still runs, but only `http://localhost:<port>` on that machine
   works, per-process network shows "n/a", and the CPU and memory temperatures show "Temp n/a".
+
+## Running SRRVRR at boot
+
+For anyone who starts SRRVRR from a boot launcher or a scheduled task, this is what SRRVRR promises.
+
+**How to start it.** The entry script is always `SRRVRR.ps1`, in the folder you installed it to; it loads
+`modules` and `web` from that same folder only. Start it as administrator with
+`powershell -NoProfile -ExecutionPolicy Bypass -File "<folder>\SRRVRR.ps1"`, which is what
+`Start SRRVRR.bat` does. Files from a downloaded zip carry Windows' downloaded mark; they still load
+because of `-ExecutionPolicy Bypass`, so don't start it any other way.
+
+**Check every file before it loads.** If your launcher checks SRRVRR's files against a list of hashes
+before starting it, the list must cover `SRRVRR.ps1` and every file under `modules\` and `web\`, plus the
+temperature sensor library's `.dll` files under `lib\` if you installed it. Install the launcher release
+that knows a new SRRVRR version's files before you install that version, or the check will refuse it
+(or, worse, let unchecked files load).
+
+**Exit codes.** What a launcher should do when SRRVRR exits:
+
+| Exit code | Meaning | Start it again? |
+|---|---|---|
+| `0` | A clean stop (requested, or Ctrl+C) | No |
+| `2` | A settings error (the log says which) | No: it would fail again the same way |
+| `3` | Refused to start: the data folder is shared or on a network drive, its permissions can't be set, or another copy is using it | No |
+| Anything else | A crash | Yes, up to 3 times in 10 minutes; then stop trying and log it |
+
+**Stopping it.** Run `SRRVRR.ps1 -Stop` (what `Stop SRRVRR.bat` does) from SRRVRR's own folder. It stops
+only the copy in that folder: it signals it, and SRRVRR saves its history and Maintenance and exits with
+code 0. If it hasn't exited after 10 seconds, the stopper ends it, which leaves a crash-looking exit code.
+So before signalling, the stopper writes `state\stop-requested` in SRRVRR's own folder: a launcher should
+treat any exit within 60 seconds of that file's time as a requested stop, not restart it, and delete the
+file. Closing SRRVRR's console window is a hard stop with no saving.
+
+**Where its data goes.** `state` and `logs` go under `DataPath` (see
+[Data folder and logs](#data-folder-and-logs)); `state\stop-requested` always stays in SRRVRR's own
+folder, where a launcher can find it. Updating means replacing the code only (see [Settings](#settings)).
 
 ## Troubleshooting
 

@@ -57,6 +57,11 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Changed
 
+- **The README says what SRRVRR promises a boot launcher** ("Running SRRVRR at boot"): how to start it,
+  that a hash-checking launcher must cover every file under `modules\` and `web\` (and must be updated
+  first), the exit codes and when to restart, the stop signal and `state\stop-requested`, and where the
+  data goes. **Upgrading:** replace the code folders and files listed under Settings, never your config,
+  `state`, `logs` or `lib`. ([#51](https://github.com/nscarritt/SRRVRR/issues/51))
 - **Fixed:** the page now and then got an error instead of the numbers ("Collection was modified"):
   `/stats` now copies the readings under their lock.
 - **Stopping is clean.** `Stop SRRVRR.bat` (`SRRVRR.ps1 -Stop`) now stops only the SRRVRR in its own
