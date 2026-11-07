@@ -26,6 +26,8 @@ function Get-SrrDefaultSettings {
         LogRetentionDays     = 31
         MaintenanceHours     = 2
         MaintenanceMaxHours  = 8
+        DriveWarnPercent     = 85
+        DriveFullPercent     = 95
     }
 }
 
@@ -120,6 +122,17 @@ function Test-NewSettings([hashtable]$Settings) {
     $hours = $Settings.MaintenanceHours
     if (-not (Test-Number $hours) -or $hours -lt 0.25 -or $hours -gt $max) {
         throw (New-SettingsError "MaintenanceHours must be a number of hours from 0.25 up to MaintenanceMaxHours ($max) (default 2).")
+    }
+    foreach ($name in 'DriveWarnPercent', 'DriveFullPercent') {
+        $v = $Settings[$name]
+        $default = if ($name -eq 'DriveWarnPercent') { 85 } else { 95 }
+        $what = if ($name -eq 'DriveWarnPercent') { 'warns that a drive is filling up' } else { 'flags a drive as almost full' }
+        if (-not ($v -is [int] -or $v -is [long]) -or $v -lt 50 -or $v -gt 99) {
+            throw (New-SettingsError "$name must be a whole number from 50 to 99, the percent of a drive that is used when SRRVRR $what (default $default).")
+        }
+    }
+    if ($Settings.DriveWarnPercent -ge $Settings.DriveFullPercent) {
+        throw (New-SettingsError "DriveWarnPercent ($($Settings.DriveWarnPercent)) must be lower than DriveFullPercent ($($Settings.DriveFullPercent)).")
     }
 }
 
