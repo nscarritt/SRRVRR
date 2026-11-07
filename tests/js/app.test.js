@@ -59,3 +59,18 @@ test('T47-31 speed shows bytes per second', () => {
   assert.strictEqual(app.speed(0), '0 B/s');
   assert.match(app.speed(812 * 1024), /^812 KB\/s$/);
 });
+
+test('T62-06 showVersion shows the text as given, amber with a title unless it is a release', () => {
+  for (const v of ['v0.8.0', 'v0.8.0-uat+abc1234', 'test-x+abc1234', 'dev', 'unknown']) {
+    const el = {};
+    app.showVersion(v, el);
+    assert.strictEqual(el.textContent, v);
+    if (v === 'v0.8.0') {
+      assert.doesNotMatch(el.className, /\bwarn\b/, v);
+      assert.strictEqual(el.title, '');
+    } else {
+      assert.match(el.className, /\bwarn\b/, v);
+      assert.strictEqual(el.title, 'Not a release build');
+    }
+  }
+});

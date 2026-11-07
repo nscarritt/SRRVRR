@@ -222,6 +222,10 @@ Import-Module -Name (Join-Path $PSScriptRoot 'modules\Counters.psm1') -Force   #
 $loaded = if ($PSBoundParameters.ContainsKey('Port')) { Import-SrrSettings -Folder $PSScriptRoot -Port $Port } else { Import-SrrSettings -Folder $PSScriptRoot }
 foreach ($n in $loaded.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
 $settings = $loaded.Settings
+# The version: the one line in VERSION next to this script, read once (modules\Control.psm1). /stats and the page show it.
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Control.psm1') -Force
+$srrVersion = Get-SrrVersion -Folder $PSScriptRoot
+if ($srrVersion.Note) { Write-Status -Warning $srrVersion.Note }
 
 # The data folder: DataPath if it's there and writable, else this folder; never inside a network share, one copy
 # at a time (the lock stays open while SRRVRR runs), and when elevated only SYSTEM and Administrators can write.
@@ -446,6 +450,7 @@ $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 $bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $state = [hashtable]::Synchronized(@{
     ready = $false
+    version = $srrVersion.Version   # set once, here
     cores = [int]$env:NUMBER_OF_PROCESSORS
     memTotal = $totalRam
     hasGpu = $hasGpu

@@ -441,7 +441,11 @@ A background loop reads Windows performance counters once per second
 (`Processor Information`, `Memory`, `Network Interface`, `GPU Engine`, `GPU Adapter Memory`,
 `Process`) and keeps the latest values in memory. A small built-in web server (`HttpListener`)
 serves the dashboard page at `/` and the latest readings as JSON at `/stats`, which the page polls.
-`/stats` also reports `tickMs`, the time each reading takes, so SRRVRR's own cost stays visible.
+`/stats` also reports `tickMs`, the time each reading takes, so SRRVRR's own cost stays visible, and `version`,
+which the page shows in its header. The version is the one line in the `VERSION` file in SRRVRR's folder, read
+once at startup (`dev` when there is no file, `unknown` with a note in the startup log when the file isn't one
+line of 1 to 64 printable ASCII characters). A release carries `VERSION` holding its tag (such as `v0.8.0`);
+anything else shows in amber on the page.
 `/stats?since=<id>` adds the events after that id (at most 50), `/events?days=n` returns the logged
 events of the last n days, newest first, and `POST /maintenance` (with an `X-SRRVRR: 1` header, a JSON
 body and this page's own origin) turns Maintenance on or off.
@@ -486,7 +490,8 @@ Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Forc
 ```
 
 To try a branch without touching a running SRRVRR, build a test copy in its own folder and start it there
-(it listens on port 8091): `.\tools\New-TestBuild.ps1 -Ref <branch> -Destination <folder>`. Then
+(it listens on port 8091): `.\tools\New-TestBuild.ps1 -Ref <branch> -Destination <folder>`. A test copy
+writes its own `VERSION`, `test-<ref>+<first 7 of the commit>`, so its page shows that in amber. Then
 `.\tools\Measure-SRRVRR.ps1 -Folder <folder>` measures its CPU, memory and response times against the
 budgets in `tools\budgets.psd1`. None of `tests\`, `tools\` or `docs\` is part of a release.
 

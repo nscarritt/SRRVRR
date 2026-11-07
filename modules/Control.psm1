@@ -135,6 +135,32 @@ function Get-SrrCopyKind([string]$Folder) {
     if (Test-Path -LiteralPath (Join-Path $Folder 'TESTBUILD.txt')) { 'test' } else { 'live' }
 }
 
+# The version a copy says it is: the one line in its VERSION file (printable ASCII, 1 to 64 characters, one
+# trailing line break allowed), 'dev' when there is no file, 'unknown' (with a Note naming the problem) for anything
+# else. Returns @{ Version; Note }. Read once at startup.
+function Get-SrrVersion {
+    param([Parameter(Mandatory)][string]$Folder)
+    $path = Join-Path $Folder 'VERSION'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return @{ Version = 'dev'; Note = $null } }
+    $bad = { param($why) @{ Version = 'unknown'; Note = "VERSION $why, so the version shows as unknown" } }
+    try { $bytes = [IO.File]::ReadAllBytes($path) } catch { return (& $bad "couldn't be read ($($_.Exception.Message))") }
+    $end = $bytes.Length
+    if ($end -ge 2 -and $bytes[$end - 2] -eq 13 -and $bytes[$end - 1] -eq 10) { $end -= 2 }
+    elseif ($end -ge 1 -and $bytes[$end - 1] -eq 10) { $end -= 1 }
+    $line = New-Object 'System.Collections.Generic.List[byte]'
+    for ($i = 0; $i -lt $end; $i++) { $line.Add($bytes[$i]) }
+    if ($line.Count -eq 0) { return (& $bad 'is empty') }
+    foreach ($b in $line) { if ($b -gt 0x7E) { return (& $bad 'has a non-ASCII character') } }
+    foreach ($b in $line) {
+        if ($b -eq 10 -or $b -eq 13) { return (& $bad 'has more than one line') }
+        if ($b -lt 0x20 -or $b -eq 0x7F) { return (& $bad 'has a control character') }
+    }
+    $text = [Text.Encoding]::ASCII.GetString($line.ToArray())
+    if (-not $text.Trim()) { return (& $bad 'is empty') }
+    if ($text.Length -gt 64) { return (& $bad 'is longer than 64 characters') }
+    @{ Version = $text; Note = $null }
+}
+
 # Every address when elevated; this machine only (localhost) when not.
 function Get-ListenerPrefix([bool]$Elevated, [int]$Port) {
     if ($Elevated) { "http://+:$Port/" } else { "http://localhost:$Port/" }
@@ -166,4 +192,4 @@ function Get-TraceSessionName([string]$Folder, [ValidateSet('live', 'test')][str
 
 Export-ModuleMember -Function ConvertTo-StopPath, Get-StopEventName, New-StopEventSecurity, Test-StopEventTrusted, New-StopEvent,
     Send-StopSignal, Select-SRRVRRProcess, Invoke-StopCommand, Get-SrrCopyKind, Get-ListenerPrefix, Get-FirewallRulePlan,
-    Get-TraceSessionName
+    Get-TraceSessionName, Get-SrrVersion

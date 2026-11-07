@@ -11,6 +11,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot 'SRRVRR.Tools.psm1') -Force
 $dest = [IO.Path]::GetFullPath($Destination).TrimEnd('\')
 
 if ($LiveFolder) {
@@ -43,5 +44,6 @@ if ($DataPath) { $config += "    DataPath = '$($DataPath.Replace("'", "''"))'`r`
 $config += "}`r`n"
 [IO.File]::WriteAllText((Join-Path $dest 'SRRVRR.config.psd1'), $config)
 [IO.File]::WriteAllText((Join-Path $dest 'TESTBUILD.txt'), "SRRVRR test copy`r`nref $Ref`r`ncommit $commit`r`nbuilt $([DateTimeOffset]::Now.ToString('yyyy-MM-dd HH:mm:ss zzz'))`r`n")
+[IO.File]::WriteAllText((Join-Path $dest 'VERSION'), (Get-TestBuildVersion -Ref $Ref -Commit $commit), (New-Object Text.UTF8Encoding($false)))   # one ASCII line, no BOM
 Write-Output "Test copy of $Ref ($($commit.Substring(0, 7))) in $dest, port $Port. Start it with `"$dest\Start SRRVRR.bat`"."
 exit 0

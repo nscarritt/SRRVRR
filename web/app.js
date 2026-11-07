@@ -85,8 +85,17 @@ function memNoSensor(s) {
   return 'These memory sticks don\'t report a temperature' + (parts.length ? ' (' + parts.join(', ') + ')' : '') +
     '. Most DDR4 has no sensor; DDR5 does.';
 }
+// The version in the header: the text as given; amber, with a hover note, unless it is a release (v1.2.3).
+function showVersion(v, el) {
+  el = el || $('version');
+  el.textContent = v;
+  const release = /^v\d+\.\d+\.\d+$/.test(v);
+  el.className = release ? '' : 'warn';
+  el.title = release ? '' : 'Not a release build';
+}
 function render(s) {
   if (s.uptime != null) $('uptime').textContent = 'Up ' + since(s.uptime);
+  if (typeof s.version === 'string') showVersion(s.version);
   showTemp('cpuTemp', s.cpuTemp, 80, 90, s.tempError, s.cpuTemps);       // CPU package: amber at 80, red at 90
   showTemp('memTemp', s.memTemp, 70, 80, s.tempError, s.memTemps, memNoSensor(s)); // hottest stick: amber at 70, red at 80
   $('restart').hidden = !s.restartPending;
@@ -463,5 +472,5 @@ loadHistory().then(tick);
 if (typeof module !== 'undefined') {
   module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory,
     statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexDevice, maintenanceText, maintenanceError,
-    flaggedDays, flaggedHtml, flaggedError, soundFromStorage, saveSound };
+    flaggedDays, flaggedHtml, flaggedError, soundFromStorage, saveSound, showVersion };
 }
