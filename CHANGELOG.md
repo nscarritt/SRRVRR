@@ -9,15 +9,21 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
-### Fixed
-
-- **The /events window across a clock change.** `/events?days=N` now starts at local midnight of the first day with
-  that day's own offset, so it is no longer an hour off when the clock changed in between (#66).
-
 ### Added
 
 - Tests for clock changes and midnight (`tests\Clock.Tests.ps1`): dated log files, log retention, the /events
   window and history across the spring and fall changes (#66).
+
+- **The version on the page and in `/stats` (#62).** SRRVRR reads the one line in its `VERSION` file at
+  startup and shows it in the page header and as `version` in `/stats`. Anything that isn't a release tag
+  shows in amber; no file means `dev`, and a file that isn't one printable ASCII line of 1 to 64 characters
+  means `unknown`, with the problem in the startup log. Test copies from `tools\New-TestBuild.ps1` write
+  `VERSION` as `test-<ref>+<commit>`.
+
+### Fixed
+
+- **The /events window across a clock change.** `/events?days=N` now starts at local midnight of the first day with
+  that day's own offset, so it is no longer an hour off when the clock changed in between (#66).
 
 ## [0.7.0] - 2026-11-05
 
