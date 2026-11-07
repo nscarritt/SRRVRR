@@ -122,6 +122,21 @@ Describe 'T47-17 /stats keeps every v0.6.0 field' {
         @($old | Where-Object { $new -notcontains $_ }) | Should -BeNullOrEmpty
         @($new | Where-Object { $old -notcontains $_ }) | Should -Be @('tickMs')
     }
+    It 'T62-04 /stats has a version string when the state has one, and every v0.7.0 field is still there' {
+        $old = @((Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures\stats\v0.6.0-shape.json') | ConvertFrom-Json).paths)
+        $state = New-StateFromPaths $old
+        $state.tickMs = 37
+        $state.version = 'v0.8.0'
+        $ctx = New-Context (New-WebRoot) $state
+        $r = Invoke-Route -Path '/stats' -Context $ctx
+        $r.Status | Should -Be 200
+        $doc = $r.Body | ConvertFrom-Json
+        $doc.version | Should -BeOfType [string]
+        $doc.version | Should -Be 'v0.8.0'
+        $new = @(Get-JsonPaths $doc)
+        @($old + 'tickMs' | Where-Object { $new -notcontains $_ }) | Should -BeNullOrEmpty
+        @($new | Where-Object { ($old + 'tickMs') -notcontains $_ }) | Should -Be @('version')
+    }
     It 'T47-17 uptime is worked out from the boot time and the clock' {
         $r = Invoke-Route -Path '/stats' -Context (New-Context (New-WebRoot))
         ($r.Body | ConvertFrom-Json).uptime | Should -Be 3600

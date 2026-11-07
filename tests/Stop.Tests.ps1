@@ -10,6 +10,45 @@ BeforeAll {
     function Rule($Sid, $Rights = 'FullControl') { New-Object System.Security.AccessControl.EventWaitHandleAccessRule($Sid, [System.Security.AccessControl.EventWaitHandleRights]$Rights, 'Allow') }
 }
 
+Describe 'T62-01 to T62-03 Get-SrrVersion reads VERSION' {
+    BeforeAll {
+        function New-VersionFolder([byte[]]$Bytes) {
+            $f = New-TestDataPath
+            if ($null -ne $Bytes) { [IO.File]::WriteAllBytes((Join-Path $f 'VERSION'), $Bytes) }
+            $f
+        }
+        function Get-Ascii([string]$Text) { [Text.Encoding]::ASCII.GetBytes($Text) }
+    }
+    It 'T62-01 returns the one line, with or without a trailing newline, and no note' {
+        foreach ($text in 'v0.8.0', "v0.8.0`n", "v0.8.0`r`n") {
+            $r = Get-SrrVersion -Folder (New-VersionFolder (Get-Ascii $text))
+            $r.Version | Should -Be 'v0.8.0'
+            $r.Note | Should -BeNullOrEmpty
+        }
+        (Get-SrrVersion -Folder (New-VersionFolder (Get-Ascii ('x' * 64)))).Version | Should -Be ('x' * 64)
+        (Get-SrrVersion -Folder (New-VersionFolder (Get-Ascii 'test-feature/x+abc1234'))).Version | Should -Be 'test-feature/x+abc1234'
+    }
+    It 'T62-02 says dev, with no note, when there is no VERSION file' {
+        $r = Get-SrrVersion -Folder (New-VersionFolder $null)
+        $r.Version | Should -Be 'dev'
+        $r.Note | Should -BeNullOrEmpty
+    }
+    It 'T62-03 says unknown, with a note naming the problem, for <Name>' -ForEach @(
+        @{ Name = 'two lines';        Bytes = [Text.Encoding]::ASCII.GetBytes("v0.8.0`nv0.9.0`n"); Match = 'more than one line' }
+        @{ Name = '65 characters';    Bytes = [Text.Encoding]::ASCII.GetBytes('x' * 65);         Match = 'longer than 64' }
+        @{ Name = 'a control char';   Bytes = [Text.Encoding]::ASCII.GetBytes("v0.8`t0");        Match = 'control character' }
+        @{ Name = 'an empty file';    Bytes = [byte[]]@();                    Match = 'empty' }
+        @{ Name = 'only a newline';   Bytes = [Text.Encoding]::ASCII.GetBytes("`r`n");           Match = 'empty' }
+        @{ Name = 'non-ASCII text';   Bytes = [byte[]]@(0x76, 0xC3, 0xA9);    Match = 'non-ASCII' }
+        @{ Name = 'a byte order mark'; Bytes = [byte[]]@(0xEF, 0xBB, 0xBF, 0x76); Match = 'non-ASCII' }
+    ) {
+        $r = Get-SrrVersion -Folder (New-VersionFolder $Bytes)
+        $r.Version | Should -Be 'unknown'
+        $r.Note | Should -Match 'VERSION'
+        $r.Note | Should -Match $Match
+    }
+}
+
 Describe 'T48-37 the stop event''s name' {
     It 'T48-37 one folder gives one name, whatever its case or trailing separator' {
         $f = New-TestDataPath

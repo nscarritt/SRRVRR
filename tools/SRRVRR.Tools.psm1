@@ -27,4 +27,11 @@ function Find-SRRVRRProcess {
     }
 }
 
-Export-ModuleMember -Function Get-Percentile, Compare-Budget, Find-SRRVRRProcess
+# What a test copy's VERSION file says: test-<ref>+<first 7 of the commit>, the ref's characters outside
+# [A-Za-z0-9._/-] replaced by '-' so the line stays plain ASCII (modules\Control.psm1 Get-SrrVersion reads it).
+function Get-TestBuildVersion {
+    param([Parameter(Mandatory)][string]$Ref, [Parameter(Mandatory)][string]$Commit)
+    'test-' + ($Ref -replace '[^A-Za-z0-9._/-]', '-') + '+' + $Commit.Substring(0, 7)
+}
+
+Export-ModuleMember -Function Get-Percentile, Compare-Budget, Find-SRRVRRProcess, Get-TestBuildVersion
