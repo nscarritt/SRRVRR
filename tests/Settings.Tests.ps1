@@ -83,3 +83,29 @@ Describe 'T47-30 the -Port parameter' {
         } finally { Remove-TestDataPath $dir }
     }
 }
+
+Describe 'T65-06 the drive space settings' {
+    It 'T65-06 the defaults are 85 and 95' {
+        $d = Get-SrrDefaultSettings
+        $d.DriveWarnPercent | Should -Be 85
+        $d.DriveFullPercent | Should -Be 95
+        { Test-SrrSettings (Get-SrrDefaultSettings) } | Should -Not -Throw
+    }
+    It 'T65-06 50 and 99 are accepted at the edges' {
+        { Test-SrrSettings (New-Config @{ DriveWarnPercent = 50; DriveFullPercent = 99 }) } | Should -Not -Throw
+        { Test-SrrSettings (New-Config @{ DriveWarnPercent = 98; DriveFullPercent = 99 }) } | Should -Not -Throw
+    }
+    It 'T65-06 <name> of <value> is refused with one plain message' -ForEach @(
+        @{ name = 'DriveWarnPercent'; value = 49 }, @{ name = 'DriveWarnPercent'; value = 100 }, @{ name = 'DriveWarnPercent'; value = 85.5 }, @{ name = 'DriveWarnPercent'; value = '85' }
+        @{ name = 'DriveFullPercent'; value = 49 }, @{ name = 'DriveFullPercent'; value = 100 }, @{ name = 'DriveFullPercent'; value = 95.5 }, @{ name = 'DriveFullPercent'; value = '95' }
+    ) {
+        $message = try { Test-SrrSettings (New-Config @{ $name = $value }) | Out-Null; '' } catch { $_.Exception.Message }
+        $message | Should -Match "^$name must be a whole number from 50 to 99"
+        $message | Should -Not -Match "`n"
+    }
+    It 'T65-06 a warning level at or above the full level is refused' {
+        $message = try { Test-SrrSettings (New-Config @{ DriveWarnPercent = 95; DriveFullPercent = 90 }) | Out-Null; '' } catch { $_.Exception.Message }
+        $message | Should -Match 'DriveWarnPercent \(95\) must be lower than DriveFullPercent \(90\)'
+        { Test-SrrSettings (New-Config @{ DriveWarnPercent = 90; DriveFullPercent = 90 }) } | Should -Throw '*lower than*'
+    }
+}

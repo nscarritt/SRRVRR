@@ -261,8 +261,8 @@ Describe 'Test builds' -Tag 'Smoke' {
                 $pa = @(Get-JsonPaths ($a.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
                 $pb = @(Get-JsonPaths ($b.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
                 @($pa | Where-Object { $pb -notcontains $_ }) | Should -BeNullOrEmpty
-                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), and the version (#62).
-                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs', 'version')
+                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), and each drive's level (#65).
+                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs', 'version')
                 foreach ($path in '/', '/stats') {
                     $x = Invoke-TestRequest -Url "http://localhost:$oldPort$path"; $y = Invoke-TestRequest -Url "http://localhost:$newPort$path"
                     $y.Headers['Content-Type'] | Should -Be $x.Headers['Content-Type']

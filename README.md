@@ -173,6 +173,8 @@ replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.exam
 | `LogRetentionDays` | `31` | How many days of logs to keep, 7 to 366. |
 | `MaintenanceHours` | `2` | How long the Maintenance checkbox stays on, in hours (0.25 up to `MaintenanceMaxHours`). |
 | `MaintenanceMaxHours` | `8` | The longest Maintenance can stay on, in hours (1 to 24). |
+| `DriveWarnPercent` | `85` | The percent of a drive that is used when its Storage bar turns amber and a "filling" banner shows, 50 to 99 (below `DriveFullPercent`). |
+| `DriveFullPercent` | `95` | The percent used when the bar turns red and the drive is flagged as almost full, 50 to 99. A drive has to fall 2 points below a threshold before its level goes back down. |
 
 Example:
 

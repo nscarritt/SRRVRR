@@ -81,4 +81,14 @@
 
     # The longest Maintenance can stay on, in hours (1 to 24).
     MaintenanceMaxHours = 8
+
+    # --- Drive space ----------------------------------------------------------
+
+    # The percent of a drive that is used when the Storage bar turns amber and
+    # SRRVRR shows a "filling" banner (50 to 99, below DriveFullPercent).
+    DriveWarnPercent = 85
+
+    # The percent used when the bar turns red and SRRVRR flags the drive as almost
+    # full (50 to 99).
+    DriveFullPercent = 95
 }

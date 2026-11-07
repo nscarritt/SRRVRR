@@ -97,6 +97,23 @@ Describe 'T51-06 the settings table matches the code' {
     }
 }
 
+Describe 'T65-10 the drive space settings are documented' {
+    It 'T65-10 the README table, the example config and the defaults agree' {
+        $defaults = Get-SrrDefaultSettings
+        $rows = @{}
+        foreach ($m in [regex]::Matches($Readme, '(?m)^\| `(\w+)` \| `([^`]*)` \| (.*)\|\s*$')) { $rows[$m.Groups[1].Value] = @{ Default = $m.Groups[2].Value; Text = $m.Groups[3].Value } }
+        $example = Import-PowerShellDataFile -LiteralPath (Join-Path $Root 'SRRVRR.config.example.psd1')
+        foreach ($k in 'DriveWarnPercent', 'DriveFullPercent') {
+            $rows[$k].Default | Should -Be ([string]$defaults[$k]) -Because "$k in the README"
+            $example[$k] | Should -Be $defaults[$k] -Because "$k in the example config"
+            $s = Get-SrrDefaultSettings; $s[$k] = 49
+            $message = try { Test-SrrSettings $s | Out-Null; '' } catch { $_.Exception.Message }
+            $range = [regex]::Match($message, '(\d+) to (\d+)').Value
+            $range | Should -Be '50 to 99' -Because "$k's error message names its range"
+            $rows[$k].Text | Should -Match ([regex]::Escape($range)) -Because "$k in the README"
+        }
+    }
+}
 Describe 'T51-08 links in the docs' {
     It 'T51-08 every relative link in README.md and docs\*.md reaches a file, and every #anchor a heading' {
         $files = @(Get-Item (Join-Path $Root 'README.md')) + @(Get-ChildItem (Join-Path $Root 'docs') -Filter '*.md' -Recurse)

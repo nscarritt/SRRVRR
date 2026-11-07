@@ -722,7 +722,7 @@ Spec section 1. Files: `tests\Settings.Tests.ps1` (or `Control.Tests.ps1`), `tes
 | T62-04 | V2 | I | `GET /stats` from the router with `version` in the state | A `version` string field; every v0.7.0 field still there (the `v0.6.0-shape` fixture check) | FX |
 | T62-05 | V3 | I | `New-TestBuild.ps1 -Ref feature/x` | The test copy has `VERSION` = `test-feature/x+<7 hex>`; a ref with spaces or quotes has them replaced by `-` | NTB |
 | T62-06 | V4 | J | `showVersion` with `v0.8.0`, `v0.8.0-uat+abc1234`, `test-x+abc1234`, `dev`, `unknown` | The text as given; only `v0.8.0` without the amber class | - |
-| T62-07 | V4, B8 | A | `docs\uat\62-version.md` | The owner sees the test build's version in amber and checks the installed copy has a `VERSION` file | UC |
+| T62-07 | V4, B8 | A | `docs\uat\v0.8.0-combined.md` | The owner sees the test build's version in amber and checks the installed copy has a `VERSION` file | UC |
 
 ### 6.8 #63 Alert times, 12-hour format, 60-second clear (v0.8.0)
 
@@ -737,7 +737,7 @@ Spec section 2. Files: `tests\js\events.test.js`, `tests\Static.Tests.ps1`.
 | T63-05 | AT3 | J | A banner with fake timers: visible for 59 s, hidden for 120 s, visible for 1 s | Still shown after 59 s and through the hidden time; closed after the 60th visible second | - |
 | T63-06 | AT2 | J | The Flagged list with three events | Each row's time in the 12-hour format with its date, newest first | - |
 | T63-07 | AT2 | S | `web\app.js` | No `en-GB` and no `h23`; one `Intl.DateTimeFormat` call site, in `fmtTime` | - |
-| T63-08 | AT1, AT3, B8 | A | `docs\uat\63-alert-times.md` | The owner reads banner times, watches a banner last a minute, and sees one wait in a background tab | UC |
+| T63-08 | AT1, AT3, B8 | A | `docs\uat\v0.8.0-combined.md` | The owner reads banner times, watches a banner last a minute, and sees one wait in a background tab | UC |
 
 ### 6.9 #65 The drive-almost-full alert (v0.8.0)
 
@@ -757,7 +757,7 @@ Spec section 3. Files: `tests\Events.Tests.ps1`, `tests\Settings.Tests.ps1`, `te
 | T65-09 | DF2 | J | `bannerFor` for the three types | A title with the letter and percent, a line with the free GB | - |
 | T65-10 | DF4, ST6 | S | README's settings table, `SRRVRR.config.example.psd1`, `Get-SrrDefaultSettings` | Both settings with the same defaults and range | - |
 | T65-11 | B1, B3, B5 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.7.0's budgets | MS |
-| T65-12 | DF1, DF2, DF4, B8 | A | `docs\uat\65-drive-full.md` | The owner sees an amber bar and one banner after lowering the threshold, none after raising it, and a refused start for `101` | UC |
+| T65-12 | DF1, DF2, DF4, B8 | A | `docs\uat\v0.8.0-combined.md` | The owner sees an amber bar and one banner after lowering the threshold, none after raising it, and a refused start for `101` | UC |
 
 ## 7. Traceability
 
