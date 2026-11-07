@@ -20,6 +20,13 @@ called out under **Changed** or **Removed** with upgrade notes.
   means `unknown`, with the problem in the startup log. Test copies from `tools\New-TestBuild.ps1` write
   `VERSION` as `test-<ref>+<commit>`.
 
+### Changed
+
+- **Alert times, one 12-hour format, and banners that stay a minute (#63).** Every banner now ends with the time
+  it happened, every time on the page (banners, the Flagged list, "Maintenance until 3:30 PM") uses one
+  12-hour format in the browser's own time zone, and a banner closes after 60 seconds on screen instead of 15
+  (seconds in a background tab still don't count).
+
 ### Fixed
 
 - **The /events window across a clock change.** `/events?days=N` now starts at local midnight of the first day with

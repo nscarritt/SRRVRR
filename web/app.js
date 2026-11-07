@@ -257,17 +257,34 @@ $('sound').onclick = () => {
 };
 document.addEventListener('click', () => { if (!armed) { armed = true; showSound(); } });
 showSound();
-// A banner: title, a line or two of detail, and a close button. It closes by itself
-// after 15 seconds of the page being on screen, so alerts that arrive in a background
+// One 12-hour time for the whole page ("7:42 PM"; with withDate "Nov 6, 7:42 PM"), in the browser's own time zone
+// (the tests pass one). Newer ICU puts a narrow no-break space before AM/PM: it becomes a plain space.
+const SPACES = new RegExp('[\\u202f\\u00a0]', 'g');
+function fmtTime(ms, timeZone, withDate) {
+  if (typeof ms !== 'number') return '';
+  const o = {hour: 'numeric', minute: '2-digit', hour12: true, timeZone: timeZone};
+  if (withDate) { o.month = 'short'; o.day = 'numeric'; }
+  try { return new Intl.DateTimeFormat('en-US', o).format(ms).replace(SPACES, ' '); } catch (e) { return ''; }
+}
+// A banner's lines with the time it happened as the last one.
+const bannerLines = (lines, time, timeZone) => (lines || []).filter(Boolean).concat(fmtTime(time, timeZone)).filter(Boolean);
+// The banner's countdown: call it once a second; it says true on the 60th second the page was on screen.
+// Seconds while the page is hidden don't count.
+function bannerTicker(hidden, seconds) {
+  let left = seconds || 60;
+  return () => !hidden() && --left <= 0;
+}
+// A banner: title, a line or two of detail, the time it happened, and a close button. It closes by itself
+// after 60 seconds of the page being on screen, so alerts that arrive in a background
 // tab are still there when you come back. quiet: no ding (for small notes).
-function notify(icon, title, lines, quiet) {
+function notify(icon, title, lines, quiet, time) {
   const el = document.createElement('div');
   el.className = 'toast';
   el.innerHTML = (icon ? '<i class="plogo plogo-' + icon + '"></i>' : '') + '<div><b>' + esc(title) + '</b>' +
-    lines.filter(Boolean).map(l => '<small>' + esc(l) + '</small>').join('') +
+    bannerLines(lines, time).map(l => '<small>' + esc(l) + '</small>').join('') +
     '</div><button type="button" title="Dismiss" aria-label="Dismiss">&times;</button>';
-  let left = 15;
-  const timer = setInterval(() => { if (!document.hidden && --left <= 0) close(); }, 1000);
+  const ticker = bannerTicker(() => document.hidden, 60);
+  const timer = setInterval(() => { if (ticker()) close(); }, 1000);
   function close() { clearInterval(timer); el.classList.remove('show'); setTimeout(() => el.remove(), 400); }
   el.lastChild.onclick = close;
   $('toasts').prepend(el);
@@ -295,7 +312,7 @@ function takeEvents(s, current) {
   if (current == null) return {since: next, banners: [], more: false, flagged: false};
   const seen = new Set();
   const fresh = ((s && s.events) || []).filter(e => e && typeof e.id === 'number' && e.id > current && !seen.has(e.id) && seen.add(e.id));
-  return {since: next, banners: fresh.filter(e => shouldBanner(e, s.maintenance)).map(bannerFor),
+  return {since: next, banners: fresh.filter(e => shouldBanner(e, s.maintenance)).map(e => Object.assign(bannerFor(e), {time: e.time})),
     more: !!(s && s.eventsTruncated) && !quiet, flagged: fresh.some(e => e.logged)};
 }
 // Plex: the device a stream plays on, with the app when it differs (for the row's hover). Plex streams raise no
@@ -334,15 +351,11 @@ function bannerFor(e) {
   }
   return b('', String((e && e.type) || 'Event').replace(/-/g, ' '), []);
 }
-// --- Maintenance: a checkbox kept on the server, so it applies to every browser. "Maintenance until 15:30" is in
+// --- Maintenance: a checkbox kept on the server, so it applies to every browser. "Maintenance until 3:30 PM" is in
 // the browser's own time zone (the tests pass one).
-function clock(ms, timeZone) {
-  if (typeof ms !== 'number') return '';
-  try { return new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: timeZone}).format(ms); } catch (e) { return ''; }
-}
 function maintenanceText(m, timeZone) {
   if (!m || !m.on) return '';
-  const t = clock(m.untilMs, timeZone);
+  const t = fmtTime(m.untilMs, timeZone);
   return t ? 'Maintenance until ' + t : 'Maintenance on';
 }
 function maintenanceError(status) {
@@ -375,12 +388,6 @@ $('maintBox').onchange = () => setMaintenance($('maintBox').checked);
 // --- The Flagged list: the logged events of the last 31 days (fewer if the logs are kept fewer), newest first.
 const flaggedDays = keep => Math.min(31, keep >= 1 ? Math.floor(keep) : 31);
 const SEVERITY = {flag: 'Flag', warn: 'Warning', info: 'Info'};
-function stamp(ms, timeZone) {        // "4 Nov, 15:30"
-  if (typeof ms !== 'number') return '';
-  try {
-    return new Intl.DateTimeFormat('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: timeZone}).format(ms);
-  } catch (e) { return ''; }
-}
 const flaggedError = status => '<div class="ferr">Couldn\'t load the Flagged list' +
   (status === 400 ? ': the server didn\'t accept the request (400).' : status ? ' (error ' + status + ').' : '.') + '</div>';
 function flaggedHtml(events, days, timeZone) {
@@ -389,7 +396,7 @@ function flaggedHtml(events, days, timeZone) {
   if (!list.length) return '<div class="fnone">Nothing flagged in the last ' + plural(days, 'day') + '.</div>';
   return list.slice(0, 100).map(e => {
     const sev = ['flag', 'warn', 'info'].includes(e.severity) ? e.severity : 'info', t = bannerFor(e);
-    return '<div class="frow"><span class="fsev ' + sev + '">' + SEVERITY[sev] + '</span><span class="ftime">' + esc(stamp(e.time, timeZone)) +
+    return '<div class="frow"><span class="fsev ' + sev + '">' + SEVERITY[sev] + '</span><span class="ftime">' + esc(fmtTime(e.time, timeZone, true)) +
       '</span><span class="ftext" title="' + t.lines.map(esc).join('&#10;') + '">' + esc(t.title) +
       (e.maintenance ? ' <small>(during maintenance)</small>' : '') + '</span></div>';
   }).join('') + (list.length > 100 ? '<div class="fnone">and ' + (list.length - 100) + ' older</div>' : '');
@@ -405,8 +412,8 @@ let eventSince = null, flaggedAsked = false;
 function showEvents(s) {
   const r = takeEvents(s, eventSince);
   eventSince = r.since;
-  for (const b of r.banners) notify(b.icon, b.title, b.lines);
-  if (r.more) notify('', 'More events than shown', ['Some alerts were skipped. The logged ones are in the Flagged list.'], true);
+  for (const b of r.banners) notify(b.icon, b.title, b.lines, false, b.time);
+  if (r.more) notify('', 'More events than shown', ['Some alerts were skipped. The logged ones are in the Flagged list.'], true, Date.now());
   if (s.maintenance) showMaint(s.maintenance);
   // The first answer gives how many days the logs keep, so the list loads then, and again when a logged event arrives.
   if (!flaggedAsked || r.flagged) { flaggedAsked = true; loadFlagged(s.logRetentionDays); }
@@ -471,6 +478,6 @@ loadHistory().then(tick);
 // For tests under Node: the page's pure functions (tests/js). Browsers have no 'module', so this does nothing there.
 if (typeof module !== 'undefined') {
   module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory,
-    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexDevice, maintenanceText, maintenanceError,
+    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexDevice, maintenanceText, maintenanceError, fmtTime, bannerLines, bannerTicker,
     flaggedDays, flaggedHtml, flaggedError, soundFromStorage, saveSound, showVersion };
 }

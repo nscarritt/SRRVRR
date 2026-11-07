@@ -339,8 +339,10 @@ Under each running process, a quiet detail line says what it's doing:
 ## Alerts
 
 When something happens on the server, a banner slides down from the top of the page. It closes
-by itself after 15 seconds on screen (alerts that arrive while the tab is in the background wait
-until you come back), or click × to close it.
+by itself after 60 seconds on screen (alerts that arrive while the tab is in the background wait
+until you come back), or click × to close it. The last line of each banner is the time it
+happened, e.g. "7:42 PM". Times everywhere on the page (banners, the Flagged list, Maintenance)
+use one 12-hour format in the browser's own time zone.
 
 - **Valheim:** a player joined or left, e.g. "Ivar joined Valheim · 2 players online". Names
   appear when the server reports them; otherwise "A player joined". Checked every 10 seconds,
@@ -365,7 +367,7 @@ sleeps, it says so once instead of showing them all.
 
 **Maintenance:** tick **Maintenance** in the header before working on the server. For the next
 `MaintenanceHours` (2 by default) no page shows banners or dings; the header says "Maintenance until
-15:30" in each browser's own time, in every browser at once, and it survives a restart. Events are
+3:30 PM" in each browser's own time, in every browser at once, and it survives a restart. Events are
 still logged, marked as during maintenance. Untick it to end it early. Any device that can open the
 page can tick it; each change is logged with its address, and one address can change it at most once
 every 10 seconds and 60 times a day.
