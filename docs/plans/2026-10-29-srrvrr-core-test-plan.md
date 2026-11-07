@@ -1,7 +1,8 @@
 # SRRVRR core (v0.7.0): test plan
 
 Status: draft for the owner's review. Covers stories #47 to #51 (milestone v0.7.0) against the design spec
-`docs/specs/2026-10-28-srrvrr-core-design.md`.
+`docs/specs/2026-10-28-srrvrr-core-design.md`. Extended for v0.8.0 (#62, #63, #65, #66): sections 6.6 to 6.9
+and their rows in section 7, against `docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`.
 
 ## Contents
 - [1. Scope and coverage goals](#1-scope-and-coverage-goals)
@@ -691,6 +692,73 @@ so the text can't quietly go stale.
 | T51-09 | Q4, Q5 | S | `CHANGELOG.md` | `[Unreleased]` has an entry for each of #47 to #51 before the release PR; the release PR moves them under `0.7.0` and the README version matches | - |
 | T51-10 | B8, DEP3 | A | `docs\uat\51-readme.md` | The owner follows the README's boot steps on a test build with the boot launcher's test setup: start at boot, a crash restarts it, `-Stop` stops it without a restart, a settings error doesn't loop | UC |
 
+### 6.6 #66 Clock changes and midnight (v0.8.0)
+
+Spec: `docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`, section 4. Every case uses fixed `DateTimeOffset` values
+with the offsets of a zone that changes its clock (one hour forward in spring, one back in fall), and a fixed
+`TimeZoneInfo` where a function takes one. File: `tests\Clock.Tests.ps1`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T66-01 | CK1 | U | A daily log written at 00:30, 01:59 and 03:00 local on the spring 23-hour day, and at 23:59 the day before | Two files, the day before's and the change day's; each line in its own day's file | CLK |
+| T66-02 | CK1 | U | Lines written through the fall day's repeated hour (01:30 at the summer offset, then 01:10 at the winter offset) | All in the change day's one file, in the order written | CLK |
+| T66-03 | CK1 | U | Lines at 23:59:59.999 and 00:00:00.000 local | Two files, one line each | CLK |
+| T66-04 | CK3 | U | 40 dated event and crash log files spanning a spring and a fall change; cleanup with `RetentionDays` 31 | Exactly the 31 newest dates kept, by the dates in the names | CLK |
+| T66-05 | CK2 | U | Indexed events either side of local midnight two days back, the clock having changed yesterday; `Get-IndexedEvents -Days 2` | The window starts at local midnight of yesterday at yesterday's offset: an event 30 minutes after that midnight is in, one 30 minutes before is out (fails on v0.7.0's code) | CLK |
+| T66-06 | CK1 | U | `PathFor` on the 25-hour day, every 15 minutes | One file name for the whole day | CLK |
+| T66-07 | CK4 | U | History samples once a second through the fall repeated hour, the store's 15-minute age cut, a save and a load | Timestamps strictly increasing in UTC milliseconds; nothing dropped or kept by local time | CLK |
+| T66-08 | CK2 | U | The event index loaded from files with `Days` 2 the day after a change | Loads yesterday's and today's files, no more and no fewer | CLK, FX |
+
+### 6.7 #62 The version (v0.8.0)
+
+Spec section 1. Files: `tests\Settings.Tests.ps1` (or `Control.Tests.ps1`), `tests\Web.Tests.ps1`,
+`tests\Tools.Tests.ps1`, `tests\js\app.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T62-01 | V1 | U | A folder with `VERSION` = `v0.8.0` (with and without a trailing newline) | `Get-SrrVersion` returns `v0.8.0`, no note | TH |
+| T62-02 | V1 | U | A folder with no `VERSION` | `dev`, no note | TH |
+| T62-03 | V1 | U X | `VERSION` with two lines; 65 characters; a control character; empty; non-ASCII | `unknown`, with a note naming the problem | TH |
+| T62-04 | V2 | I | `GET /stats` from the router with `version` in the state | A `version` string field; every v0.7.0 field still there (the `v0.6.0-shape` fixture check) | FX |
+| T62-05 | V3 | I | `New-TestBuild.ps1 -Ref feature/x` | The test copy has `VERSION` = `test-feature/x+<7 hex>`; a ref with spaces or quotes has them replaced by `-` | NTB |
+| T62-06 | V4 | J | `showVersion` with `v0.8.0`, `v0.8.0-uat+abc1234`, `test-x+abc1234`, `dev`, `unknown` | The text as given; only `v0.8.0` without the amber class | - |
+| T62-07 | V4, B8 | A | `docs\uat\62-version.md` | The owner sees the test build's version in amber and checks the installed copy has a `VERSION` file | UC |
+
+### 6.8 #63 Alert times, 12-hour format, 60-second clear (v0.8.0)
+
+Spec section 2. Files: `tests\js\events.test.js`, `tests\Static.Tests.ps1`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T63-01 | AT2 | J | `fmtTime` for 19:42, 00:00, 12:00 and 09:05 in a fixed zone | `7:42 PM`, `12:00 AM`, `12:00 PM`, `9:05 AM` | - |
+| T63-02 | AT2 | J | `fmtTime` with a date | `Nov 6, 7:42 PM` | - |
+| T63-03 | AT2 | J | `maintenanceText` for an end time in `UTC` and in `Asia/Tokyo` | `Maintenance until 3:30 PM`, `Maintenance until 12:30 AM` | - |
+| T63-04 | AT1 | J | An event with `time`; a page-made banner | The banner's last line is the event's time; a page-made banner's is the time it appeared | - |
+| T63-05 | AT3 | J | A banner with fake timers: visible for 59 s, hidden for 120 s, visible for 1 s | Still shown after 59 s and through the hidden time; closed after the 60th visible second | - |
+| T63-06 | AT2 | J | The Flagged list with three events | Each row's time in the 12-hour format with its date, newest first | - |
+| T63-07 | AT2 | S | `web\app.js` | No `en-GB` and no `h23`; one `Intl.DateTimeFormat` call site, in `fmtTime` | - |
+| T63-08 | AT1, AT3, B8 | A | `docs\uat\63-alert-times.md` | The owner reads banner times, watches a banner last a minute, and sees one wait in a background tab | UC |
+
+### 6.9 #65 The drive-almost-full alert (v0.8.0)
+
+Spec section 3. Files: `tests\Events.Tests.ps1`, `tests\Settings.Tests.ps1`, `tests\Docs.Tests.ps1`,
+`tests\js\app.test.js`, `tests\js\events.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T65-01 | DF1 | U | `Get-DriveLevel` with used 84, 85, 94, 95 from `ok`; 83, 82.9 from `filling`; 93, 92.9 from `full` (warn 85, full 95) | `ok`, `filling`, `filling`, `full`; `filling`, `ok`; `full`, `filling` | - |
+| T65-02 | DF2 | U | Two readings: a drive `ok` then `filling`, `filling` then `full`, `filling` then `ok` | `drive-filling`; `drive-full`; `drive-space-ok`; nothing for `full` to `filling` | - |
+| T65-03 | DF2 | U | A first reading with one drive already `full` and one `ok` | One `drive-full` event, for that drive only | - |
+| T65-04 | DF1 | U | A Missing drive in the readings | No level and no event for it | - |
+| T65-05 | DF3, SEC3 | U X | The new events' data | Only `letter`, `usedPercent` (a whole number) and `freeGB`; no labels, folders or names | - |
+| T65-06 | DF4 | U X | `DriveWarnPercent` / `DriveFullPercent` of 49, 100, 85.5, `'85'`, warn 95 with full 90 | A settings error with one plain message each; 85 and 95 by default | - |
+| T65-07 | DF2 | U | The event type table | The three types with their severity, banner and logged values | - |
+| T65-08 | DF5 | J | `renderDrives` with levels `ok`, `filling`, `full` and none | No class, `warn`, `crit`, no class; no 85 or 95 left in `renderDrives` | - |
+| T65-09 | DF2 | J | `bannerFor` for the three types | A title with the letter and percent, a line with the free GB | - |
+| T65-10 | DF4, ST6 | S | README's settings table, `SRRVRR.config.example.psd1`, `Get-SrrDefaultSettings` | Both settings with the same defaults and range | - |
+| T65-11 | B1, B3, B5 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.7.0's budgets | MS |
+| T65-12 | DF1, DF2, DF4, B8 | A | `docs\uat\65-drive-full.md` | The owner sees an amber bar and one banner after lowering the threshold, none after raising it, and a refused start for `101` | UC |
+
 ## 7. Traceability
 
 Every requirement in the spec (as revised 2026-10-29), by section, with its tests. `Traceability.Tests.ps1`
@@ -699,11 +767,11 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 
 | Req | Spec section | Requirement (short) | Tests |
 |---|---|---|---|
-| B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54 |
+| B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54, T65-11 |
 | B2 | Budgets | Private bytes after 60 min within 25 MB of the previous release | T50-56 (soak before the release; the per-PR runs record the 60 s figure) |
-| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58 |
+| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58, T65-11 |
 | B4 | Budgets | Page load 150 ms | T47-28 |
-| B5 | Budgets | Startup to serving 20 s | T47-28, T48-51 |
+| B5 | Budgets | Startup to serving 20 s | T47-28, T48-51, T65-11 |
 | B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54 |
 | B7 | Budgets | Disk writes up to 100 MB a day | T48-69, T49-29, T50-54 |
 | B8 | Budgets | UAT about 15 minutes per PR | UAT only (a duration, timed by the owner): T47-35, T48-70, T49-30, T50-55, T51-10 |
@@ -834,8 +902,24 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | DEP2 | Deps | README update steps ("replace the code folders") and `-Stop` text | T48-68, T51-02 |
 | DEP3 | Deps | Launcher contract: hashes, unlisted files, restart on crash codes only (3 in 10 min), the marker, the stop signal, 31-day log | T48-67, T51-01 to T51-04, T51-10 (the 31-day launcher log is the launcher's own: not testable here) |
 | DEP4 | Deps | Windows PowerShell 5.1, C# 5, `HttpListener`, CIM, named events | T47-32, every K test (run in `powershell.exe` 5.1), CI's `shell: powershell` (T47-25) |
+| CK1 | 0.8 s4 | Daily files roll at local midnight, also on 23- and 25-hour days | T66-01, T66-02, T66-03, T66-06 |
+| CK2 | 0.8 s4 | `/events?days=n` and the index start at local midnight with that day's own offset | T66-05, T66-08 |
+| CK3 | 0.8 s4 | Retention ages files by the date in their names across clock changes | T66-04 |
+| CK4 | 0.8 s4 | History timestamps are UTC milliseconds and stay in order across clock changes | T66-07 |
+| V1 | 0.8 s1 | The version from `VERSION`: one valid line, else `dev` (no file) or `unknown` with a note | T62-01, T62-02, T62-03 |
+| V2 | 0.8 s1 | `/stats` has `version`; nothing else changes | T62-04 |
+| V3 | 0.8 s1 | Test builds write `VERSION` = `test-<ref>+<commit>` | T62-05 |
+| V4 | 0.8 s1 | The header shows the version; anything but a release in amber | T62-06, T62-07 |
+| AT1 | 0.8 s2 | Each banner shows when its event happened | T63-04, T63-08 |
+| AT2 | 0.8 s2 | One 12-hour time format: banners, the Flagged list, Maintenance | T63-01, T63-02, T63-03, T63-06, T63-07 |
+| AT3 | 0.8 s2 | Banners close after 60 visible seconds | T63-05, T63-08 |
+| DF1 | 0.8 s3 | Drive levels at the two thresholds, 2 points of margin going down, Missing drives skipped | T65-01, T65-04, T65-12 |
+| DF2 | 0.8 s3 | `drive-filling`, `drive-full`, `drive-space-ok`, and the first reading counts as from `ok` | T65-02, T65-03, T65-07, T65-09, T65-12 |
+| DF3 | 0.8 s3 | Counts, not names, in the drive events | T65-05 |
+| DF4 | 0.8 s3 | `DriveWarnPercent` and `DriveFullPercent`: 50 to 99, warn below full, documented | T65-06, T65-10, T65-12 |
+| DF5 | 0.8 s3 | The Storage bar colors from the server's level | T65-08 |
 
-**Coverage of this table:** 135 requirement rows; every one has at least one test id. Automated tests exist for
+**Coverage of this table:** 151 requirement rows (135 for v0.7.0, 16 for v0.8.0); every one has at least one test id. Automated tests exist for
 all but B8, M8 (the accepted risk), S13 (the loss on a closed window), the three-in-a-row switch in Q2, the habit
 in Q3, the release ordering in Q5, and the launcher's own log in DEP3: those are UAT or owner decisions, as noted.
 
