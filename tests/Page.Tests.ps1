@@ -67,3 +67,16 @@ Describe 'T50-51 banners come from server events' {
         $js | Should -Match 'function bannerFor\('
     }
 }
+
+Describe 'T63-07 one time formatter' {
+    It 'T63-07 app.js has no en-GB, no h23, and one Intl.DateTimeFormat call site (in fmtTime)' {
+        $js = [IO.File]::ReadAllText((Join-Path $Web 'app.js'))
+        $js | Should -Not -Match 'en-GB'
+        $js | Should -Not -Match 'h23'
+        ([regex]::Matches($js, [regex]::Escape('Intl.DateTimeFormat('))).Count | Should -Be 1
+        $start = $js.IndexOf('function fmtTime(')
+        $start | Should -BeGreaterThan -1
+        $js.IndexOf('Intl.DateTimeFormat(') | Should -BeGreaterThan $start
+        $js.IndexOf('Intl.DateTimeFormat(') | Should -BeLessThan ($start + 600)
+    }
+}
