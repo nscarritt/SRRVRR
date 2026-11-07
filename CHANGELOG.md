@@ -20,6 +20,14 @@ called out under **Changed** or **Removed** with upgrade notes.
   means `unknown`, with the problem in the startup log. Test copies from `tools\New-TestBuild.ps1` write
   `VERSION` as `test-<ref>+<commit>`.
 
+- **A warning when a drive is nearly full (#65).** The Storage bar turns amber at 85% used and red at 95%, and
+  SRRVRR raises a banner and a log entry when a drive becomes "filling" or "almost full", and a quiet entry when
+  it has space again. A drive has to fall 2 points below a threshold before its level drops, so one hovering
+  there doesn't flap. The thresholds are the new settings `DriveWarnPercent` (85) and `DriveFullPercent` (95),
+  each a whole number from 50 to 99 with the first below the second. The server decides the level (`level` on each
+  drive in `/stats`); the page only colors by it. New events: `drive-filling`, `drive-full`,
+  `drive-space-ok`, with only the drive letter, used percent and free GB.
+
 ### Changed
 
 - **Alert times, one 12-hour format, and banners that stay a minute (#63).** Every banner now ends with the time

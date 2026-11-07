@@ -251,3 +251,18 @@ test('T50-50 the Flagged list: none, a 400, a failure, and names escaped', () =>
   assert.ok(!html.includes('<b>Odd'));
   assert.match(html, /class="fsev info"/);
 });
+
+test('T65-09 drive banners: a title with the letter and percent, and a line with the free GB', () => {
+  const f = type => plain(app.bannerFor({ id: 1, banner: true, type, data: { letter: 'D:', usedPercent: 87, freeGB: 120.5 } }));
+  assert.deepStrictEqual(f('drive-filling'), { icon: '', title: 'Drive D: is 87% full', lines: ['120.5 GB free'] });
+  assert.deepStrictEqual(f('drive-full'), { icon: '', title: 'Drive D: is almost full (87%)', lines: ['120.5 GB free'] });
+  assert.deepStrictEqual(f('drive-space-ok'), { icon: '', title: 'Drive D: has space again', lines: ['120.5 GB free'] });
+});
+
+test('T65-09 drive banners show only for the types the server marks as banners', () => {
+  const full = app.takeEvents({ lastEventId: 11, events: [ev(11, 'drive-full', true, true, { letter: 'D:', usedPercent: 96, freeGB: 4 }, { severity: 'flag' })] }, 10);
+  assert.strictEqual(full.banners.length, 1);
+  assert.strictEqual(plain(full.banners[0]).title, 'Drive D: is almost full (96%)');
+  const ok = app.takeEvents({ lastEventId: 12, events: [ev(12, 'drive-space-ok', false, true, { letter: 'D:', usedPercent: 60, freeGB: 40 })] }, 11);
+  assert.strictEqual(ok.banners.length, 0);
+});

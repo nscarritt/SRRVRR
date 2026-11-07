@@ -165,7 +165,7 @@ function renderDrives(s) {
   $('driveCard').hidden = !drives.length;
   $('drives').innerHTML = drives.map(d => {
     const used = d.size - d.free, pct = d.size ? 100 * used / d.size : 0;
-    const level = pct >= 95 ? 'crit' : pct >= 85 ? 'warn' : '';        // amber at 85% full, red at 95%
+    const level = d.level === 'full' ? 'crit' : d.level === 'filling' ? 'warn' : '';   // the server decides the level
     const h = d.health || '', cls = h === 'Healthy' ? 'ok' : h === 'Warning' ? 'warn' : h === 'Unhealthy' ? 'bad' : 'unknown';
     const title = (d.disk ? d.disk + ': ' : '') + (h || 'health not reported');
     return '<div class="drive"><div class="dname"><b>' + d.letter + '</b><span>' + (d.label || 'Local Disk') + '</span></div>' +
@@ -337,6 +337,9 @@ function bannerFor(e) {
     case 'query-stopped': return b(serviceIcon(name), name + ' stopped answering', ['It is running, but not answering status checks.', d.error && 'Reason: ' + d.error]);
     case 'query-back': return b(serviceIcon(name), name + ' is answering again', []);
     case 'drive-health': return b('', drive + ' health: ' + (d.health || 'unknown'), [d.was && 'It was ' + d.was + ' before.']);
+    case 'drive-filling': return b('', drive + ' is ' + d.usedPercent + '% full', [d.freeGB + ' GB free']);
+    case 'drive-full': return b('', drive + ' is almost full (' + d.usedPercent + '%)', [d.freeGB + ' GB free']);
+    case 'drive-space-ok': return b('', drive + ' has space again', [d.freeGB + ' GB free']);
     case 'data-drive-missing': return b('', drive + ' is missing', ['Windows can no longer see it.', d.was && 'It was ' + d.was + ' before.']);
     case 'data-fallback': return b('', 'Saving to the local data folder', ['SRRVRR could not use its usual data folder.', d.reason]);
     case 'share-found': return b('', 'The data folder is shared on the network', ['Other computers may be able to read or change its files.', d.reason]);
@@ -478,6 +481,6 @@ loadHistory().then(tick);
 // For tests under Node: the page's pure functions (tests/js). Browsers have no 'module', so this does nothing there.
 if (typeof module !== 'undefined') {
   module.exports = { bits, niceMax, since, size, speed, rangeFromStorage, saveRange, visibleSlice, toSegments, fillFromHistory, shouldRefetchHistory, needsHistory,
-    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, plexDevice, maintenanceText, maintenanceError, fmtTime, bannerLines, bannerTicker,
+    statsUrl, nextSince, shouldBanner, takeEvents, bannerFor, renderDrives, plexDevice, maintenanceText, maintenanceError, fmtTime, bannerLines, bannerTicker,
     flaggedDays, flaggedHtml, flaggedError, soundFromStorage, saveSound, showVersion };
 }
