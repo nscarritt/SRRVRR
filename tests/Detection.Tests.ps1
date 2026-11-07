@@ -163,6 +163,9 @@ Describe 'T50-16 the spec''s table' {
             'sampler-error' = 'warn', $false, $true; 'worker-stopped' = 'warn', $false, $true
             'maintenance-on' = 'info', $false, $true; 'maintenance-off' = 'info', $false, $true
             'started' = 'info', $false, $true; 'stopped' = 'info', $false, $true
+            # The v0.8.0 design, section 3: drive space.
+            'drive-filling' = 'warn', $true, $true; 'drive-full' = 'flag', $true, $true
+            'drive-space-ok' = 'info', $false, $true
         }
         $types = Get-EventTypes
         @($types.Keys | Sort-Object) | Should -Be @($spec.Keys | Sort-Object)
