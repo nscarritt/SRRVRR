@@ -93,6 +93,9 @@ $script:EventTypes = @{
     'restart-pending' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'drive-health' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'data-drive-missing' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'drive-filling' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
+    'drive-full' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'drive-space-ok' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'data-fallback' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'share-found' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'history-save-failed' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
@@ -126,13 +129,26 @@ function Get-RowValues([object]$Rows, [string]$Field) {
     , $values
 }
 
+# The level of a drive's space: ok, filling or full. Going up is at the thresholds (Warn, Full, percent used); going
+# down needs 2 points of margin, so a drive hovering at a threshold doesn't flap. Previous is the last level, or $null.
+function Get-DriveLevel {
+    param([double]$UsedPercent, [object]$Previous, [int]$Warn, [int]$Full)
+    $was = if ($Previous) { [string]$Previous } else { 'ok' }
+    $margin = 2
+    if ($UsedPercent -ge $Full) { return 'full' }
+    if ($was -eq 'full' -and $UsedPercent -ge ($Full - $margin)) { return 'full' }
+    if ($UsedPercent -ge $Warn) { return 'filling' }
+    if ($was -ne 'ok' -and $UsedPercent -ge ($Warn - $margin)) { return 'filling' }
+    'ok'
+}
 # What changed between two readings of the state. Nothing on the first observation (no replay): a section missing
-# from either reading raises nothing. Maintenance, start and stop, the data folder, history saves and errors are
+# from either reading raises nothing (drive space excepted: a drive not seen before counts as coming from ok). Maintenance, start and stop, the data folder, history saves and errors are
 # raised by their owners with New-TypedEvent.
 function Get-StateEvents {
     param([object]$Old, [object]$New)
     $out = New-Object System.Collections.Generic.List[object]
-    if (-not $Old -or -not $New) { return }
+    # The first reading (no Old) still raises drive-space events: a drive first seen as full counts as coming from ok.
+    if (-not $New) { return }
     $oa = Get-Field $Old 'activity'; $na = Get-Field $New 'activity'
     foreach ($name in 'Valheim', 'Plex') {
         $o = Get-Field $oa $name; $n = Get-Field $na $name
@@ -176,9 +192,24 @@ function Get-StateEvents {
         $type = if ($health -eq 'Missing') { 'data-drive-missing' } else { 'drive-health' }
         $out.Add((New-TypedEvent -Type $type -Data @{ letter = $letter; health = $health; was = $od[$letter] } -Key "$type|$letter|$health" -Group "drive|$letter"))
     }
+    # Drive space (spec 0.8 section 3): the slow sampler puts a level (ok, filling, full) on each drive. A drive not in
+    # Old, even on the very first reading, counts as coming from ok. Missing drives and drives without a level are skipped.
+    $ol = @{}
+    foreach ($d in (Get-Field $Old 'drives')) { if ($d -is [Collections.IDictionary] -and $d['level']) { $ol[[string]$d['letter']] = [string]$d['level'] } }
+    foreach ($d in (Get-Field $New 'drives')) {
+        if ($d -isnot [Collections.IDictionary] -or [string]$d['health'] -eq 'Missing' -or -not $d['level']) { continue }
+        $letter = [string]$d['letter']; $level = [string]$d['level']
+        $was = if ($ol.ContainsKey($letter)) { $ol[$letter] } else { 'ok' }
+        if ($was -eq $level) { continue }
+        $type = if ($level -eq 'full') { 'drive-full' } elseif ($level -eq 'ok') { 'drive-space-ok' } elseif ($was -eq 'ok') { 'drive-filling' } else { $null }
+        if (-not $type) { continue }
+        $size = [double]$d['size']
+        $free = [double]$d['free']
+        $used = if ($size -gt 0) { 100.0 * ($size - $free) / $size } else { 0.0 }
+        $out.Add((New-TypedEvent -Type $type -Data @{ letter = $letter; usedPercent = [int][Math]::Round($used); freeGB = [Math]::Round($free / 1GB, 1) } -Key "$type|$letter" -Group "drive-space|$letter"))
+    }
     $out
 }
-
 # The copy of an event that goes to a log: no player, user or device names and no titles, only counts (spec 4).
 function ConvertTo-LoggedEvent {
     param([object]$Item)
@@ -196,4 +227,4 @@ function New-EventLogWriter {
 }
 
 Export-ModuleMember -Function New-EventId, New-SrrEvent, New-SrrError, New-SrrQueue, Add-SrrQueueItem, New-EventStore, Invoke-QueueDrain,
-    Get-EventTypes, New-TypedEvent, Get-StateEvents, ConvertTo-LoggedEvent, New-EventLogWriter
+    Get-EventTypes, New-TypedEvent, Get-DriveLevel, Get-StateEvents, ConvertTo-LoggedEvent, New-EventLogWriter
