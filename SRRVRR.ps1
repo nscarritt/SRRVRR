@@ -303,6 +303,14 @@ function Save-HistoryNow {
     Add-SrrEvent 'history-save-failed' @{ error = $why }
 }
 $stopSavers.Add(@{ Name = 'the graph history'; Save = { Save-HistoryNow } })
+# A write burst still open at a clean stop gets its ended event (reason 'stopped'); the stop's drain writes it.
+$stopSavers.Add(@{ Name = 'open write bursts'; Save = {
+    if (-not $transferMonitor) { return }
+    $transfers = $state.transfers
+    $pcRows = if ($transfers) { @($transfers.pcs) } else { @() }
+    $bursts = @($transferMonitor.BurstList)
+    foreach ($r in @(Get-BurstEvents -Old $bursts -New $bursts -PcRows $pcRows -PcFolders $transferMonitor.PcFolders -IncludeFolders ([bool]$transferMonitor.TransferFolders) -StopMs ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()))) { Add-SrrEvent $r.Type $r.Data $r.Key }
+} })
 
 # The stop event this copy waits on, tied to its folder (modules\Control.psm1). A name someone else made first
 # with open permissions is refused (exit 3). An old stop-requested marker from an earlier stop is cleared.
@@ -313,6 +321,8 @@ Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'state\stop-requested') -Error
 $copyKind = Get-SrrCopyKind -Folder $PSScriptRoot
 # The data drives the Storage card watches: the configured DataPath and the folder in use (they differ on fallback).
 $dataDrives = [hashtable]::Synchronized(@{ Paths = @($settings.DataPath, $data.Path) | Where-Object { $_ } })
+# What the two samplers and the web server share about the file shares (modules\Transfers.psm1): the Transfers card.
+$transferMonitor = New-TransferMonitor -Settings $settings -Elevated (Test-Elevated) -ServerAddresses @((Get-HostIdentity).Addresses)
 if ($copyKind -eq 'test') { Write-Status 'This is a test copy: it uses its own firewall rules and network trace, never the live copy''s.' }
 
 # --- Processes shown in the table under the graphs ----------------------------
@@ -629,7 +639,7 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $transferMonitor, $transfersModulePath)
     # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
     # it on "Starting..." with no reason.
     try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
@@ -638,9 +648,16 @@ $sampler = {
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
     $reader = { $s = @{}; foreach ($n in $cats.Keys) { $s[$n] = $cats[$n].ReadCategory() }; $s }.GetNewClosure()
     $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
+    # The Transfers card's module: without it the rest of the sampler runs and the page says why (transfersError).
+    $transfers = $null
+    try {
+        Import-Module -Name $transfersModulePath -Force -ErrorAction Stop
+        $transfers = { param($reading, $now) Invoke-TransferTick -State $state -Monitor $transferMonitor -Reading $reading -NowMs $now.ToUnixTimeMilliseconds() -History $history }.GetNewClosure()
+    } catch { $state.transfersError = "Couldn't load modules\Transfers.psm1: $($_.Exception.Message)" }
     $ctx = New-FastTickContext -Reader $reader -Processes { Get-Process } -Tracer $tracer -Services $services `
         -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
-        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
+        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history `
+        -Transfers $transfers
     $prev = $null
     while ($true) {
         $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
@@ -656,9 +673,10 @@ $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($transferMonitor).AddArgument((Join-Path $PSScriptRoot 'modules\Transfers.psm1'))
 [void]$worker.BeginInvoke()
 Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
+Write-Status 'Every second: the shares'' traffic and the bottleneck'
 
 # --- Slow checks --------------------------------------------------------------
 # Things that change slowly and take a few hundred milliseconds to read (like
@@ -666,11 +684,21 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $transferMonitor, $transfersModulePath)
     # Select-DrivesToShow; a failure shows as drivesError on the page.
     try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
     # Get-DriveLevel (DataFolder.psm1, loaded above) decides ok, filling or full; driveLevels remembers each letter's last level.
     $driveLevels = @{}
+    # The Transfers card's share list and (administrator only) PCs and folders; Invoke-TransferSample keeps its own cadence.
+    # A reader whose function this copy doesn't have gives an empty list.
+    $transfersReady = $false
+    try { Import-Module -Name $transfersModulePath -Force -ErrorAction Stop; $transfersReady = $true }
+    catch { $state.transfersError = "Couldn't load modules\Transfers.psm1: $($_.Exception.Message)" }
+    $transferReaders = @{
+        Shares = { Get-ShareList }
+        Sessions = { if (Get-Command Get-SmbSessionList -ErrorAction SilentlyContinue) { Get-SmbSessionList } else { @() } }
+        OpenFiles = { if (Get-Command Get-SmbOpenFileList -ErrorAction SilentlyContinue) { Get-SmbOpenFileList } else { @() } }
+    }
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
     # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
@@ -799,6 +827,13 @@ public static class SrrvrrSensorLoader {
                 foreach ($k in $r.Keys) { $state[$k] = $r[$k] }
                 $state.tempError = if ($null -eq $r.cpuTemp) { 'the processor reported no temperature' } else { $null }
             } catch { $state.cpuTemp = $null; $state.memTemp = $null; $state.tempError = "reading the sensors failed: $($_.Exception.Message)" }
+        }
+        # The shares' drives every minute and, elevated, the PCs and folders every 5 or 30 seconds (Invoke-TransferSample).
+        if ($transfersReady) {
+            try {
+                Invoke-TransferSample -Monitor $transferMonitor -Tick $tick -NowMs ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()) -Readers $transferReaders
+                if ("$($state.transfersError)" -like 'transfer sample:*') { $state.transfersError = $null }
+            } catch { $state.transfersError = "transfer sample: $($_.Exception.Message)" }
         }
         # Drives, every 30 seconds: space per volume, health of the disk it's on.
         if ($tick % 6 -eq 0) {
@@ -976,7 +1011,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($transferMonitor).AddArgument((Join-Path $PSScriptRoot 'modules\Transfers.psm1'))
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
@@ -1098,7 +1133,7 @@ $workers = @(@{ Name = 'fast sampler'; PowerShell = $worker }, @{ Name = 'slow s
 $tracerLogged = @{ ErrorText = ''; ErrorType = ''; ErrorCount = 0; Alive = $netPerProcess }
 $watched = [DateTime]::UtcNow
 $shareCheckedAt = [DateTime]::UtcNow; $shareFlagged = $false; $lastStateErrors = @{}
-$lastReading = $null; $refusalsLoggedAt = [DateTime]::UtcNow
+$lastReading = $null; $lastBursts = @(); $refusalsLoggedAt = [DateTime]::UtcNow
 # What event detection compares from one second to the next. The slow sampler changes its activity table in place,
 # so the Valheim and Plex entries (replaced whole on each reading) are copied out of it.
 function Get-DetectionReading {
@@ -1112,7 +1147,7 @@ function Get-DetectionReading {
 function Invoke-Watch {
     # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
     # library would otherwise fill the log); errors that come and go are still held to once a minute.
-    foreach ($k in 'error', 'drivesError', 'tempError') {
+    foreach ($k in 'error', 'drivesError', 'tempError', 'transfersError') {
         $v = $state[$k]
         if ($v -and $v -ne $script:lastStateErrors[$k]) {
             $source = if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }
@@ -1126,6 +1161,15 @@ function Invoke-Watch {
     try { foreach ($e in Get-StateEvents -Old $script:lastReading -New $reading) { Add-SrrQueueItem -Queue $eventQueue -Item $e } }
     catch { Write-SrrError 'events' "couldn't compare the readings: $($_.Exception.Message)" }
     $script:lastReading = $reading
+    # Write bursts and unknown PCs, from the transfer monitor (modules\Transfers.psm1).
+    try {
+        $transfers = $state.transfers
+        $pcRows = if ($transfers) { @($transfers.pcs) } else { @() }
+        $bursts = @($transferMonitor.BurstList)
+        foreach ($r in @(Get-BurstEvents -Old @($script:lastBursts) -New $bursts -PcRows $pcRows -PcFolders $transferMonitor.PcFolders -IncludeFolders ([bool]$transferMonitor.TransferFolders))) { Add-SrrEvent $r.Type $r.Data $r.Key }
+        $script:lastBursts = $bursts
+        foreach ($r in @(Get-UnknownPcEvents -Seen $transferMonitor.UnknownSeen -PcRows $pcRows -Elevated ([bool]$transferMonitor.Elevated))) { Add-SrrEvent $r.Type $r.Data $r.Key }
+    } catch { Write-SrrError 'events' "couldn't check the transfers: $($_.Exception.Message)" }
     # Maintenance that ran out switches itself off (once), and the rate limit's refusals make one line a minute.
     $expired = $maintenance.Poll()
     if ($expired) { Add-MaintenanceEvent $expired; Save-MaintenanceNow }
@@ -1180,7 +1224,7 @@ try {
         $ctx = $listener.EndGetContext($pending)
         # Addresses can change (a new DHCP lease), so the allowlist is rebuilt once a minute.
         if (([DateTime]::UtcNow - $identityRead).TotalSeconds -ge 60) {
-            try { $webContext.Identity = Get-HostIdentity } catch { }
+            try { $webContext.Identity = Get-HostIdentity; $transferMonitor.ServerAddresses = @($webContext.Identity.Addresses) } catch { }
             $identityRead = [DateTime]::UtcNow
         }
         Invoke-SrrRequest -ListenerContext $ctx -Context $webContext

@@ -28,6 +28,7 @@ function Get-SrrDefaultSettings {
         MaintenanceMaxHours  = 8
         DriveWarnPercent     = 85
         DriveFullPercent     = 95
+        BottleneckPercent    = 80
     }
 }
 
@@ -133,6 +134,15 @@ function Test-NewSettings([hashtable]$Settings) {
     }
     if ($Settings.DriveWarnPercent -ge $Settings.DriveFullPercent) {
         throw (New-SettingsError "DriveWarnPercent ($($Settings.DriveWarnPercent)) must be lower than DriveFullPercent ($($Settings.DriveFullPercent)).")
+    }
+    Test-BottleneckSetting $Settings
+}
+
+# The settings added in v0.9.0 for the Transfers card: BottleneckPercent (the others are validated beside their stories).
+function Test-BottleneckSetting([hashtable]$Settings) {
+    $v = $Settings.BottleneckPercent
+    if (-not ($v -is [int] -or $v -is [long]) -or $v -lt 50 -or $v -gt 99) {
+        throw (New-SettingsError 'BottleneckPercent must be a whole number from 50 to 99, the percent of its limit at which the Transfers card names a resource as the bottleneck (default 80).')
     }
 }
 

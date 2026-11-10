@@ -259,10 +259,15 @@ Describe 'Test builds' -Tag 'Smoke' {
                 Start-Sleep -Seconds 12   # both have read Plex, Valheim and the drives at least once
                 $a = Invoke-TestRequest -Url "http://localhost:$oldPort/stats"; $b = Invoke-TestRequest -Url "http://localhost:$newPort/stats"
                 $pa = @(Get-JsonPaths ($a.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
-                $pb = @(Get-JsonPaths ($b.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
+                $pbAll = @(Get-JsonPaths ($b.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
+                # transfers (#76): its nested paths come and go with the traffic (a null isn't a path), so they're checked
+                # against the allowed set below, and only `transfers` itself counts as the new path.
+                $pb = @($pbAll | Where-Object { $_ -notmatch '^transfers\.' })
                 @($pa | Where-Object { $pb -notcontains $_ }) | Should -BeNullOrEmpty
-                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), and each drive's level (#65).
-                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs', 'version')
+                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), each drive's level (#65), and transfers (#76).
+                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs', 'transfers', 'version')
+                $transferPaths = '^transfers\.(available|reason|updatedMs|bottleneck(\.(name|percent|link(\.(percent|bytesPerSec|speedBits))?|drive(\.(letter|percent|queue))?|cpu(\.percent)?))?|shares(\[\](\.(name|readBps|writeBps|openFiles|secPerRequest|queue|drive))?)?|pcs(\[\].*)?)$'
+                @($pbAll | Where-Object { $_ -match '^transfers\.' -and $_ -notmatch $transferPaths }) | Should -BeNullOrEmpty
                 foreach ($path in '/', '/stats') {
                     $x = Invoke-TestRequest -Url "http://localhost:$oldPort$path"; $y = Invoke-TestRequest -Url "http://localhost:$newPort$path"
                     $y.Headers['Content-Type'] | Should -Be $x.Headers['Content-Type']

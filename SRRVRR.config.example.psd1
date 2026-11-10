@@ -91,4 +91,11 @@
     # The percent used when the bar turns red and SRRVRR flags the drive as almost
     # full (50 to 99).
     DriveFullPercent = 95
+
+    # --- Transfers card -------------------------------------------------------
+
+    # The percent of its limit at which the Transfers card names a resource (the
+    # network link, the share's drive or the CPU) as the bottleneck while the shares
+    # are moving data (50 to 99). Below it the card says "Not the server".
+    BottleneckPercent = 80
 }

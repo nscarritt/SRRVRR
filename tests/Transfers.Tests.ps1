@@ -474,3 +474,132 @@ Describe 'T76-19 to T76-21 the shared region' {
         $m.ServerAddresses | Should -Be @('192.0.2.1')
     }
 }
+Describe 'T76-13 /stats carries transfers' {
+    BeforeAll {
+        # The router with a state that holds a transfers value as Invoke-TransferTick builds it.
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Web.psm1') -Force
+        $script:Identity = @{ Names = @('localhost'); Addresses = @('127.0.0.1') }
+    }
+    It 'T76-13 the v0.6.0 shape still holds, and transfers is the new value, at most 6 KB with 4 PCs of 10 folders and 8 shares' {
+        $old = @((Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures\stats\v0.6.0-shape.json') | ConvertFrom-Json).paths)
+        $state = New-StateFromPaths $old
+        $state.tickMs = 37
+        $shares = @(foreach ($i in 1..8) { @{ name = "share$i"; readBps = 1000 * $i; writeBps = 500; openFiles = $i; secPerRequest = 0.0042; queue = 1; drive = 'D:' } })
+        $pcs = @(foreach ($i in 1..4) {
+            @{
+                name = "Desk PC $i"; address = "192.0.2.$i"; known = $true; account = "owner$i"; smb = '3.1.1'; signed = $true; encrypted = $false
+                readBps = 1000; writeBps = 2000; openFiles = 12; writing = $true; burst = $false
+                folders = @(foreach ($f in 1..10) { @{ share = "share$i"; path = "Projects\Client $f\Drafts"; files = 3; writing = $true } })
+            }
+        })
+        $reading = @{ available = $true; readBps = 0; writeBps = 0; shares = @(); sessions = @(); links = @(); drives = @{} }
+        $m = New-TransferMonitor -Elevated $true
+        $s2 = @{ cpu = 10 }
+        Invoke-TransferTick -State $s2 -Monitor $m -Reading $reading -NowMs 1000 -History $null
+        $t = $s2.transfers
+        $t.shares = $shares; $t.pcs = $pcs
+        $state.transfers = $t
+        $ctx = @{
+            State = $state; WebRoot = (Join-Path (New-TestDataPath) 'web'); Identity = $Identity; Port = 8091
+            BootTime = [DateTimeOffset]::new(2026, 1, 5, 11, 0, 0, [TimeSpan]::Zero)
+            Clock = { [DateTimeOffset]::new(2026, 1, 5, 12, 0, 0, [TimeSpan]::Zero) }
+            LogError = { param($message) }
+        }
+        $r = Invoke-SrrRoute -Method GET -Path '/stats' -Query @{} -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $ctx
+        $r.Status | Should -Be 200
+        $doc = $r.Body | ConvertFrom-Json
+        $new = @(Get-JsonPaths $doc)
+        @($old | Where-Object { $new -notcontains $_ }) | Should -BeNullOrEmpty
+        @($new | Where-Object { $old -notcontains $_ -and $_ -notmatch '^transfers\.' } | Sort-Object -Unique) | Should -Be @('tickMs', 'transfers')
+        @($doc.transfers.PSObject.Properties.Name | Sort-Object) | Should -Be @('available', 'bottleneck', 'pcs', 'reason', 'shares', 'updatedMs')
+        $json = ConvertTo-Json $t -Depth 8 -Compress
+        [Text.Encoding]::UTF8.GetByteCount($json) | Should -BeLessOrEqual 6144
+    }
+}
+
+Describe 'T76-15 BottleneckPercent' -Tag 'Unit' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Settings.psm1') -Force
+        function New-Config([hashtable]$Values) { $s = Get-SrrDefaultSettings; foreach ($k in $Values.Keys) { $s[$k] = $Values[$k] }; $s }
+    }
+    It 'T76-15 80 by default; 50 and 99 are accepted' {
+        (Get-SrrDefaultSettings).BottleneckPercent | Should -Be 80
+        { Test-SrrSettings (New-Config @{}) } | Should -Not -Throw
+        { Test-SrrSettings (New-Config @{ BottleneckPercent = 50 }) } | Should -Not -Throw
+        { Test-SrrSettings (New-Config @{ BottleneckPercent = 99 }) } | Should -Not -Throw
+    }
+    It 'T76-15 49, 100, 80.5 and the text ''80'' are each one plain error naming 50 to 99' {
+        foreach ($v in 49, 100, 80.5, '80') {
+            { Test-SrrSettings (New-Config @{ BottleneckPercent = $v }) } | Should -Throw '*BottleneckPercent must be a whole number from 50 to 99*' -Because "$v"
+        }
+    }
+    It 'T76-15 an invalid value exits with 2 through Import-SrrSettings' {
+        $dir = New-TestDataPath
+        try {
+            [IO.File]::WriteAllText((Join-Path $dir 'SRRVRR.config.psd1'), '@{ BottleneckPercent = 49 }')
+            $e = $null
+            try { Import-SrrSettings -Folder $dir | Out-Null } catch { $e = $_.Exception }
+            $e | Should -Not -BeNullOrEmpty
+            Get-SrrExitCode $e | Should -Be 2
+        } finally { Remove-TestDataPath $dir }
+    }
+}
+
+Describe 'T76-16 the docs name BottleneckPercent and the SMB counters' {
+    BeforeAll { $script:Readme = Get-Content -Raw (Join-Path (Get-RepoRoot) 'README.md') }
+    It 'T76-16 the README settings table, the example config and the defaults agree on BottleneckPercent' {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\Settings.psm1') -Force
+        $default = (Get-SrrDefaultSettings).BottleneckPercent
+        $row = @($Readme -split "`r?`n" | Where-Object { $_ -match '^\| `BottleneckPercent` \|' })
+        $row.Count | Should -Be 1
+        $row[0] | Should -Match "\| ``$default`` \|"
+        $row[0] | Should -Match '50 to 99'
+        $example = Import-PowerShellDataFile (Join-Path (Get-RepoRoot) 'SRRVRR.config.example.psd1')
+        $example.BottleneckPercent | Should -Be $default
+        (Get-Content -Raw (Join-Path (Get-RepoRoot) 'SRRVRR.config.example.psd1')) | Should -Match '50 to 99'
+    }
+    It 'T76-16 How it works names both SMB categories, transfers, smbRead and smbWrite' {
+        $how = $Readme.Substring($Readme.IndexOf('## How it works'))
+        foreach ($w in 'SMB Server Shares', 'SMB Server Sessions', '`transfers`', '`smbRead`', '`smbWrite`') { $how.Contains($w) | Should -BeTrue -Because $w }
+    }
+}
+
+Describe 'T76-22 the wiring' {
+    BeforeAll {
+        $script:Script = Get-Content -Raw (Join-Path (Get-RepoRoot) 'SRRVRR.ps1')
+        $script:Module = Get-Content -Raw (Join-Path (Get-RepoRoot) 'modules\Transfers.psm1')
+    }
+    It 'T76-22 the module has the regions Shared, 76, 77, 78 and 79 in order' {
+        $names = @([regex]::Matches($Module, '(?m)^#region (\S+)') | ForEach-Object { $_.Groups[1].Value })
+        $names | Should -Be @('Shared', '76', '77', '78', '79')
+    }
+    It 'T76-22 no Get-SmbShare, Get-SmbSession or Get-SmbOpenFile anywhere in the code' {
+        $files = @('SRRVRR.ps1') + @(Get-ChildItem (Join-Path (Get-RepoRoot) 'modules') -Filter *.psm1 | ForEach-Object { "modules\$($_.Name)" })
+        foreach ($f in $files) {
+            $text = Get-Content -Raw (Join-Path (Get-RepoRoot) $f)
+            $text | Should -Not -Match '\bGet-Smb(Share|Session|OpenFile)\b' -Because $f
+        }
+    }
+    It 'T76-22 SRRVRR.ps1 passes the monitor to both runspaces, imports the module there by full path, and watches transfersError' {
+        ([regex]::Matches($Script, "AddArgument\(\`$transferMonitor\)")).Count | Should -Be 2
+        ([regex]::Matches($Script, "Import-Module -Name \`$transfersModulePath")).Count | Should -Be 2
+        ([regex]::Matches($Script, "AddArgument\(\(Join-Path \`$PSScriptRoot 'modules\\Transfers.psm1'\)\)")).Count | Should -Be 2
+        $Script | Should -Match "'tempError', 'transfersError'"
+        $Script | Should -Match "-Transfers \`$transfers"
+        $Script | Should -Match 'Invoke-TransferTick -State \$state -Monitor \$transferMonitor'
+        $Script | Should -Match 'Invoke-TransferSample -Monitor \$transferMonitor'
+    }
+    It 'T76-22 Invoke-Watch calls Get-BurstEvents and Get-UnknownPcEvents, and a stop saver calls Get-BurstEvents with -StopMs' {
+        $ast = Get-ScriptAst (Join-Path (Get-RepoRoot) 'SRRVRR.ps1')
+        $watch = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Watch' }, $true)
+        $watch.Extent.Text | Should -Match 'Get-BurstEvents'
+        $watch.Extent.Text | Should -Match 'Get-UnknownPcEvents'
+        $watch.Extent.Text | Should -Not -Match '-StopMs'
+        $calls = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-BurstEvents' }, $true))
+        @($calls | Where-Object { $_.Extent.Text -match '-StopMs' }).Count | Should -Be 1
+    }
+    It 'T76-22 the monitor is made with the server''s addresses and refreshed with the identity' {
+        $Script | Should -Match 'New-TransferMonitor -Settings \$settings -Elevated \(Test-Elevated\) -ServerAddresses'
+        $Script | Should -Match 'Identity = Get-HostIdentity; \$transferMonitor.ServerAddresses = @\(\$webContext.Identity.Addresses\)'
+    }
+}

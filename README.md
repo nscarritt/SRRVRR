@@ -1,3 +1,4 @@
+
 # SRRVRR
 
 ![SRRVRR dashboard: CPU, memory, GPU and network graphs, a Processes table with Valheim and Plex activity, and a Storage card with drive health and read/write speed](docs/screenshot.png)
@@ -62,6 +63,16 @@ report a drive's maximum, so SRRVRR uses the typical ceiling for its connection 
 (NVMe SSD ~3,500 MB/s, SATA SSD ~550 MB/s, hard drive ~200 MB/s, USB ~400 MB/s, otherwise
 ~500 MB/s), raised to the fastest speed actually seen on that drive if it ever goes faster.
 
+A **Transfers** card answers "why is it slow?" for the file shares. Each second it names the server resource
+closest to its limit while the shares are moving at least 1 MB/s: the network link (the busiest adapter, as a
+percent of its link speed), the share's drive (how busy the drive behind a busy share is, with its queue) or the
+CPU, such as "Bottleneck: the network link, 94% of 1 Gb/s". When nothing reaches `BottleneckPercent` (80 by
+default) it says "Not the server: the client or the path to it", and "Idle" below 1 MB/s. The three numbers are
+always shown in small print, and a new name has to hold for 2 seconds before it replaces the old one, so it
+doesn't flicker. Below that, a table lists every share with traffic or open files (its drive, read and write
+speed, open files, busiest first), and a graph shows the shares' total read and write speed with the same **60 s**
+and **15 min** buttons. It uses the file server's own counters, so it needs no administrator. A copy to the
+server's own address never touches the network link, so the link stays low then and the drive is named.
 The header shows how long the server has been up (e.g. "Up 3 days, 4 hours") and an amber
 **Restart pending** badge when Windows has installed updates that are waiting for a restart
 (checked every 60 seconds via the registry markers Windows Update and the servicing stack set).
@@ -175,6 +186,7 @@ replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.exam
 | `MaintenanceMaxHours` | `8` | The longest Maintenance can stay on, in hours (1 to 24). |
 | `DriveWarnPercent` | `85` | The percent of a drive that is used when its Storage bar turns amber and a "filling" banner shows, 50 to 99 (below `DriveFullPercent`). |
 | `DriveFullPercent` | `95` | The percent used when the bar turns red and the drive is flagged as almost full, 50 to 99. A drive has to fall 2 points below a threshold before its level goes back down. |
+| `BottleneckPercent` | `80` | The percent of its limit at which the Transfers card names the network link, the share's drive or the CPU as the bottleneck, a whole number from 50 to 99. Below it the card says "Not the server". |
 
 Example:
 
@@ -443,8 +455,11 @@ folder, where a launcher can find it. Updating means replacing the code only (se
 
 A background loop reads Windows performance counters once per second
 (`Processor Information`, `Memory`, `Network Interface`, `GPU Engine`, `GPU Adapter Memory`,
-`Process`) and keeps the latest values in memory. A small built-in web server (`HttpListener`)
+`Process`, and when the file server is there `SMB Server Shares` and `SMB Server Sessions`) and keeps the
+latest values in memory. A small built-in web server (`HttpListener`)
 serves the dashboard page at `/` and the latest readings as JSON at `/stats`, which the page polls.
+`/stats` has a `transfers` value for the Transfers card (`available`, `reason`, the `bottleneck` with its three
+numbers, the busiest `shares` and `pcs`), and `/history` has two more lines, `smbRead` and `smbWrite`.
 `/stats` also reports `tickMs`, the time each reading takes, so SRRVRR's own cost stays visible, and `version`,
 which the page shows in its header. The version is the one line in the `VERSION` file in SRRVRR's folder, read
 once at startup (`dev` when there is no file, `unknown` with a note in the startup log when the file isn't one
