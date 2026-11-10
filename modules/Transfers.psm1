@@ -152,10 +152,10 @@ function Group-SessionsByPc {
 # reader's error goes to the caller, and the monitor keeps what it had.
 function Invoke-TransferSample {
     param([hashtable]$Monitor, [int]$Tick, [long]$NowMs, [hashtable]$Readers)
-    if ($Tick % 12 -eq 0) { $Monitor.Shares = @(Get-ShareDriveMap -Shares @(& $Readers.Shares)) }
+    if ($Tick % 12 -eq 0) { $Monitor.Shares = @(Get-ShareDriveMap -Shares @(& $Readers.Shares | ForEach-Object { $_ })) }   # a reader may hand its list back wrapped, as Get-ShareList does
     if ($Monitor.Elevated -and ($Monitor.Busy -or $Tick % 6 -eq 0)) {
-        $sessions = @(& $Readers.Sessions)
-        $files = @(& $Readers.OpenFiles)
+        $sessions = @(& $Readers.Sessions | ForEach-Object { $_ })
+        $files = @(& $Readers.OpenFiles | ForEach-Object { $_ })
         $r = Get-SessionPcs -Sessions $sessions -OpenFiles $files -Shares @($Monitor.Shares) -Index $Monitor.NamedIndex `
             -ServerAddresses @($Monitor.ServerAddresses) -Folders ([bool]$Monitor.TransferFolders)
         $Monitor.SessionPcs = $r.SessionPcs; $Monitor.PcFolders = $r.PcFolders; $Monitor.OpenFilesCapped = [bool]$r.Capped

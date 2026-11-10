@@ -603,3 +603,15 @@ Describe 'T76-22 the wiring' {
         $Script | Should -Match 'Identity = Get-HostIdentity; \$transferMonitor.ServerAddresses = @\(\$webContext.Identity.Addresses\)'
     }
 }
+Describe 'T76-11 readers that hand their list back wrapped' {
+    It 'T76-11 a share list returned as Get-ShareList does (, @(...)) still maps every share' {
+        $readers = @{
+            Shares = { , @([pscustomobject]@{ Name = 'Code'; Path = 'H:\Code'; Type = [long]0 }, [pscustomobject]@{ Name = 'Other'; Path = 'E:\x'; Type = [long]0 }) }
+            Sessions = { @() }; OpenFiles = { @() }
+        }
+        $m = New-TransferMonitor -Elevated $false
+        Invoke-TransferSample -Monitor $m -Tick 0 -NowMs 1000 -Readers $readers
+        @($m.Shares).Count | Should -Be 2
+        @($m.Shares | Where-Object { $_.name -eq 'Code' })[0].drive | Should -Be 'H:'
+    }
+}
