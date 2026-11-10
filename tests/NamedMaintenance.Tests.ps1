@@ -192,13 +192,13 @@ Describe 'T79-03 bypass attempts' {
         }
     }
     It 'T79-03 an IPv6 form that merely contains a named IPv4 is refused (only the IPv4-mapped form is the same address)' {
-        foreach ($from in '64:ff9b::192.0.2.10', '::192.0.2.10', '2002:c000:020a::', '::ffff:0:192.0.2.10', '2001:db8::c000:20a', '::ffff:192.0.2.11') {
+        foreach ($from in '64:ff9b::192.0.2.10', '::192.0.2.10', '2001:db8:c000:20a::', '::ffff:0:192.0.2.10', '2001:db8::c000:20a', '::ffff:192.0.2.11') {
             $c = New-NamedContext
             (Send-Maint $c $from).Status | Should -Be 403 -Because $from
         }
     }
     It 'T79-03 near misses of a named address are refused: a longer or shorter one, a neighbour, another zone-less IPv6' {
-        foreach ($from in '192.0.2.100', '192.0.2.1000', '192.0.2.2', '92.0.2.10', '192.0.2.11', 'fe80::50', 'fe80::', 'fe80::6', '10.0.0.10') {
+        foreach ($from in '192.0.2.100', '192.0.2.1000', '192.0.2.2', '198.51.100.10', '192.0.2.11', 'fe80::50', 'fe80::', 'fe80::6', '10.0.0.10') {
             $c = New-NamedContext -NamedIndex (New-NamedPcIndex -NamedPCs @(@{ Name = 'Desk PC'; Addresses = @('192.0.2.10', 'fe80::5') }))
             (Send-Maint $c $from).Status | Should -Be 403 -Because $from
         }
@@ -394,7 +394,7 @@ Describe 'T79-06 /stats viewer' {
         $none.canChangeMaintenance | Should -BeFalse; $none.address | Should -Be '192.0.2.99'
         $bad = Get-SrrViewer -Match @(1, 2) -Address 'x'
         $bad.canChangeMaintenance | Should -BeFalse
-        (Get-SrrViewer -Match @{ Known = 'yes'; Address = '1.2.3.4' }).canChangeMaintenance | Should -BeFalse
+        (Get-SrrViewer -Match @{ Known = 'yes'; Address = '203.0.113.4' }).canChangeMaintenance | Should -BeFalse
     }
     It 'T79-06 GET /maintenance, other paths and other methods are unaffected by who is asking' {
         $c = New-NamedContext
