@@ -389,6 +389,17 @@ function playerBanner(d, up) {
     lines: [(d.players ? plural(d.players, 'player') : 'No players') + ' online']};
 }
 const serviceIcon = n => n === 'Valheim' ? 'valheim' : n === 'Plex' ? 'plex' : '';
+// Write bursts (#77): the amount written, the length of the burst, and its banner (the same text starts and ends it).
+const burstBytes = n => !(n >= 0) ? '' : n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(0) + ' MB' : n >= 1024 ? (n / 1024).toFixed(0) + ' KB' : n + ' bytes';
+const burstDuration = s => !(s >= 0) ? '' : s < 60 ? plural(Math.round(s), 'second') : s < 3600 ? plural(Math.round(s / 60), 'minute') : plural(Math.floor(s / 3600), 'hour') + (Math.round(s % 3600 / 60) ? ' ' + plural(Math.round(s % 3600 / 60), 'minute') : '');
+function burstBanner(d, ended) {
+  const pc = d.pc || 'a PC', files = typeof d.files === 'number' ? plural(d.files, 'file') : '', sent = burstBytes(d.bytes);
+  const folders = [].concat(d.folders || []).slice(0, 5).map(f => (f.share || '') + (f.path ? '\\' + f.path : '') + ' (' + plural(f.files || 0, 'file') + ')');
+  const lines = [ended ? [files && files + ' opened', sent && sent + ' written', d.durationSeconds != null && 'over ' + burstDuration(d.durationSeconds)].filter(Boolean).join(', ')
+      : [files && files + ' opened', sent && sent + ' written so far'].filter(Boolean).join(', '),
+    d.shares && d.shares.length ? 'Shares: ' + [].concat(d.shares).join(', ') : '', d.address ? 'Address ' + d.address + (d.account ? ', account ' + d.account : '') : ''].concat(ended ? [] : folders);
+  return {icon: '', title: 'Write burst from ' + pc + (ended ? ' ended' : '') + (ended && d.reason === 'stopped' ? ' (SRRVRR stopped)' : ''), lines: lines.filter(Boolean)};
+}
 // An event -> {icon, title, lines} for its banner, and for its row in the Flagged list (types with no banner too).
 function bannerFor(e) {
   const d = (e && e.data) || {}, name = d.name || 'A service', drive = 'Drive ' + (d.letter || '');
@@ -404,6 +415,8 @@ function bannerFor(e) {
     case 'drive-filling': return b('', drive + ' is ' + d.usedPercent + '% full', [d.freeGB + ' GB free']);
     case 'drive-full': return b('', drive + ' is almost full (' + d.usedPercent + '%)', [d.freeGB + ' GB free']);
     case 'drive-space-ok': return b('', drive + ' has space again', [d.freeGB + ' GB free']);
+    case 'write-burst': return burstBanner(d, false);
+    case 'write-burst-ended': return burstBanner(d, true);
     case 'data-drive-missing': return b('', drive + ' is missing', ['Windows can no longer see it.', d.was && 'It was ' + d.was + ' before.']);
     case 'data-fallback': return b('', 'Saving to the local data folder', ['SRRVRR could not use its usual data folder.', d.reason]);
     case 'share-found': return b('', 'The data folder is shared on the network', ['Other computers may be able to read or change its files.', d.reason]);

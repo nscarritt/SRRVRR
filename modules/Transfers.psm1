@@ -317,9 +317,218 @@ function Invoke-TransferTick {
 }
 #endregion 76
 
-#region 77 Write bursts (#77). Stubs until #77 lands: no bursts, no events.
-function Update-WriteBursts { param([hashtable]$State, [object[]]$Pcs, [object[]]$Shares, [long]$NowMs, [int]$Files, [int]$WindowSeconds, [long]$QuietMs, [double]$Seconds = 1) }
-function Get-BurstEvents { param([object[]]$Old, [object[]]$New, [object[]]$PcRows, [hashtable]$PcFolders, [bool]$IncludeFolders, [long]$StopMs) }
+#region 77 Write bursts (#77)
+$script:BurstEndedKeepMs = 120000L   # an ended burst stays in the list this long, for the watcher to see it end
+$script:BurstMaxPcs = 64             # PCs tracked at once
+$script:BurstMaxEnded = 128          # ended bursts kept, at most
+$script:BurstMaxShares = 32
+$script:BurstMaxFolders = 5          # folders in one burst event
+
+# One field of a hashtable or an object, or $null.
+function Get-BurstValue([object]$Item, [string]$Name) {
+    if ($null -eq $Item) { return $null }
+    if ($Item -is [Collections.IDictionary]) { if ($Item.Contains($Name)) { return $Item[$Name] } else { return $null } }
+    $p = $Item.PSObject.Properties[$Name]
+    if ($p) { $p.Value } else { $null }
+}
+
+# Moves a PC's ring up to the second Sec: the slots for the seconds in between (and the one for Sec) are emptied,
+# so a second with no reading counts as quiet. The sums are kept as running totals, so a tick costs a few operations.
+function Step-BurstRing([hashtable]$Tracker, [long]$Sec) {
+    $w = $Tracker.Slots.Length
+    if ($null -eq $Tracker.LastSec) { $Tracker.LastSec = $Sec; return }
+    $gap = $Sec - $Tracker.LastSec
+    if ($gap -eq 0) { return }
+    if ($gap -lt 0 -or $gap -ge $w) {
+        [Array]::Clear($Tracker.Slots, 0, $w); [Array]::Clear($Tracker.Bytes, 0, $w)
+        $Tracker.Sum = 0L; $Tracker.BytesSum = 0L
+    } else {
+        for ($i = 1; $i -le $gap; $i++) {
+            $ix = [int](($Tracker.LastSec + $i) % $w)
+            $Tracker.Sum -= $Tracker.Slots[$ix]; $Tracker.BytesSum -= $Tracker.Bytes[$ix]
+            $Tracker.Slots[$ix] = 0L; $Tracker.Bytes[$ix] = 0L
+        }
+    }
+    $Tracker.LastSec = $Sec
+}
+
+# A set of share names as a sorted array.
+function Get-SortedBurstShares([Collections.Generic.HashSet[string]]$Set) {
+    $names = [string[]]::new($Set.Count)
+    $Set.CopyTo($names)
+    [Array]::Sort($names, [StringComparer]::Ordinal)
+    , $names
+}
+
+# The write-burst detector, one call per reading (a pure function of the readings: the caller passes the time). Per PC
+# key, a ring of WindowSeconds slots holds the files opened in each second in which the PC was writing. A burst starts
+# when the ring's sum reaches Files and ends when the sum has stayed below Files for QuietMs, so a rise sooner than
+# that is the same burst. A PC missing from a second counts as quiet. State is the monitor (its Bursts table and
+# BurstList) or any hashtable that holds the detector's tables between calls. Pcs are PC seconds, Shares the SMB
+# reading's share rows. Seconds is how many seconds the reading covers (the slow sampler's 5): its speeds are averages, so the
+# second of the call counts Seconds times the files opened per second and the bytes per second. Returns the burst list (shape in the plan): the active bursts, and those that ended within
+# 120 s, oldest first; also stored in State.BurstList when State has one.
+function Update-WriteBursts {
+    param([hashtable]$State, [object[]]$Pcs, [object[]]$Shares, [long]$NowMs, [int]$Files, [int]$WindowSeconds, [long]$QuietMs, [double]$Seconds = 1)
+    $store = if ($State.ContainsKey('Bursts') -and $State['Bursts'] -is [hashtable]) { $State['Bursts'] } else { $State }
+    if (-not $store.ContainsKey('Pcs')) { $store['Pcs'] = @{}; $store['Ended'] = [Collections.Generic.List[object]]::new() }
+    $trackers = $store['Pcs']; $ended = $store['Ended']
+    $w = [Math]::Max(1, $WindowSeconds)
+    $sec = [long][Math]::Floor($NowMs / 1000.0)
+    $ix = [int]($sec % $w)
+
+    # Plain property reads below, not function calls or pipelines: they were written for the fast loop's budget.
+    $writingShares = [Collections.Generic.List[string]]::new()
+    foreach ($s in $Shares) {
+        if ($null -eq $s) { continue }
+        $bps = $s.writeBps
+        if ($null -ne $bps -and [double]$bps -gt 0) { $writingShares.Add([string]$s.name) }
+    }
+    $seen = @{}
+    foreach ($pc in $Pcs) {
+        if ($null -eq $pc) { continue }
+        $key = [string]$pc.key
+        if ($key) { $seen[$key] = $pc }
+    }
+    # A tracker is made when a PC first writes (idle PCs cost nothing), and dropped when its ring is empty.
+    foreach ($key in $seen.Keys) {
+        if ($trackers.ContainsKey($key) -or $trackers.Count -ge $script:BurstMaxPcs) { continue }
+        if (-not $seen[$key].writing) { continue }
+        $trackers[$key] = @{ Slots = [long[]]::new($w); Bytes = [long[]]::new($w); LastSec = $null; Sum = 0L; BytesSum = 0L
+            Burst = $null; BelowSinceMs = $null; Shares = [Collections.Generic.HashSet[string]]::new() }
+    }
+    foreach ($key in @($trackers.Keys)) {
+        $t = $trackers[$key]
+        if ($t.Slots.Length -ne $w) {   # the window changed: start the ring again, keep the burst
+            $t.Slots = [long[]]::new($w); $t.Bytes = [long[]]::new($w); $t.Sum = 0L; $t.BytesSum = 0L; $t.LastSec = $null
+        }
+        Step-BurstRing $t $sec
+        $pc = if ($seen.ContainsKey($key)) { $seen[$key] } else { $null }
+        $writing = $false; $opened = 0L; $bytes = 0L
+        if ($pc) {
+            $writing = [bool]$pc.writing
+            if ($writing) {
+                $f = $pc.filesOpened; if ($null -ne $f) { $opened = [long][Math]::Round([double]$f * $Seconds) }
+                $b = $pc.writeBps; if ($null -ne $b) { $bytes = [long][Math]::Round([double]$b * $Seconds) }
+                $t.Slots[$ix] += $opened; $t.Sum += $opened; $t.Bytes[$ix] += $bytes; $t.BytesSum += $bytes
+            }
+        }
+        $burst = $t.Burst
+        if ($burst) {
+            if ($pc) {
+                $a = $pc.address; if ($a) { $burst.address = [string]$a }
+                $ids = $pc.sessions; if ($ids) { $burst.sessions = [string[]]@($ids) }
+            }
+            if ($writing) {
+                $burst.files += $opened; $burst.bytes += $bytes
+                foreach ($n in $writingShares) { if ($t.Shares.Count -lt $script:BurstMaxShares) { [void]$t.Shares.Add($n) } }
+            }
+            if ($t.Sum -ge $Files) { $t.BelowSinceMs = $null }
+            else {
+                if ($null -eq $t.BelowSinceMs) { $t.BelowSinceMs = $NowMs }
+                if (($NowMs - $t.BelowSinceMs) -ge $QuietMs) {
+                    $burst.endedMs = $NowMs; $burst.reason = 'quiet'
+                    $burst.shares = Get-SortedBurstShares $t.Shares
+                    $ended.Add($burst); $t.Burst = $null; $t.BelowSinceMs = $null; $t.Shares.Clear()
+                }
+            }
+        } elseif ($t.Sum -ge $Files) {
+            $a = $null; $ids = @()
+            if ($pc) { $a = $pc.address; $ids = @($pc.sessions) }
+            foreach ($n in $writingShares) { if ($t.Shares.Count -lt $script:BurstMaxShares) { [void]$t.Shares.Add($n) } }
+            $t.Burst = @{ key = $key; address = $(if ($a) { [string]$a } else { $null }); sessions = [string[]]@($ids | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+                startMs = $NowMs; endedMs = $null; files = [long]$t.Sum; bytes = [long]$t.BytesSum; shares = [string[]]@(); reason = $null }
+            $t.BelowSinceMs = $null
+        }
+        if (-not $t.Burst -and $t.Sum -le 0 -and -not $writing) { $trackers.Remove($key) }
+    }
+    for ($i = $ended.Count - 1; $i -ge 0; $i--) {
+        if (($NowMs - [long]$ended[$i].endedMs) -ge $script:BurstEndedKeepMs) { $ended.RemoveAt($i) }
+    }
+    if ($ended.Count -gt $script:BurstMaxEnded) { $ended.RemoveRange(0, $ended.Count - $script:BurstMaxEnded) }
+
+    # A fresh copy of each burst, so what the watcher holds never changes under it.
+    $list = [Collections.Generic.List[object]]::new()
+    foreach ($e in $ended) { $list.Add($e) }
+    foreach ($key in $trackers.Keys) {
+        $t = $trackers[$key]
+        if (-not $t.Burst) { continue }
+        $c = $t.Burst.Clone()
+        $c.shares = Get-SortedBurstShares $t.Shares
+        $list.Add($c)
+    }
+    $out = $list.ToArray()
+    if ($out.Length -gt 1) {   # oldest first
+        $starts = [long[]]::new($out.Length)
+        for ($i = 0; $i -lt $out.Length; $i++) { $starts[$i] = [long]$out[$i].startMs }
+        [Array]::Sort($starts, $out)
+    }
+    if ($State.ContainsKey('BurstList')) { $State['BurstList'] = $out }
+    $out
+}
+
+# One event record for a burst: Type, Key and Data as the plan's event table has them. A burst's PC is its address's
+# row in PcRows; with no address (unelevated) it is "a PC (needs administrator)" with its session id and nothing else
+# about the PC. Folders (share, path, counts; never file names) come from PcFolders, and only with IncludeFolders.
+function New-BurstEventRecord {
+    param([string]$Type, [object]$Burst, [hashtable]$RowByAddress, [hashtable]$PcFolders, [bool]$IncludeFolders, [long]$EndMs, [string]$Reason)
+    $key = [string](Get-BurstValue $Burst 'key'); $address = Get-BurstValue $Burst 'address'
+    $startMs = [long](Get-BurstValue $Burst 'startMs')
+    $data = @{ shares = @([string[]]@(Get-BurstValue $Burst 'shares')); files = [long](Get-BurstValue $Burst 'files'); bytes = [long](Get-BurstValue $Burst 'bytes'); startMs = $startMs }
+    if ($address) {
+        $row = $RowByAddress[[string]$address]
+        $name = Get-BurstValue $row 'name'
+        $data.pc = $(if ($name) { [string]$name } else { 'unknown' })
+        $data.address = [string]$address
+        $data.account = Get-BurstValue $row 'account'
+        $rows = @()
+        if ($PcFolders -and $PcFolders.ContainsKey([string]$address)) { $rows = @($PcFolders[[string]$address]) }
+        $folderShares = @($rows | ForEach-Object { Get-BurstValue $_ 'share' } | Where-Object { $_ } | Sort-Object -Unique)
+        if ($folderShares.Count) { $data.shares = @([string[]]$folderShares) }
+        $data.folders = @()
+        if ($IncludeFolders) {
+            $data.folders = @($rows | Select-Object -First $script:BurstMaxFolders | ForEach-Object {
+                @{ share = [string](Get-BurstValue $_ 'share'); path = [string](Get-BurstValue $_ 'path'); files = [long](Get-BurstValue $_ 'files') } })
+        }
+    } else {
+        $data.pc = 'a PC (needs administrator)'
+        $data.session = if ($key -like 'session:*') { $key.Substring(8) } else { [string]@(Get-BurstValue $Burst 'sessions')[0] }
+    }
+    if ($Type -eq 'write-burst-ended') {
+        $data.durationSeconds = [int][Math]::Max(0, [Math]::Round(($EndMs - $startMs) / 1000.0))
+        $data.reason = $Reason
+    }
+    @{ Type = $Type; Key = "$Type|$key|$startMs"; Data = $data }
+}
+
+# The events between two burst lists (the one the watcher saw last, and the one now): a burst new in New raises
+# write-burst, one that gained endedMs raises write-burst-ended. With StopMs above zero (a clean stop), instead an
+# ended record with reason "stopped" for every burst still active in New, and nothing else. PcRows (the page's PC rows)
+# give the name and account.
+function Get-BurstEvents {
+    param([object[]]$Old, [object[]]$New, [object[]]$PcRows, [hashtable]$PcFolders, [bool]$IncludeFolders, [long]$StopMs)
+    $oldBy = @{}
+    foreach ($o in @($Old)) { if ($null -ne $o) { $oldBy["$(Get-BurstValue $o 'key')|$(Get-BurstValue $o 'startMs')"] = $o } }
+    $rowBy = @{}
+    foreach ($r in @($PcRows)) { $a = Get-BurstValue $r 'address'; if ($a) { $rowBy[[string]$a] = $r } }
+    $out = [Collections.Generic.List[object]]::new()
+    foreach ($b in @($New)) {
+        if ($null -eq $b) { continue }
+        $endedMs = Get-BurstValue $b 'endedMs'
+        if ($StopMs -gt 0) {
+            if ($null -eq $endedMs) { $out.Add((New-BurstEventRecord 'write-burst-ended' $b $rowBy $PcFolders $IncludeFolders $StopMs 'stopped')) }
+            continue
+        }
+        $was = $oldBy["$(Get-BurstValue $b 'key')|$(Get-BurstValue $b 'startMs')"]
+        if ($null -eq $was) {
+            $out.Add((New-BurstEventRecord 'write-burst' $b $rowBy $PcFolders $IncludeFolders 0 $null))
+            if ($null -ne $endedMs) { $out.Add((New-BurstEventRecord 'write-burst-ended' $b $rowBy $PcFolders $IncludeFolders ([long]$endedMs) ([string](Get-BurstValue $b 'reason')))) }
+        } elseif ($null -eq (Get-BurstValue $was 'endedMs') -and $null -ne $endedMs) {
+            $out.Add((New-BurstEventRecord 'write-burst-ended' $b $rowBy $PcFolders $IncludeFolders ([long]$endedMs) ([string](Get-BurstValue $b 'reason'))))
+        }
+    }
+    $out.ToArray()
+}
 #endregion 77
 
 #region 78 PCs and folders (#78). Stubs until #78 lands: no PCs, no events.

@@ -25,6 +25,13 @@ called out under **Changed** or **Removed** with upgrade notes.
 - Tests for clock changes and midnight (`tests\Clock.Tests.ps1`): dated log files, log retention, the /events
   window and history across the spring and fall changes (#66).
 
+- **Write bursts (#77).** A PC that opens `BurstFiles` files (500) within `BurstWindowSeconds` seconds (60) while
+  it is also writing raises a `write-burst` flag with a banner, and a `write-burst-ended` flag (no banner) after it
+  has stayed below that for `BurstQuietMinutes` minutes (5); a burst still going at a clean stop is ended with the
+  reason `stopped`. Both are logged with the PC, its account, files, bytes, shares and up to 5 folders (counts, never
+  file names), and are kept past the daily log cap. New settings `BurstFiles`, `BurstWindowSeconds` and
+  `BurstQuietMinutes`.
+
 - **The version on the page and in `/stats` (#62).** SRRVRR reads the one line in its `VERSION` file at
   startup and shows it in the page header and as `version` in `/stats`. Anything that isn't a release tag
   shows in amber; no file means `dev`, and a file that isn't one printable ASCII line of 1 to 64 characters

@@ -26,6 +26,9 @@ function Get-SrrDefaultSettings {
         LogRetentionDays     = 31
         MaintenanceHours     = 2
         MaintenanceMaxHours  = 8
+        BurstFiles           = 500
+        BurstWindowSeconds   = 60
+        BurstQuietMinutes    = 5
         DriveWarnPercent     = 85
         DriveFullPercent     = 95
         BottleneckPercent    = 80
@@ -104,6 +107,21 @@ function Test-SrrSettings([hashtable]$Settings) {
 
 function Test-Number($Value) { $Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] }
 
+# The write-burst settings (v0.9.0 design, section 7): whole numbers within a range, one plain message each.
+function Test-BurstSettings([hashtable]$Settings) {
+    $rules = @(
+        @{ Name = 'BurstFiles'; Min = 50; Max = 100000; Default = 500; What = 'how many files one PC opens while writing, within BurstWindowSeconds, for SRRVRR to flag a write burst' }
+        @{ Name = 'BurstWindowSeconds'; Min = 10; Max = 600; Default = 60; What = 'the number of seconds in which a PC must open BurstFiles files to count as a write burst' }
+        @{ Name = 'BurstQuietMinutes'; Min = 1; Max = 60; Default = 5; What = 'the minutes a PC must stay below the burst threshold for a write burst to end' }
+    )
+    foreach ($r in $rules) {
+        $v = $Settings[$r.Name]
+        if (-not ($v -is [int] -or $v -is [long]) -or $v -lt $r.Min -or $v -gt $r.Max) {
+            throw (New-SettingsError "$($r.Name) must be a whole number from $($r.Min) to $($r.Max), $($r.What) (default $($r.Default)).")
+        }
+    }
+}
+
 # The settings added in v0.7.0 (spec section 6).
 function Test-NewSettings([hashtable]$Settings) {
     $d = $Settings.DataPath
@@ -116,6 +134,7 @@ function Test-NewSettings([hashtable]$Settings) {
     if (-not ($days -is [int] -or $days -is [long]) -or $days -lt 7 -or $days -gt 366) {
         throw (New-SettingsError 'LogRetentionDays must be a whole number of days from 7 to 366 (default 31).')
     }
+    Test-BurstSettings $Settings
     $max = $Settings.MaintenanceMaxHours
     if (-not (Test-Number $max) -or $max -lt 1 -or $max -gt 24) {
         throw (New-SettingsError 'MaintenanceMaxHours must be a number of hours from 1 to 24 (default 8).')

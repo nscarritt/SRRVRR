@@ -180,6 +180,9 @@ replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.exam
 | `PreferredGpu` | `''` | The graphics card to show, by its exact name as Windows reports it (dxdiag > Display > Name, or Device Manager > Display adapters), e.g. `'NVIDIA T600'`. Not case-sensitive. `''`, or a name that isn't found, = the GPU with the most video memory. At startup the console shows the card in use and its size (e.g. `NVIDIA T600 · 4 GB`), and lists every GPU's name if `PreferredGpu` isn't found, so you can copy one. |
 | `Processes` | all `$true` | One switch per built-in table row, e.g. `@{ Valheim = $true; Plex = $false }`. `$false` hides that row; the table disappears when every row is hidden. |
 | `ValheimPort` | `2456` | The Valheim server's game port. Its player count is read from the status query on the next port up. |
+| `BurstFiles` | `500` | How many files one PC must open, while writing, within `BurstWindowSeconds` for SRRVRR to flag a write burst: a whole number from 50 to 100000. See [Alerts](#alerts). |
+| `BurstWindowSeconds` | `60` | The window, in seconds, in which a PC must open `BurstFiles` files to count as a write burst: a whole number from 10 to 600. |
+| `BurstQuietMinutes` | `5` | How many minutes a PC must stay below the burst threshold for its write burst to end: a whole number from 1 to 60. Bursts closer together than this are one burst. |
 | `DataPath` | `''` | Where SRRVRR keeps its `state` and `logs` folders. `''` = SRRVRR's own folder; or a full local folder path with a drive letter, e.g. `'D:\SRRVRR'`. See [Data folder and logs](#data-folder-and-logs). |
 | `LogRetentionDays` | `31` | How many days of logs to keep, 7 to 366. |
 | `MaintenanceHours` | `2` | How long the Maintenance checkbox stays on, in hours (0.25 up to `MaintenanceMaxHours`). |
@@ -368,6 +371,16 @@ still shows the stream count, and its hover lists who's watching what, on which 
 There are banners too when Valheim or Plex goes offline or comes back, when one stops answering
 its status query, when a drive's health changes or the data drive goes missing, when SRRVRR falls
 back to its own folder or finds the data folder shared, and when it can't save the graph history.
+
+**Write bursts.** A PC that opens a great many files on a share while writing to it (a program
+rewriting a share's files, say) raises a "Write burst from <PC>" banner, and the burst is logged as
+a `write-burst` flag with its files, bytes and shares, and the account it used and up to 5 folders
+when the server runs as administrator. Without administrator the PC is "a PC (needs
+administrator)". A burst is `BurstFiles` files opened within `BurstWindowSeconds` seconds, counting
+only seconds in which that PC was also writing; it ends once the PC has stayed below that for
+`BurstQuietMinutes` minutes (a second rise sooner than that is the same burst), and a
+`write-burst-ended` flag with the duration is logged then. A burst still going when SRRVRR stops
+cleanly is ended with the reason "stopped". The log holds folders and counts, never file names.
 
 **Sound:** click **Sound off** in the header to turn on a soft ding with each alert (you hear a
 sample). Browsers only play sound after you've clicked or tapped the page, so after a reload the
