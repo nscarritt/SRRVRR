@@ -486,19 +486,41 @@ function maintenanceText(m, timeZone) {
   const t = fmtTime(m.untilMs, timeZone);
   return t ? 'Maintenance until ' + t : 'Maintenance on';
 }
-function maintenanceError(status) {
+function maintenanceError(status, detail) {
   return status === 429 ? 'Too many changes, try again in a few seconds.'
+    : status === 403 && detail === 'not a named PC' ? 'Maintenance can be changed only from a named PC or the server itself (403).'
     : status === 403 ? 'The server refused the change from this page (403).'
     : status === 400 ? 'The server did not accept the change (400).'
     : status ? 'Could not change Maintenance (error ' + status + ').' : 'Could not reach SRRVRR to change Maintenance.';
 }
-let maint = {on: false, untilMs: 0}, maintBusy = false;
+// What the Maintenance box does for the person looking (viewer is /stats `viewer`, absent from an older server):
+// {disabled, note, header}. Only a viewer the server says can't change Maintenance gets it disabled, with the
+// address the server saw; a named PC gets "Viewing from <name>". The state and end time show either way.
+function maintControl(viewer) {
+  if (!viewer || typeof viewer !== 'object') return {disabled: false, note: '', header: ''};
+  if (viewer.canChangeMaintenance === false) {
+    return {disabled: true, header: '', note: 'Maintenance can be changed from a named PC. This PC is seen as ' +
+      (viewer.address ? String(viewer.address) : 'an unknown address') + '.'};
+  }
+  return {disabled: false, note: '', header: viewer.name ? 'Viewing from ' + viewer.name : ''};
+}
+// After the server refuses a change because this PC isn't named, the viewer is unnamed until /stats says otherwise.
+function viewerAfterError(viewer, status, detail) {
+  if (status === 403 && detail === 'not a named PC') return Object.assign({}, viewer || {}, {canChangeMaintenance: false});
+  return viewer;
+}
+let maint = {on: false, untilMs: 0}, maintBusy = false, viewerInfo = null;
 function showMaint(m) {
   if (m) maint = m;
   if (maintBusy) return;              // a change is on its way: don't flip the box back meanwhile
+  const mc = maintControl(viewerInfo);
   $('maintBox').checked = !!maint.on;
+  $('maintBox').disabled = mc.disabled;
   $('maint').dataset.on = maint.on ? '1' : '';
+  $('maint').dataset.locked = mc.disabled ? '1' : '';
   $('maintText').textContent = maintenanceText(maint) || 'Maintenance';
+  $('maintNote').textContent = mc.note; $('maintNote').hidden = !mc.note;
+  $('viewer').textContent = mc.header;
 }
 async function setMaintenance(on) {
   let err = '';
@@ -506,9 +528,15 @@ async function setMaintenance(on) {
   try {
     const r = await fetch('/maintenance', {method: 'POST', cache: 'no-store',
       headers: {'X-SRRVRR': '1', 'Content-Type': 'application/json'}, body: JSON.stringify({on: on})});
-    if (r.ok) maint = await r.json(); else err = maintenanceError(r.status);
+    if (r.ok) maint = await r.json();
+    else {
+      let detail = '';
+      try { detail = (await r.json()).error; } catch (e) { detail = ''; }
+      err = maintenanceError(r.status, detail);
+      viewerInfo = viewerAfterError(viewerInfo, r.status, detail);
+    }
   } catch (e) { err = maintenanceError(0); }
-  maintBusy = false; $('maintBox').disabled = false;
+  maintBusy = false;
   $('maintErr').textContent = err; $('maintErr').hidden = !err;
   showMaint();
 }
@@ -542,6 +570,7 @@ function showEvents(s) {
   eventSince = r.since;
   for (const b of r.banners) notify(b.icon, b.title, b.lines, false, b.time);
   if (r.more) notify('', 'More events than shown', ['Some alerts were skipped. The logged ones are in the Flagged list.'], true, Date.now());
+  viewerInfo = s.viewer || null;
   if (s.maintenance) showMaint(s.maintenance);
   // The first answer gives how many days the logs keep, so the list loads then, and again when a logged event arrives.
   if (!flaggedAsked || r.flagged) { flaggedAsked = true; loadFlagged(s.logRetentionDays); }

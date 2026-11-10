@@ -101,6 +101,10 @@ td.tempty{color:var(--muted);text-align:left;font-weight:400;padding-left:0}
 #maint[data-on="1"]{color:var(--warn);border-color:var(--warn)}
 #maint input{margin:0;width:12px;height:12px;accent-color:var(--warn);cursor:pointer}
 #maintErr{color:var(--bad);font-size:12.5px;margin-left:10px}
+#maint[data-locked="1"]{opacity:.65;cursor:not-allowed}
+#maint[data-locked="1"] input{cursor:not-allowed}
+#maintNote{color:var(--muted);font-size:12.5px;margin-left:10px}
+#viewer{color:var(--muted);font-size:12.5px;margin-left:10px}
 /* The Flagged list: severity, time, what happened (details on hover) */
 #flagged{margin-top:6px;max-height:320px;overflow-y:auto}
 .frow{display:grid;grid-template-columns:5.5em 7.5em minmax(0,1fr);gap:10px;padding:6px 0;font-variant-numeric:tabular-nums}
