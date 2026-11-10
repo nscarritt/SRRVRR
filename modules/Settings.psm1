@@ -23,6 +23,8 @@ function Get-SrrDefaultSettings {
         Processes            = @{}
         ValheimPort          = 2456
         DataPath             = ''
+        NamedPCs             = @()
+        TransferFolders      = $true
         LogRetentionDays     = 31
         MaintenanceHours     = 2
         MaintenanceMaxHours  = 8
@@ -75,6 +77,61 @@ function Test-SingleAddress([string]$Entry) {
     if ($Entry -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -and $Entry -notmatch ':') { return $false }
     if (-not [System.Net.IPAddress]::TryParse($Entry, [ref]$ip)) { return $false }
     -not ($ip.Equals([System.Net.IPAddress]::Any) -or $ip.Equals([System.Net.IPAddress]::IPv6Any) -or $ip.Equals([System.Net.IPAddress]::Broadcast))
+}
+
+# An address as the PC list compares it (the same form as ConvertTo-PcAddress in modules\Transfers.psm1, which this
+# module can't import: it is loaded first): IPv4-mapped IPv6 back to IPv4, brackets and zone id dropped, lower case.
+# $null for anything that isn't an address.
+function Get-NormalizedPcAddress([string]$Address) {
+    if (-not $Address) { return $null }
+    $text = ($Address.Trim() -replace '^\[|\]$', '') -replace '%.*$', ''
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($text, [ref]$ip)) { return $null }
+    if ($ip.IsIPv4MappedToIPv6) { $ip = $ip.MapToIPv4() }
+    $ip.ToString().ToLowerInvariant()
+}
+
+# NamedPCs and TransferFolders (spec section 7).
+function Test-PcSettings([hashtable]$Settings) {
+    $shape = 'NamedPCs must be a list of up to 32 entries like @{ Name = ''Desk PC''; Addresses = @(''192.0.2.10'') } (default: none).'
+    $list = $Settings.NamedPCs
+    if ($null -eq $list) { $list = @() }
+    if ($list -is [string] -or $list -is [Collections.IDictionary]) { throw (New-SettingsError $shape) }
+    $entries = @($list)
+    if ($entries.Count -gt 32) { throw (New-SettingsError "NamedPCs has $($entries.Count) entries; at most 32 are allowed.") }
+    $names = @{}; $addresses = @{}
+    $n = 0
+    foreach ($e in $entries) {
+        $n++
+        if ($e -isnot [Collections.IDictionary]) { throw (New-SettingsError $shape) }
+        foreach ($k in @($e.Keys)) {
+            if ($k -notin 'Name', 'Addresses') { throw (New-SettingsError "NamedPCs entry $n has an unknown key '$k'; only Name and Addresses are allowed.") }
+        }
+        $name = $e['Name']
+        if ($name -isnot [string] -or $name.Length -lt 1 -or $name.Length -gt 40 -or $name -match '[\x00-\x1f\x7f]') {
+            throw (New-SettingsError "NamedPCs entry $n needs a Name of 1 to 40 printable characters.")
+        }
+        if ($names.ContainsKey($name.ToLowerInvariant())) { throw (New-SettingsError "NamedPCs has the Name '$name' more than once (capital letters don't count); each Name must be different.") }
+        $names[$name.ToLowerInvariant()] = $true
+        $list = @($e['Addresses'])
+        if ($null -eq $e['Addresses'] -or $list.Count -lt 1 -or $list.Count -gt 8) { throw (New-SettingsError "NamedPCs entry '$name' needs 1 to 8 Addresses.") }
+        foreach ($a in $list) {
+            $form = if ($a -is [string]) { Get-NormalizedPcAddress $a } else { $null }
+            $ip = $null
+            $plain = $form -and ($a.Trim() -match ':' -or $a.Trim() -match '^\d{1,3}(\.\d{1,3}){3}$')
+            if ($plain) { $plain = [System.Net.IPAddress]::TryParse($form, [ref]$ip) }
+            if (-not $plain) { throw (New-SettingsError "NamedPCs entry '$name': Addresses must be single IPv4 or IPv6 addresses (no ranges, subnets or names), and '$a' isn't one.") }
+            $bytes = $ip.GetAddressBytes()
+            $bad = $ip.Equals([System.Net.IPAddress]::Any) -or $ip.Equals([System.Net.IPAddress]::IPv6Any) -or $ip.Equals([System.Net.IPAddress]::Broadcast) -or [System.Net.IPAddress]::IsLoopback($ip) -or
+                ($bytes.Length -eq 4 -and $bytes[0] -ge 224) -or ($bytes.Length -eq 16 -and $bytes[0] -eq 0xFF)
+            if ($bad) { throw (New-SettingsError "NamedPCs entry '$name': Addresses can't be loopback, unspecified, multicast or broadcast addresses, and '$a' is one.") }
+            if ($addresses.ContainsKey($form)) { throw (New-SettingsError "NamedPCs lists '$a' in Addresses more than once; an address can belong to only one PC.") }
+            $addresses[$form] = $true
+        }
+    }
+    if ($Settings.TransferFolders -isnot [bool]) {
+        throw (New-SettingsError 'TransferFolders must be $true or $false: $false keeps only counts of open files per PC, with no folders on the page or in the log (default $true).')
+    }
 }
 
 # Checks a complete settings table. Returns @{ Settings; Notes } or throws one plain message.
@@ -130,6 +187,7 @@ function Test-NewSettings([hashtable]$Settings) {
     if ($d -isnot [string] -or ($d -ne '' -and $d -notmatch '^[A-Za-z]:\\')) {
         throw (New-SettingsError "DataPath must be empty (SRRVRR's own folder) or a full local folder path with a drive letter, like 'D:\SRRVRR'; not a relative or network path.")
     }
+    Test-PcSettings $Settings
     $days = $Settings.LogRetentionDays
     if (-not ($days -is [int] -or $days -is [long]) -or $days -lt 7 -or $days -gt 366) {
         throw (New-SettingsError 'LogRetentionDays must be a whole number of days from 7 to 366 (default 31).')
@@ -224,5 +282,5 @@ function Import-SrrSettings {
     @{ Settings = $settings; Notes = $notes; Path = $configPath }
 }
 
-Export-ModuleMember -Function Get-SrrDefaultSettings, Get-SrrRetiredSettings, Test-PrivateAddress, Test-SingleAddress,
+Export-ModuleMember -Function Get-SrrDefaultSettings, Get-SrrRetiredSettings, Test-PrivateAddress, Test-SingleAddress, Get-NormalizedPcAddress,
     Test-SrrSettings, Import-SrrSettings, Get-SrrExitCode, Get-SrrStopReason, Format-StopLine

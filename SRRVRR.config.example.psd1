@@ -92,6 +92,25 @@
     # The longest Maintenance can stay on, in hours (1 to 24).
     MaintenanceMaxHours = 8
 
+    # --- PCs on the Transfers card --------------------------------------------
+
+    # PCs you recognize, by name. The Transfers card shows a named PC by its name;
+    # any other address is shown in amber as an unknown PC, with one warning when
+    # it connects and a flag when it first writes. Up to 32 entries, each with a
+    # Name (1 to 40 characters, different from the others) and 1 to 8 Addresses
+    # (single IPv4 or IPv6 addresses; no ranges, names or loopback; each address
+    # in one entry only). Give the PCs fixed addresses (a reservation on the
+    # router), since SRRVRR knows a PC only by its address. Needs administrator.
+    NamedPCs = @()
+    # For example:
+    # NamedPCs = @(
+    #     @{ Name = 'Desk PC'; Addresses = @('192.0.2.10') }
+    # )
+
+    # $true shows each PC's busiest folders (up to 10: the share, the folder below
+    # it, and how many files are open there). $false keeps only the counts, on the
+    # page and in the log. SRRVRR never keeps file names either way.
+    TransferFolders = $true
     # --- Drive space ----------------------------------------------------------
 
     # The percent of a drive that is used when the Storage bar turns amber and

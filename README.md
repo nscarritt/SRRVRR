@@ -95,6 +95,8 @@ The CPU and Memory tiles show a temperature the same way, updated every 5 second
 When temperatures can't be read (not set up, not running as administrator, or the sensors don't
 answer), the tiles show an amber **Temp n/a**; hover for the reason.
 
+**PCs and folders** (administrator only): the Transfers card lists each PC connected to the shares by name, account, read and write speed and open files, with a mark while it writes. A PC is known by its address, so list the PCs you recognize in `NamedPCs` (with fixed addresses); a PC not listed shows its address in amber, with one warning when it connects (`unknown-pc`) and a flag with a banner when it first writes (`unknown-pc-write`), which also record the account. A row opens to the PC's busiest folders, up to 10: the share, the folder below it (3 levels, 120 characters) and how many files are open there, those open for writing marked. SRRVRR never keeps file names: each is dropped as soon as the open files are read, and never reaches the page, /stats or a log. `TransferFolders = $false` keeps only counts. With more than 5,000 open files the card says so and uses the first 5,000.
+
 The page follows your system's light/dark theme and works on phones.
 
 ## Requirements
@@ -187,6 +189,8 @@ replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.exam
 | `LogRetentionDays` | `31` | How many days of logs to keep, 7 to 366. |
 | `MaintenanceHours` | `2` | How long the Maintenance checkbox stays on, in hours (0.25 up to `MaintenanceMaxHours`). |
 | `MaintenanceMaxHours` | `8` | The longest Maintenance can stay on, in hours (1 to 24). |
+| `NamedPCs` | `@()` | PCs you recognize: up to 32 entries like `@{ Name = 'Desk PC'; Addresses = @('192.0.2.10') }`. `Name` is 1 to 40 printable characters, different from the others (capitals don't count); `Addresses` are 1 to 8 single IPv4 or IPv6 addresses (no ranges, subnets, names or loopback), each in one entry only; any other key is an error. Any PC not listed is unknown. Give the PCs fixed addresses. |
+| `TransferFolders` | `$true` | `$true` shows each PC's busiest folders on the Transfers card; `$false` keeps only counts, on the page and in the log. |
 | `DriveWarnPercent` | `85` | The percent of a drive that is used when its Storage bar turns amber and a "filling" banner shows, 50 to 99 (below `DriveFullPercent`). |
 | `DriveFullPercent` | `95` | The percent used when the bar turns red and the drive is flagged as almost full, 50 to 99. A drive has to fall 2 points below a threshold before its level goes back down. |
 | `BottleneckPercent` | `80` | The percent of its limit at which the Transfers card names the network link, the share's drive or the CPU as the bottleneck, a whole number from 50 to 99. Below it the card says "Not the server". |
@@ -408,6 +412,7 @@ fewer), newest first.
   rule is managed, and per-process network and CPU/memory temperatures work.
 - **Not as administrator:** it still runs, but only `http://localhost:<port>` on that machine
   works, per-process network shows "n/a", and the CPU and memory temperatures show "Temp n/a".
+  The Transfers card says "PCs and folders need administrator": it reads the SMB session and open-file lists with administrator only.
 
 ## Running SRRVRR at boot
 
