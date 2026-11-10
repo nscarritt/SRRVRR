@@ -112,6 +112,19 @@ td.tempty{color:var(--muted);text-align:left;font-weight:400;padding-left:0}
 .ftext small{color:var(--muted)}
 .fnone{color:var(--muted);font-size:12.5px;padding:4px 0}
 .ferr{color:var(--bad);font-size:12.5px;padding:4px 0}
+/* The Transfers card's PC list: a row per PC (amber when unknown, red in a write burst), opening to its folders */
+details.pc{border-top:1px solid var(--border)}
+details.pc summary{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1.2fr) auto auto 4.5em;gap:10px;padding:6px 0;cursor:pointer;font-variant-numeric:tabular-nums;align-items:baseline}
+.pcn{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcn.unk{color:var(--warn)}
+details.pc.burst .pcn{color:var(--bad)}
+.pca,.pco,.pcp{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcs i{font-style:normal;color:var(--muted);margin-right:3px}
+.pcw{color:var(--warn);font-size:12px;font-weight:600}
+details.pc.burst .pcw{color:var(--bad)}
+.pcfs{padding:0 0 6px 14px}
+.pcf{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,2fr) auto 4.5em;gap:10px;font-size:12.5px;padding:2px 0}
+@media (max-width:640px){details.pc summary{grid-template-columns:minmax(0,1fr) auto}.pca,.pco{display:none}}
 header{flex-wrap:wrap}
 #sound .v-on,#sound[data-on="1"] .v-off{display:none}
 #sound[data-on="1"] .v-on{display:block}

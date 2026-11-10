@@ -46,6 +46,13 @@ called out under **Changed** or **Removed** with upgrade notes.
   drive in `/stats`); the page only colors by it. New events: `drive-filling`, `drive-full`,
   `drive-space-ok`, with only the drive letter, used percent and free GB.
 
+- **PCs and folders on the Transfers card (#78, administrator only).** Each PC connected to the shares is a row: its
+  name (from the new setting `NamedPCs`, by address) or its address in amber, account, speeds and open files, opening to
+  its busiest folders (up to 10: share, folder below it, file count, writing marked). SRRVRR keeps folders and counts,
+  never file names; `TransferFolders = $false` keeps counts only. New events: `unknown-pc` (warning, logged) and
+  `unknown-pc-write` (flag, banner, logged), which also record the account. New in `/stats`: `transfers.pcs`
+  (with #76). Without administrator the card says "PCs and folders need administrator".
+
 ### Changed
 
 - **Alert times, one 12-hour format, and banners that stay a minute (#63).** Every banner now ends with the time

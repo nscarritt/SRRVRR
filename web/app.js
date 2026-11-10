@@ -130,6 +130,7 @@ function render(s) {
   $('netS').innerHTML = '<span class="key"><i style="background:var(--rx)"></i>Receive ' + bits(s.rx) +
     '</span><span class="key"><i style="background:var(--tx)"></i>Send ' + bits(s.tx) + '</span>';
   drawGraphs();
+  renderPcs(s);
   renderProcs(s);
   renderDrives(s);
   renderTransfers(s);
@@ -281,6 +282,51 @@ function renderProcs(s) {
   $('procNote').hidden = !s.netError;
   $('procNote').textContent = s.netError ? 'Per-process network unavailable: ' + s.netError + '.' : '';
 }
+// --- The Transfers card's PC list: a row per PC connected to the shares; a row opens to its folders. Only folders
+// (a share and the path below it) and counts get here: the server never sends a file name.
+const pcPlural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+function pcFolderHtml(f) {
+  return '<div class="pcf"><b>' + esc(f.share) + '</b><span class="pcp">' + (f.path ? esc(f.path) : '(top level)') + '</span><span>' +
+    pcPlural(f.files, 'file') + '</span>' + (f.writing ? '<span class="pcw">writing</span>' : '<span></span>') + '</div>';
+}
+// transfers (the /stats object) -> the PC list's HTML. open: the keys of the rows that are open (only their folders
+// are drawn, so a full list stays cheap every second); without it every row shows its folders, closed.
+function pcRowsHtml(t, open) {
+  if (!t) return '';
+  const pcs = Array.isArray(t.pcs) ? t.pcs : [];
+  const note = t.reason ? '<div class="fnone">' + esc(t.reason) + '</div>' : '';
+  if (!pcs.length) return note || '<div class="fnone">No PCs connected to the shares.</div>';
+  return note + pcs.map((p, i) => {
+    const key = p.address || 'pc' + i, isOpen = !!(open && open.has(key));
+    const who = p.name || p.address || 'A PC';
+    const unknown = !p.known && !!p.address;                // an address nobody listed in NamedPCs: amber
+    const hover = [p.smb && 'SMB ' + p.smb, p.signed === true ? 'signed' : p.signed === false ? 'not signed' : '',
+      p.encrypted === true ? 'encrypted' : p.encrypted === false ? 'not encrypted' : ''].filter(Boolean).join(', ');
+    const folders = Array.isArray(p.folders) ? p.folders : [];
+    const body = !open || isOpen ? folders.map(pcFolderHtml).join('') : '';
+    return '<details class="pc' + (p.burst ? ' burst' : '') + '" data-k="' + esc(key) + '"' + (isOpen ? ' open' : '') + '>' +
+      '<summary><span class="pcn' + (unknown ? ' unk' : '') + '" title="' + esc(p.name && p.address ? p.address : '') + '">' + esc(who) + '</span>' +
+      '<span class="pca">' + esc(p.account || '') + '</span>' +
+      '<span class="pcs" title="' + esc(hover) + '"><i>R</i>' + speed(p.readBps) + ' <i>W</i>' + speed(p.writeBps) + '</span>' +
+      '<span class="pco">' + pcPlural(p.openFiles || 0, 'open file') + '</span>' +
+      (p.writing ? '<span class="pcw">writing</span>' : '<span></span>') + '</summary>' +
+      (body ? '<div class="pcfs">' + body + '</div>' : '') + '</details>';
+  }).join('');
+}
+let openPcs = new Set(), lastTransfers = null;
+function renderPcs(s) {
+  lastTransfers = s.transfers || null;
+  const el = $('tpcs');
+  if (el) el.innerHTML = pcRowsHtml(lastTransfers, openPcs);
+}
+// Which rows are open is kept here, since the list is drawn again every second.
+if ($('tpcs')) $('tpcs').addEventListener('toggle', e => {
+  const k = e.target && e.target.dataset && e.target.dataset.k;
+  if (k == null) return;
+  const had = openPcs.has(k);
+  if (e.target.open) openPcs.add(k); else openPcs.delete(k);
+  if (e.target.open && !had) renderPcs({transfers: lastTransfers});   // opened by hand: draw its folders now
+}, true);
 // --- Alerts: a banner that slides down from the top, and a soft ding when sound is on.
 // Browsers only play sound after someone has clicked or tapped the page, so the header
 // button turns sound on (remembered in this browser), and after a reload one click
@@ -426,6 +472,8 @@ function bannerFor(e) {
     case 'worker-stopped': return b('', 'A background task stopped', [d.name, d.error]);
     case 'maintenance-on': return b('', 'Maintenance turned on', []);
     case 'maintenance-off': return b('', 'Maintenance turned off', []);
+    case 'unknown-pc': return b('', 'Unknown PC ' + (d.address || '') + ' connected', [d.account && 'Account: ' + d.account]);
+    case 'unknown-pc-write': return b('', 'Unknown PC ' + (d.address || '') + ' is writing to the shares', [d.account && 'Account: ' + d.account]);
     case 'started': return b('', 'SRRVRR started', [d.reason]);
     case 'stopped': return b('', 'SRRVRR stopped', [d.reason]);
   }
