@@ -340,6 +340,9 @@ if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Disk Read Bytes/sec', 'LogicalDisk')) { $categories += 'LogicalDisk' }   # per-drive read/write speed
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
+if ($cat::CounterExists('Read Bytes/sec', 'SMB Server Shares') -and $cat::CounterExists('Read Bytes/sec', 'SMB Server Sessions')) {
+    $categories += 'SMB Server Shares', 'SMB Server Sessions'   # the Transfers card; read in the sampler before its loop, so no tick pays the first read
+}
 
 Set-Step 'Finding the processor, memory and graphics card'
 # Processor: the name Windows reports, without the trademark marks and clock speed

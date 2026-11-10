@@ -67,6 +67,76 @@ function Get-DiskIO {
     $io
 }
 
+# One second of SMB file-server traffic, the links and the drives (shapes: the v0.9.0 plan, "Data shapes"):
+# @{ available; readBps; writeBps; shares; sessions; links; drives }. Not available (and everything empty) on a
+# first reading, or when either SMB category is missing. The counters need no administrator. Counter names are
+# lower case, as the category lists them. Share instances are '\\*\name' and session instances numeric ids.
+function Get-SmbCounterReading {
+    param($Previous, $Current)
+    $out = @{ available = $false; readBps = 0; writeBps = 0; shares = @(); sessions = @(); links = @(); drives = @{} }
+    foreach ($c in 'SMB Server Shares', 'SMB Server Sessions') {
+        if (-not $Previous -or -not $Current -or -not $Previous.ContainsKey($c) -or -not $Current.ContainsKey($c)) { return $out }
+    }
+    $sh = 'SMB Server Shares'; $se = 'SMB Server Sessions'
+    $read = Get-CounterDelta $Previous $Current $sh 'read bytes/sec'
+    $write = Get-CounterDelta $Previous $Current $sh 'write bytes/sec'
+    $open = Get-CounterDelta $Previous $Current $sh 'current open file count'
+    $secs = Get-CounterDelta $Previous $Current $sh 'avg. sec/request'
+    $queue = Get-CounterDelta $Previous $Current $sh 'current data queue length'
+    $shares = @(); $readTotal = 0.0; $writeTotal = 0.0
+    foreach ($inst in $read.Keys) {
+        $name = $inst -replace '^.*\\', ''
+        if ($name -eq '_total' -or $name -eq 'ipc$') { continue }
+        $r = [math]::Round([double]$read[$inst]); $w = if ($write.ContainsKey($inst)) { [math]::Round([double]$write[$inst]) } else { 0 }
+        $readTotal += $r; $writeTotal += $w
+        $shares += @{
+            name = $name; readBps = $r; writeBps = $w
+            openFiles = if ($open.ContainsKey($inst)) { [int]$open[$inst] } else { 0 }
+            secPerRequest = if ($secs.ContainsKey($inst)) { [math]::Round([double]$secs[$inst], 4) } else { 0 }
+            queue = if ($queue.ContainsKey($inst)) { [int]$queue[$inst] } else { 0 }
+        }
+    }
+    $sRead = Get-CounterDelta $Previous $Current $se 'read bytes/sec'
+    $sWrite = Get-CounterDelta $Previous $Current $se 'write bytes/sec'
+    $sOpen = Get-CounterDelta $Previous $Current $se 'current open file count'
+    $sOpened = Get-CounterDelta $Previous $Current $se 'files opened/sec'
+    $sessions = @()
+    foreach ($id in $sRead.Keys) {
+        if ($id -eq '_total') { continue }
+        $sessions += @{
+            id = [string]$id; readBps = [math]::Round([double]$sRead[$id])
+            writeBps = if ($sWrite.ContainsKey($id)) { [math]::Round([double]$sWrite[$id]) } else { 0 }
+            openFiles = if ($sOpen.ContainsKey($id)) { [int]$sOpen[$id] } else { 0 }
+            filesOpened = if ($sOpened.ContainsKey($id)) { [int][math]::Round([double]$sOpened[$id]) } else { 0 }
+        }
+    }
+    # Adapters that report a Current Bandwidth (bits per second); the others (loopback, tunnels) have no limit to hit.
+    $speed = Get-CounterDelta $Previous $Current 'Network Interface' 'Current Bandwidth'
+    $recv = Get-CounterDelta $Previous $Current 'Network Interface' 'Bytes Received/sec'
+    $sent = Get-CounterDelta $Previous $Current 'Network Interface' 'Bytes Sent/sec'
+    $links = @()
+    foreach ($nic in $speed.Keys) {
+        if ($speed[$nic] -le 0) { continue }
+        $links += @{
+            inBps = if ($recv.ContainsKey($nic)) { [math]::Round([double]$recv[$nic]) } else { 0 }
+            outBps = if ($sent.ContainsKey($nic)) { [math]::Round([double]$sent[$nic]) } else { 0 }
+            speedBits = [double]$speed[$nic]
+        }
+    }
+    # Drive letters only; busy is 100 minus the idle time (which can read a little over 100).
+    $idle = Get-CounterDelta $Previous $Current 'LogicalDisk' '% Idle Time'
+    $dq = Get-CounterDelta $Previous $Current 'LogicalDisk' 'Current Disk Queue Length'
+    $drives = @{}
+    foreach ($k in $idle.Keys) {
+        if ($k -notmatch '^[A-Za-z]:$') { continue }
+        $drives[$k.ToUpper()] = @{
+            busy = [math]::Round([math]::Max(0, [math]::Min(100, 100 - [double]$idle[$k])), 1)
+            queue = if ($dq.ContainsKey($k)) { [int][math]::Round([double]$dq[$k]) } else { 0 }
+        }
+    }
+    @{ available = $true; readBps = $readTotal; writeBps = $writeTotal; shares = $shares; sessions = $sessions; links = $links; drives = $drives }
+}
+
 # Process id -> private working set, from the Process category.
 function Get-PrivateMemory($Current) {
     $out = @{}
@@ -144,12 +214,12 @@ function Get-TracerLogEntry {
 function New-FastTickContext {
     param(
         [scriptblock]$Reader, [scriptblock]$Processes, [scriptblock]$Tracer, [object[]]$Services, [double]$TotalRam,
-        [string]$GpuLuid, [int]$Cores, [string[]]$CpuCounter, $TickStopwatch, $IntervalStopwatch, $History
+        [string]$GpuLuid, [int]$Cores, [string[]]$CpuCounter, $TickStopwatch, $IntervalStopwatch, $History, [scriptblock]$Transfers
     )
     @{
         Reader = $Reader; Processes = $Processes; Tracer = $Tracer; Services = $Services; TotalRam = $TotalRam
         GpuLuid = $GpuLuid; Cores = $Cores; CpuCounter = $CpuCounter; TickStopwatch = $TickStopwatch
-        IntervalStopwatch = $IntervalStopwatch; CpuTimes = @{}; History = $History
+        IntervalStopwatch = $IntervalStopwatch; CpuTimes = @{}; History = $History; Transfers = $Transfers
     }
 }
 
@@ -179,6 +249,11 @@ function Invoke-FastTick {
             $State.gpuMem = Get-GpuMemory -Values (Get-CounterDelta $Previous $cur 'GPU Adapter Memory' 'Dedicated Usage') -GpuLuid $Context.GpuLuid
             $State.diskIO = Get-DiskIO -Reads (Get-CounterDelta $Previous $cur 'LogicalDisk' 'Disk Read Bytes/sec') `
                 -Writes (Get-CounterDelta $Previous $cur 'LogicalDisk' 'Disk Write Bytes/sec')
+            # The transfer monitor (modules\Transfers.psm1) takes the SMB reading; its failure never stops the tick.
+            if ($Context.Transfers) {
+                try { & $Context.Transfers (Get-SmbCounterReading -Previous $Previous -Current $cur) $Now }
+                catch { $State.transfersError = "transfer tick: $($_.Exception.Message)" }
+            }
             $State.ts = $Now.ToUnixTimeMilliseconds()
             $State.tickMs = [int][math]::Round($Context.TickStopwatch.Elapsed.TotalMilliseconds)
             $State.error = $null
@@ -207,4 +282,4 @@ function Get-TickWait([DateTime]$Now) {
 }
 
 Export-ModuleMember -Function Get-TickWait, Get-CounterDelta, Get-CounterSum, Get-CpuTotal, Get-GpuUsage, Get-GpuMemory, Get-DiskIO,
-    Get-PrivateMemory, Get-ServiceRows, Get-TracerLogEntry, New-FastTickContext, Invoke-FastTick
+    Get-PrivateMemory, Get-SmbCounterReading, Get-ServiceRows, Get-TracerLogEntry, New-FastTickContext, Invoke-FastTick

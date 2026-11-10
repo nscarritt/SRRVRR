@@ -1,0 +1,9 @@
+{
+  "_note": "No SMB categories (a machine without the file server counters).",
+  "Processor": { "% processor time": { "_total": 12 } },
+  "Network Interface": {
+    "bytes received/sec": { "ethernet 1": 1000 },
+    "bytes sent/sec":     { "ethernet 1": 2000 },
+    "current bandwidth":  { "ethernet 1": 1000000000 }
+  }
+}
