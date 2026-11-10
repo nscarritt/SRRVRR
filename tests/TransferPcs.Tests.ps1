@@ -415,6 +415,9 @@ Describe 'T78-16 the CIM readers on a real share' -Tag 'Elevated' {
         New-Item -ItemType Directory -Force -Path $script:ShareDir | Out-Null
         # Win32_Share.Create, not New-SmbShare: that would load the SmbShare module, which the test checks isn't loaded.
         $null = Invoke-CimMethod -ClassName Win32_Share -MethodName Create -Arguments @{ Name = $script:ShareName; Path = $script:ShareDir; Type = [uint32]0 }
+        # A new share gives Everyone read only, so the test can't open its file for writing over it. Grant full access from a
+        # separate process, so this one never loads the SmbShare module (checked below).
+        & powershell -NoProfile -Command "Grant-SmbShareAccess -Name '$($script:ShareName)' -AccountName Everyone -AccessRight Full -Force | Out-Null"
         $script:Stream = [IO.File]::Open("\\localhost\$($script:ShareName)\open.bin", 'Create', 'ReadWrite', 'ReadWrite')
         $script:S = @(Get-SmbSessionList); $script:F = @(Get-SmbOpenFileList)
     }
