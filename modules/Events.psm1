@@ -129,18 +129,6 @@ function Get-RowValues([object]$Rows, [string]$Field) {
     , $values
 }
 
-# The level of a drive's space: ok, filling or full. Going up is at the thresholds (Warn, Full, percent used); going
-# down needs 2 points of margin, so a drive hovering at a threshold doesn't flap. Previous is the last level, or $null.
-function Get-DriveLevel {
-    param([double]$UsedPercent, [object]$Previous, [int]$Warn, [int]$Full)
-    $was = if ($Previous) { [string]$Previous } else { 'ok' }
-    $margin = 2
-    if ($UsedPercent -ge $Full) { return 'full' }
-    if ($was -eq 'full' -and $UsedPercent -ge ($Full - $margin)) { return 'full' }
-    if ($UsedPercent -ge $Warn) { return 'filling' }
-    if ($was -ne 'ok' -and $UsedPercent -ge ($Warn - $margin)) { return 'filling' }
-    'ok'
-}
 # What changed between two readings of the state. Nothing on the first observation (no replay): a section missing
 # from either reading raises nothing (drive space excepted: a drive not seen before counts as coming from ok). Maintenance, start and stop, the data folder, history saves and errors are
 # raised by their owners with New-TypedEvent.
@@ -227,4 +215,4 @@ function New-EventLogWriter {
 }
 
 Export-ModuleMember -Function New-EventId, New-SrrEvent, New-SrrError, New-SrrQueue, Add-SrrQueueItem, New-EventStore, Invoke-QueueDrain,
-    Get-EventTypes, New-TypedEvent, Get-DriveLevel, Get-StateEvents, ConvertTo-LoggedEvent, New-EventLogWriter
+    Get-EventTypes, New-TypedEvent, Get-StateEvents, ConvertTo-LoggedEvent, New-EventLogWriter

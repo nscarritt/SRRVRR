@@ -173,6 +173,7 @@ Describe 'T50-06 one writer for the logs' {
 # Drive space levels and their events (story #65, test plan section 6.9).
 Describe 'T65 drive space' {
     BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\DataFolder.psm1') -Force   # Get-DriveLevel lives there
         # A drive of 100 GB with the given percent used.
         function New-Drive([string]$Letter, [double]$Used, [string]$Level, [string]$Health = 'Healthy') {
             $d = @{ letter = $Letter; label = 'Secret label'; size = 100GB; free = (100GB * (100 - $Used) / 100); health = $Health }

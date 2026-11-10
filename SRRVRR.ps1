@@ -662,11 +662,10 @@ Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $eventsModulePath)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull)
     # Select-DrivesToShow; a failure shows as drivesError on the page.
     try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
-    # Get-DriveLevel (the server decides ok, filling or full); driveLevels remembers each letter's last level.
-    try { Import-Module -Name $eventsModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\Events.psm1: $($_.Exception.Message)" }
+    # Get-DriveLevel (DataFolder.psm1, loaded above) decides ok, filling or full; driveLevels remembers each letter's last level.
     $driveLevels = @{}
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
@@ -973,7 +972,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument((Join-Path $PSScriptRoot 'modules\Events.psm1'))
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
