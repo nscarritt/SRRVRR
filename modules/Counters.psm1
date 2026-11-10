@@ -130,7 +130,7 @@ function Get-SmbCounterReading {
     foreach ($k in $idle.Keys) {
         if ($k -notmatch '^[A-Za-z]:$') { continue }
         $drives[$k.ToUpper()] = @{
-            busy = [math]::Round([math]::Max(0, [math]::Min(100, 100 - [double]$idle[$k])), 1)
+            busy = [math]::Round([math]::Max(0.0, [math]::Min(100.0, 100 - [double]$idle[$k])), 1)
             queue = if ($dq.ContainsKey($k)) { [int][math]::Round([double]$dq[$k]) } else { 0 }
         }
     }
