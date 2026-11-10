@@ -27,6 +27,16 @@
     <div id="procNote" hidden></div></section>
   <section class="card wide" id="driveCard" hidden><div class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"/></svg>Storage</div>
     <div id="drives"></div></section>
+  <section class="card wide" id="transCard" hidden><div class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16"/></svg>Transfers</div>
+    <div id="tline" class="tline quiet">&nbsp;</div><div id="tsmall">&nbsp;</div>
+    <div class="scroll"><table>
+      <colgroup><col style="width:34%"><col style="width:12%"><col style="width:20%"><col style="width:20%"><col style="width:14%"></colgroup>
+      <thead><tr><th>Share</th><th>Drive</th><th>Read</th><th>Write</th><th>Open files</th></tr></thead>
+      <tbody id="tshares"></tbody>
+    </table></div>
+    <div class="sub" id="smbS">&nbsp;</div><canvas id="smbC"></canvas>
+    <div id="tpcs"></div>
+    <div id="tnote" hidden></div></section>
   <section class="card wide" id="flagCard"><div class="label"><svg class="ticon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7"/></svg>Flagged</div>
     <div id="flagged"><div class="fnone">Loading&hellip;</div></div></section>
 </main>

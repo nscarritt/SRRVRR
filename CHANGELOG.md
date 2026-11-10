@@ -11,6 +11,16 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Added
 
+- **The Transfers card: the bottleneck and the shares (#76).** A new card names, each second, the server resource
+  closest to its limit while the file shares move at least 1 MB/s: the network link (the busiest adapter, as a
+  percent of its link speed), the share's drive (how busy it is, and its queue) or the CPU, or "Not the server: the
+  client or the path to it" when none reaches `BottleneckPercent`, or "Idle". The three numbers are always in
+  small print, and a new name has to hold for 2 seconds. Below it, a row per share with traffic or open files
+  (its drive, read and write speed, open files) and a graph of the shares' read and write speed with the 60 s and
+  15 min buttons. It reads the file server's own `SMB Server Shares` and `SMB Server Sessions` counters in the
+  once-a-second loop, so it needs no administrator. New setting `BottleneckPercent` (50 to 99, default 80). `/stats`
+  gains `transfers` and `/history` gains `smbRead` and `smbWrite`; an older version loading the saved history
+  ignores the two new lines.
 - Tests for clock changes and midnight (`tests\Clock.Tests.ps1`): dated log files, log retention, the /events
   window and history across the spring and fall changes (#66).
 
