@@ -105,6 +105,8 @@ $script:EventTypes = @{
     'worker-stopped' = @{ Severity = 'warn'; Banner = $false; Logged = $true }
     'maintenance-on' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'maintenance-off' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'unknown-pc' = @{ Severity = 'warn'; Banner = $false; Logged = $true }
+    'unknown-pc-write' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'started' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'stopped' = @{ Severity = 'info'; Banner = $false; Logged = $true }
 }
