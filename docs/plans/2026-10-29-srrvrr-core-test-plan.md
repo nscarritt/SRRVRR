@@ -2,7 +2,9 @@
 
 Status: draft for the owner's review. Covers stories #47 to #51 (milestone v0.7.0) against the design spec
 `docs/specs/2026-10-28-srrvrr-core-design.md`. Extended for v0.8.0 (#62, #63, #65, #66): sections 6.6 to 6.9
-and their rows in section 7, against `docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`.
+and their rows in section 7, against `docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`. Extended for v0.9.0 (#76 to
+#79): sections 6.10 to 6.13 and their rows in section 7 (TR, BU, PC, NM), against
+`docs/specs/2026-11-07-srrvrr-v0.9.0-design.md`.
 
 ## Contents
 - [1. Scope and coverage goals](#1-scope-and-coverage-goals)
@@ -759,6 +761,117 @@ Spec section 3. Files: `tests\Events.Tests.ps1`, `tests\Settings.Tests.ps1`, `te
 | T65-11 | B1, B3, B5 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.7.0's budgets | MS |
 | T65-12 | DF1, DF2, DF4, B8 | A | `docs\uat\v0.8.0-combined.md` | The owner sees an amber bar and one banner after lowering the threshold, none after raising it, and a refused start for `101` | UC |
 
+### 6.10 #76 The bottleneck and the shares (v0.9.0)
+
+Spec: `docs/specs/2026-11-07-srrvrr-v0.9.0-design.md`, sections 1, 2, 6 to 8; the shapes are the implementation
+plan's "Shared interfaces" (`docs/plans/2026-11-10-srrvrr-v0.9.0-implementation-plan.md`). Counter fixtures in
+`tests\fixtures\transfers\counters\` (made-up share names, admin shares, `IPC$`, numeric session ids). Files:
+`tests\Transfers.Tests.ps1` (also the shared region of `modules\Transfers.psm1`), `tests\js\transfers.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T76-01 | TR1, TR2 | U | `Get-SmbCounterReading` on two snapshots of `SMB Server Shares` and `SMB Server Sessions` | One share row per share instance (the name after the last backslash) with `readBps`, `writeBps`, `openFiles`, `secPerRequest`, `queue`; `IPC$` and `_Total` dropped, admin shares (`D$`, `ADMIN$`) kept; `readBps` and `writeBps` the share totals | FCR, FX |
+| T76-02 | TR1 | U | The same, sessions | One row per session id (a string), `_Total` dropped; `filesOpened` the per-second rate, rounded | FCR, FX |
+| T76-03 | TR1 | U X | A snapshot without the SMB categories; a first reading (no previous) | `available` false, empty lists, no error; `Invoke-FastTick` still sets every other field and calls the hook | FCR |
+| T76-04 | TR3 | U | Network adapters with `Current Bandwidth` 1e9, 0 and missing; `LogicalDisk` letters, volumes and `_Total` | `links` only for the 1e9 adapter; `drives` per letter with `busy` = 100 - `% Idle Time` and `queue` | FCR |
+| T76-05 | TR3 | U | `Get-Bottleneck` at 2 MB/s of share traffic with link 94% of 1 Gb/s; drive 98% busy, queue 4; CPU 91% (threshold 80, held past 2 s) | `link`, `drive`, `cpu` in turn, `percent` the named one's, the other numbers alongside | CLK |
+| T76-06 | TR3 | U | Share traffic 1,048,575 and 1,048,576 B/s with CPU 100; a highest percent of 79.9 | `idle` (`percent` `$null`) below the floor; named at the floor; `none` with `percent` 79.9 | - |
+| T76-07 | TR3 | U | Link, drive and CPU all 90; drive and CPU 90, link 50 | `link`; `drive` | - |
+| T76-08 | TR3 | U | A busier drive with no share traffic; traffic on an admin share; no share list yet | The busiest drive behind a share with traffic is used; admin share traffic counts; `drive` `$null` with no list | FSL |
+| T76-09 | TR4 | U | Raw results `none`, `link`, `link`, `link` one second apart; then `link`, `cpu`, `link`, `cpu` | The name changes to `link` only at the 2 s mark; alternating raw results never change it; `link`, `drive`, `cpu` numbers change every second | CLK |
+| T76-10 | TR2, TR9 | U | `Get-ShareDriveMap` on a Win32_Share list: disk shares, a hidden share, `C$`, `IPC$`, a share on a mount folder | Each disk and admin drive share with its letter; `IPC$` and paths without a letter have `drive` `$null` | FSL |
+| T76-11 | TR9, PC1 | U | `Invoke-TransferSample` for ticks 0 to 13, busy and idle, elevated and not, with counting fake readers; a reader that throws | Shares at ticks 0 and 12; sessions and open files only elevated, every tick while busy, every 6th idle; never unelevated; the error reaches the caller and the monitor keeps its last values | - |
+| T76-12 | TR2, TR6 | U | `Invoke-TransferTick` with 40 shares (some idle, no open files), unelevated, and with the SMB categories missing | `transfers` keys exactly `available`, `reason`, `bottleneck`, `shares`, `pcs`, `updatedMs`; bottleneck keys `name`, `percent`, `link`, `drive`, `cpu`; at most 32 shares, busiest first, only those with traffic or open files, each with its `drive`; `reason` "PCs and folders need administrator", or "SMB counters are not available" | FCR |
+| T76-13 | TR6, D6 | I | `GET /stats` from the router with `transfers` (4 PCs with 10 folders each, 8 shares) in the state | The `v0.6.0-shape` fixture still holds; `transfers` as T76-12; that `transfers` is at most 6 KB | FX |
+| T76-14 | TR6 | U | A history store with defaults; a saved file with an unknown extra line; one without `smbRead` | `smbRead` and `smbWrite` registered and appended each second from the share totals; the unknown line ignored and the rest loaded; the file without them loads (rollback both ways) | CLK |
+| T76-15 | TR7, ST5 | U X | `BottleneckPercent` 49, 100, 80.5, `'80'` | One plain settings error each naming "50 to 99"; 80 by default | - |
+| T76-16 | TR7, ST6 | S | README settings table and How it works, `SRRVRR.config.example.psd1`, `Get-SrrDefaultSettings` | `BottleneckPercent` with the same default and range in all three; How it works names both SMB categories and `transfers` | - |
+| T76-17 | TR5 | J | `bottleneckText` for each name | "Bottleneck: the network link, 94% of 1 Gb/s", "Bottleneck: the share's drive (D:), 98% busy, queue 4", "Bottleneck: the CPU, 91%", "Not the server: the client or the path to it", "Idle"; the small print with the three numbers | - |
+| T76-18 | TR2, TR5 | J | `shareRowsHtml` with two shares, a share name with `<`, and `available` false; `fillFromHistory` with the two new lines | Name, drive, read and write speed and open files per row, the name escaped; the reason text when unavailable; `smbRead` and `smbWrite` filled | - |
+| T76-19 | TR8 | U | `ConvertTo-PcAddress` on `::ffff:192.0.2.10`, `fe80::1%12`, `[2001:DB8::A]`, `192.0.2.10 `, `not-an-ip`, empty | `192.0.2.10`, `fe80::1`, `2001:db8::a`, `192.0.2.10`, `$null`, `$null` | - |
+| T76-20 | TR8, NM2 | U X | `Find-NamedPC` with an index from two named PCs, server addresses `192.0.2.1`, `2001:db8::1` | A listed address (any case, IPv4-mapped, with a zone id) gives its name and `Known`; `127.0.0.1`, `::1` and the server's addresses `Self` and `Known` with no name; anything else unknown; an empty index leaves only the server known | - |
+| T76-21 | TR8 | U | `New-TransferMonitor` with no v0.9.0 settings, then with all six | Defaults 80, 500, 60, 5, `$true` and an empty index; then the given values and the index from `NamedPCs`; the table is synchronized | - |
+| T76-22 | TR9, F5 | S | `modules\Transfers.psm1` and `SRRVRR.ps1` | The regions Shared, 76, 77, 78, 79 in order; no `Get-SmbShare`, `Get-SmbSession` or `Get-SmbOpenFile` anywhere; `SRRVRR.ps1` passes the monitor to both runspaces, imports the module there by full path, calls `Get-BurstEvents` (also with `-StopMs` in a stop saver) and `Get-UnknownPcEvents` in `Invoke-Watch`, and watches `transfersError` | - |
+| T76-23 | B1, B3, B5, B6 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.8.0's budgets; the tick median within 10% or 5 ms of v0.8.0's | MS |
+| T76-24 | TR1, TR6 | K | An unelevated test build | `/stats` has `transfers` with `reason` "PCs and folders need administrator" (or SMB counters not available, on a machine without them) and `/history` has `smbRead` and `smbWrite` | NTB |
+| T76-25 | TR2, TR3, TR5, B8 | A | `docs\uat\76-bottleneck.md`, unelevated on the server | The owner copies a large file through the loopback name and sees the share row, the graph and the bottleneck line move, then "Idle" | UC |
+
+### 6.11 #77 Write bursts (v0.9.0)
+
+Spec sections 4, 7. Readings are built directly as PC seconds (implementation plan, Shared interfaces), so no server
+or counter is needed. Files: `tests\Bursts.Tests.ps1`, `tests\js\bursts.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T77-01 | BU1 | U | One PC writing every second and opening 499, then 500, files in 60 s (`Files` 500, window 60) | No burst at 499; at 500 one active burst with `startMs` that second and the PC's key | CLK |
+| T77-02 | BU1 | U | Files opened in seconds without writing; files opened 61 s ago | Neither counts; the ring keeps the last `WindowSeconds` seconds only | CLK |
+| T77-03 | BU1 | U | A burst, then 4 min 59 s and 5 min below the threshold (quiet 5 min) | Still active at 4:59; ended at 5:00 with `reason` `quiet`; `files` and `bytes` count from the start | CLK |
+| T77-04 | BU1 | U | A second rise 3 min after the sum fell below, then one 6 min after a burst ended | The first is the same burst (one pair); the second a new burst with a new `startMs` | CLK |
+| T77-05 | BU1 | U | Two PCs bursting at once; a PC that disconnects mid-burst | Independent bursts; the missing PC counts as quiet and ends after the quiet time | CLK |
+| T77-06 | BU2 | U | `Get-BurstEvents` from no bursts to one, to the same, to it ended | One `write-burst`, then nothing, then one `write-burst-ended`; keys `write-burst\|<pc>\|<startMs>` and `write-burst-ended\|<pc>\|<startMs>` | - |
+| T77-07 | BU2, PC7, PC10 | U X | A burst of a named PC with folders, of an unknown PC, and with `IncludeFolders` false | `pc` (the name, `unknown`), `address`, `account`, `shares`, `files`, `bytes`, `startMs`, at most 5 folders with counts (none when false); the ended event adds `durationSeconds` and `reason` | - |
+| T77-08 | BU4 | U | Unelevated (session keys, no PC rows) | `pc` "a PC (needs administrator)" with `session`, no `address`, `account` or folders; shares from the share counters | - |
+| T77-09 | BU3 | U | `-StopMs` with one active and one ended burst | One `write-burst-ended` with `reason` `stopped` for the active one; nothing for the ended one | - |
+| T77-10 | BU2, BU6 | U | The event table; two bursts from one PC 20 minutes apart through `Invoke-QueueDrain`, Maintenance on for the second | Both types with flag, banner yes / no, logged; all four events kept (never suppressed as repeats); the second pair logged with `maintenance` true and not bannered | CLK |
+| T77-11 | BU6, SEC3 | U X | The flags written to an event log with a 2 KB daily cap already full; canary file names in the folder rows' source | Both written past the cap; the logged lines keep `account` and never contain a canary file name | CLK |
+| T77-12 | BU6 | U | A PC writing nonstop for an hour; 70 PCs bursting | Exactly one pair (ended at the stop of writing plus the quiet time); ended bursts leave the list after 120 s; at most 64 PCs tracked | CLK |
+| T77-13 | BU5, ST5 | U X | `BurstFiles` 49, 100001, `'500'`, 500.5; `BurstWindowSeconds` 9, 601; `BurstQuietMinutes` 0, 61 | One plain message each naming its range; defaults 500, 60, 5 | - |
+| T77-14 | BU5, ST6 | S | README settings table and Alerts, the example config, the defaults | The three settings with the same defaults and ranges; Alerts describes write bursts and their two events | - |
+| T77-15 | BU7 | J | `bannerFor` for both types, elevated and unelevated, with `reason` `stopped`; `flaggedHtml` with them | "Write burst from Desk PC" with the files, shares and folders; "Write burst from a PC (needs administrator)"; the ended text with files, bytes and the duration, "(SRRVRR stopped)" | - |
+| T77-16 | B1, B3, B5, B6 | P | `tools\Measure-SRRVRR.ps1` on the test build during a loopback copy | Within v0.8.0's budgets; the tick median within 10% or 5 ms | MS |
+| T77-17 | BU2, BU3, BU4, B8 | A | `docs\uat\77-write-bursts.md`, unelevated on the server | The owner sees the banner and both flags for 600 small files, nothing for 300, and the `stopped` end after a stop mid-burst | UC |
+
+### 6.12 #78 PCs and folders (v0.9.0)
+
+Spec sections 1, 3, 4, 6, 7. CIM fixtures in `tests\fixtures\transfers\cim\` shaped like `MSFT_SmbSession`,
+`MSFT_SmbOpenFile` and `Win32_Share`, with canary file names. Files: `tests\TransferPcs.Tests.ps1`,
+`tests\js\pcs.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T78-01 | PC2 | U | `Get-SessionPcs` with sessions from three addresses, two sessions from one, `ClientComputerName` as `[fe80::5%3]` and `::ffff:192.0.2.20` | One session PC per session; the two sessions share one address; `account` and `smb` (the dialect) kept; addresses normalized | FX |
+| T78-02 | PC2 | U | The same with an index naming one address and the server's own address among the clients | That PC's name and `known`; the server itself `known` with no name; the others unknown | FX |
+| T78-03 | PC2 | U | Open files signed and not, encrypted, with write and read-only `Permissions`; a PC with none open | `signed` and `encrypted` from its open files, `$null` with none; `writingFiles` from the write bits | FX |
+| T78-04 | PC3 | U X | Open files at depth 1 to 6, a path of 300 characters, a file in a share root, nested shares and an admin share over the same folder, 15 folders for one PC | The folder is the path below the longest matching share without its last part, 3 levels and 120 characters at most; the root shows as the share; a non-`$` share wins a tie; 10 folders, busiest first, writing marked | FX |
+| T78-05 | PC3, SEC3 | U X | The fixtures' canary file names through `Get-SessionPcs`, `Get-TransferPcRows`, the `/stats` JSON and the logged copy of every new event | No canary in any of them | FX |
+| T78-06 | PC10 | U | `-Folders $false` | Counts only: no folder rows in the monitor, `pcs[].folders` empty, no folders in event data | FX |
+| T78-07 | PC4 | U | 5,001 open files; 70 PCs | Only 5,000 used and `Capped`, `reason` "more than 5,000 open files"; 64 rows, busiest first | - |
+| T78-08 | PC2, PC8 | U | `Get-TransferPcRows` with PC seconds, session PCs, folders and one active burst | Row keys exactly `name`, `address`, `known`, `account`, `smb`, `signed`, `encrypted`, `readBps`, `writeBps`, `openFiles`, `writing`, `burst`, `folders`; speeds from the second; `burst` true for that PC only | - |
+| T78-09 | PC6 | U | `Get-UnknownPcEvents` over: an unknown PC appears, reads, writes, keeps writing, disconnects, reconnects; a named PC; unelevated | `unknown-pc` once on appearing, `unknown-pc-write` once on the first write; both again after the reconnect; nothing for the named PC or unelevated | - |
+| T78-10 | PC6, E4 | U | The event table; a reconnect within 10 minutes and one after, through `Invoke-QueueDrain` | `unknown-pc` warn, no banner, logged; `unknown-pc-write` flag, banner, logged; keys `unknown-pc\|<address>` and `unknown-pc-write\|<address>`; the early reconnect suppressed by the repeat rule, the late one kept | CLK |
+| T78-11 | PC7, SEC3 | U X | `ConvertTo-LoggedEvent` on the four new types and on a Plex stream event with a canary user | The new types keep `pc`, `address` and `account`; the stream event still drops its user (T50-19 unchanged) | - |
+| T78-12 | PC5, ST5 | U X | `NamedPCs` with 33 entries; a `Name` empty, of 41 characters, with a control character, duplicated in another case; `Addresses` empty, 9 of them, a range, a subnet, loopback, `0.0.0.0`, `::`, a multicast address, one listed twice (also as its IPv4-mapped form); an unknown key | One plain settings error each; `@()` by default; an entry with an IPv4 and an IPv6 address accepted | - |
+| T78-13 | PC5, ST5 | U X | `TransferFolders` `'yes'`, 1 | A settings error; `$true` by default | - |
+| T78-14 | PC5, TR8 | U | The settings check's address comparison and `ConvertTo-PcAddress` on the same list | The same normalized form for every address | - |
+| T78-15 | PC5, ST6 | S | README settings table, What it shows and Administrator vs. not; the example config; the defaults | `NamedPCs` and `TransferFolders` with the same defaults and rules; "PCs and folders need administrator" in Administrator vs. not | - |
+| T78-16 | PC1 | E | On CI: a temp share, a loopback session to it with a file open for writing, then `Get-SmbSessionList` and `Get-SmbOpenFileList` | Records with the fixtures' key shape; the SmbShare module not loaded afterwards; the share removed in `AfterAll` | - |
+| T78-17 | PC9 | U | `tools\Export-TransferSample.ps1` on fake CIM data with real-looking names, addresses, accounts and paths | Names, accounts and paths replaced, addresses mapped into `192.0.2.x` and `2001:db8::`; the key shapes compared with the fixtures; nothing written inside the repo | - |
+| T78-18 | PC8 | J | `pcRowsHtml` with a named PC, an unknown PC, a writing PC, one in a burst, folders, a name with `<`, no PCs, `reason` set, capped | Name or the address in amber, account, speeds, open files, the writing mark, red while `burst`; folder rows with share, path, count, writing; escaped; "No PCs connected to the shares."; the reason line | - |
+| T78-19 | PC6 | J | `bannerFor` for `unknown-pc` and `unknown-pc-write`; `flaggedHtml` with them | "Unknown PC 192.0.2.99 connected", "Unknown PC 192.0.2.99 is writing to the shares", each with the account | - |
+| T78-20 | PC1, PC4, B1, B3, B5, B6 | P | The elevated test build during a copy, measured by the owner; `/stats` from the router with every bound full | Within v0.8.0's budgets with the CIM reads every 5 s (else the cadence moves to 10 s); `/stats` p95 at most 30 ms | MS |
+| T78-21 | PC1, PC3, PC6, PC8, PC9, B8 | A | `docs\uat\78-pcs-folders.md`, elevated, with #79's | The owner sees a named PC's name, account and folders, an unknown PC in amber with one banner on its first write, and runs the recording tool | UC |
+
+### 6.13 #79 Maintenance limited to named PCs (v0.9.0)
+
+Spec section 5 and Q9, Q10. The handler's address parameter carries each test's address. Files:
+`tests\NamedMaintenance.Tests.ps1`, `tests\js\viewer.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T79-01 | NM1, M8 | U X | `Invoke-MaintenanceChange` with a good request and `-Named $false` | 403, body `{"error":"not a named PC"}`, no change, the limiter not asked, one refusal counted with the address | CLK |
+| T79-02 | NM1 | U X | From an unnamed address: no `X-SRRVRR`, a wrong content type, a bad `Origin`; from a named one: two changes within 10 s | The guard's 403 `refused` first; the named check before the body and the rate limit; 429 for the named one's second change | CLK |
+| T79-03 | NM1, NM2, TR8, M8 | I X | `Invoke-SrrRoute` with SRRVRR's matcher: `::ffff:192.0.2.20` and `fe80::5%3` (both listed), `192.0.2.99`, `127.0.0.1`, `::1`, a server address, with and without `NamedPCs` | 200, 200, 403, 200, 200, 200; with no `NamedPCs` only the last three are 200 | FX |
+| T79-04 | NM2 | S | `SRRVRR.ps1` | With `NamedPCs` empty one startup line says Maintenance can be changed only at the server itself | - |
+| T79-05 | NM3 | U | `New-RefusalCounter`: 7 refusals from 6 addresses, then `Take` twice | Count 7 and 5 addresses, then 0; the minute line counts rate-limit and named refusals and names up to 5 addresses | - |
+| T79-06 | NM4 | I | `GET /stats` from a named address, an unnamed one, the server, and with no `Viewer` in the context | `viewer` `{name: "Desk PC", canChangeMaintenance: true, address}`, `{name: null, false, address}`, `{null, true}`; no field without `Viewer`; every other field unchanged | FX |
+| T79-07 | NM1 | I X | An unnamed `RemoteAddress` with `X-Forwarded-For`, `Forwarded` and a `Host` naming a listed address | Still 403, and `viewer` still unnamed: only the connection's own address counts | - |
+| T79-08 | NM1 | S | `SRRVRR.ps1` | `Invoke-MaintenanceRequest` passes `-Named` from the request's own address through `Find-NamedPC`; `$webContext` has `NamedIndex` and `Viewer` | - |
+| T79-09 | NM5 | J | `maintControl` with an unnamed viewer, a named one, the server, and none (an older server) | Disabled with "Maintenance can be changed from a named PC. This PC is seen as 192.0.2.99."; enabled with "Viewing from Desk PC"; enabled with no header; enabled as before; the state and end time shown in every case | - |
+| T79-10 | NM5 | J | `maintenanceError(403)` with `not a named PC`; a failed change from an unnamed viewer | The message names the named-PC rule; the box stays disabled afterwards | - |
+| T79-11 | NM6, Q4 | S | README Alerts and How it works; `CHANGELOG.md` `[Unreleased]` | No "Any device that can open the page can tick it"; named PCs, the server itself and the 403 described; the changelog tells the owner to add `NamedPCs` before installing | - |
+| T79-12 | B1, B3, B5, B6 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.8.0's budgets with `viewer` in every `/stats` | MS |
+| T79-13 | NM5, M8, B8 | A | `docs\uat\79-named-maintenance.md`, elevated, with #78's | The owner sees "Viewing from" on the named PC, the disabled box with its address on the other, Maintenance at the server, and a 403 in the refusal line | UC |
+
 ## 7. Traceability
 
 Every requirement in the spec (as revised 2026-10-29), by section, with its tests. `Traceability.Tests.ps1`
@@ -767,14 +880,14 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 
 | Req | Spec section | Requirement (short) | Tests |
 |---|---|---|---|
-| B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54, T65-11 |
+| B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54, T65-11, T76-23, T77-16, T78-20, T79-12 |
 | B2 | Budgets | Private bytes after 60 min within 25 MB of the previous release | T50-56 (soak before the release; the per-PR runs record the 60 s figure) |
-| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58, T65-11 |
+| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58, T65-11, T76-23, T77-16, T78-20, T79-12 |
 | B4 | Budgets | Page load 150 ms | T47-28 |
-| B5 | Budgets | Startup to serving 20 s | T47-28, T48-51, T65-11 |
-| B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54 |
+| B5 | Budgets | Startup to serving 20 s | T47-28, T48-51, T65-11, T76-23, T77-16, T78-20, T79-12 |
+| B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54, T76-23, T77-16, T78-20, T79-12 |
 | B7 | Budgets | Disk writes up to 100 MB a day | T48-69, T49-29, T50-54 |
-| B8 | Budgets | UAT about 15 minutes per PR | UAT only (a duration, timed by the owner): T47-35, T48-70, T49-30, T50-55, T51-10 |
+| B8 | Budgets | UAT about 15 minutes per PR | UAT only (a duration, timed by the owner): T47-35, T48-70, T49-30, T50-55, T51-10, T76-25, T77-17, T78-21, T79-13 |
 | B9 | Budgets | `tickMs` in `/stats`; `tools\Measure-SRRVRR.ps1`, read-only | T47-16, T47-26, T47-27 |
 | B10 | Budgets | `/history` and `/events` 50 ms each | T49-20, T50-43 |
 | B11 | Budgets | Slow new work after serving; share list via CIM | T48-10, T48-51 (plus a `Static.Tests.ps1` check that no module calls `Get-SmbShare`, part of T50-06's AST pass) |
@@ -849,7 +962,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | M5 | 4 | Saved to `state\maintenance.json`, survives a restart | T50-29, T50-52, T50-59 |
 | M6 | 4 | Each change logged with the requesting address | T50-32 |
 | M7 | 4, 8 | The request guard; no preflight permission | T50-36, T50-37 |
-| M8 | 4 | Any device that can open the page may tick it (accepted risk) | T50-35 (behavior); the risk itself is the owner's call, not testable |
+| M8 | 4, 0.9 s5 | Any device that can open the page may tick it (accepted risk); narrowed by #79 to named PCs and the server itself | T50-35 (behavior before #79, still the handler's default), T79-01, T79-03, T79-13; the risk left (a device claiming a named PC's address) is the owner's call, not testable |
 | M9 | 4 | Body `{"on": true}` or `{"on": false}` | T50-31 |
 | M10 | 4 | Rate limit: 1 per address per 10 s, 60 a day, else 429, counted not logged | T50-33 |
 | M11 | 3, 4 | End time read from the file held to `MaintenanceMaxHours` from now | T50-30 |
@@ -894,7 +1007,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | Q6 | 7 | Rollback: an older SRRVRR ignores a newer file | T49-14, T50-29 |
 | SEC1 | 8 | Firewall local network only, named and grouped per copy | T48-44, T48-48 |
 | SEC2 | 8 | Only `POST /maintenance` changes anything | T47-36, T47-38, T50-36, T50-38 |
-| SEC3 | 8 | Logs hold no names; logs writable only by SYSTEM and Administrators | T48-18, T49-25, T50-19, T50-44 |
+| SEC3 | 8 | Logs hold no names; logs writable only by SYSTEM and Administrators (0.9: the four transfer events log the account, Q8; never file names) | T48-18, T49-25, T50-19, T50-44, T77-11, T78-05, T78-11 |
 | SEC4 | 8 | Code loads only from SRRVRR's own folder; launchers hash `modules\`, `web\` and the DLLs | T47-08, T47-10, T47-22, T51-04 |
 | SEC5 | 8 | The stop signal can't be taken over | T48-33, T48-34, T48-35, T48-36 |
 | SEC6 | 8 | Data never on a share; one copy per data folder | T48-01 to T48-09, T48-15 to T48-17 |
@@ -918,8 +1031,40 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | DF3 | 0.8 s3 | Counts, not names, in the drive events | T65-05 |
 | DF4 | 0.8 s3 | `DriveWarnPercent` and `DriveFullPercent`: 50 to 99, warn below full, documented | T65-06, T65-10, T65-12 |
 | DF5 | 0.8 s3 | The Storage bar colors from the server's level | T65-08 |
+| TR1 | 0.9 s6, Q1 | SMB share and session counters read in the fast loop, unelevated; without them the card says so and the rest runs | T76-01, T76-02, T76-03, T76-24 |
+| TR2 | 0.9 s1, s3 | Share rows: read, write, open files, seconds per request, queue, drive; `IPC$` dropped, admin shares kept; up to 32 with traffic or open files | T76-01, T76-10, T76-12, T76-18, T76-25 |
+| TR3 | 0.9 s2, Q4 | The bottleneck: link, share drive or CPU at `BottleneckPercent` or above, else "not the server"; "Idle" below 1 MB/s; ties link, drive, CPU | T76-04 to T76-08, T76-25 |
+| TR4 | 0.9 s2 | A new name holds 2 seconds; the raw percents every second | T76-09 |
+| TR5 | 0.9 s1 | The card: the bottleneck line in plain words with its three numbers, the share rows, the graph with the 60 s and 15 min buttons | T76-17, T76-18, T76-25 |
+| TR6 | 0.9 s8 | `/stats` `transfers` with its keys and bounds; `/history` `smbRead` and `smbWrite`; an older version ignores both | T76-12, T76-13, T76-14, T76-24 |
+| TR7 | 0.9 s7 | `BottleneckPercent`: 50 to 99, documented | T76-15, T76-16 |
+| TR8 | 0.9 s5, Q3 | One address match: IPv4-mapped, zone ids, case; loopback and the server's own addresses always match | T76-19, T76-20, T76-21, T78-14, T79-03 |
+| TR9 | 0.9 s6, Q2 | Share-to-drive from `Win32_Share` every 60 s, CIM classes queried directly (no SmbShare module), errors on the sampler-error path | T76-10, T76-11, T76-22 |
+| BU1 | 0.9 s4, Q5 | A burst: `BurstFiles` files opened within `BurstWindowSeconds`, counting writing seconds only; ends after `BurstQuietMinutes`; closer rises are one burst | T77-01 to T77-05 |
+| BU2 | 0.9 s4, Q6 | `write-burst` and `write-burst-ended`: flags, keys with the start time, folders and counts only | T77-06, T77-07, T77-10, T77-17 |
+| BU3 | 0.9 s4 | A burst open at a clean stop gets its ended event, `reason` `stopped` | T77-09, T77-17 |
+| BU4 | 0.9 Q11 | Unelevated: "a PC (needs administrator)" with its session id, no folders | T77-08, T77-17 |
+| BU5 | 0.9 s7 | The three burst settings: ranges, documented | T77-13, T77-14 |
+| BU6 | 0.9 s4 | Flags past the daily cap, at most one pair per PC per quiet time, Maintenance silences banners only | T77-10, T77-11, T77-12 |
+| BU7 | 0.9 s1 | Banners and the Flagged list name the burst's PC, files and folders | T77-15 |
+| PC1 | 0.9 s6, Q11 | Sessions and open files from CIM, elevated only, every 5 s busy and 30 s idle; unelevated: "PCs and folders need administrator" | T76-11, T78-16, T78-20, T78-21 |
+| PC2 | 0.9 s3 | Sessions joined into PCs by address: account, SMB version, signing and encryption | T78-01, T78-02, T78-03, T78-08 |
+| PC3 | 0.9 s3 | Folders: relative to the share, 3 levels and 120 characters, 10 per PC; file names never stored, sent or logged | T78-04, T78-05, T78-21 |
+| PC4 | 0.9 s3 | Bounds: 64 PCs, 5,000 open files ("more than 5,000 open files") | T78-07, T78-20 |
+| PC5 | 0.9 s7 | `NamedPCs` and `TransferFolders`: the rules, one plain message each, documented | T78-12, T78-13, T78-14, T78-15 |
+| PC6 | 0.9 s4, Q7 | `unknown-pc` once per connection, `unknown-pc-write` on its first write; none unelevated | T78-09, T78-10, T78-19, T78-21 |
+| PC7 | 0.9 Q8 | Event data: the friendly name or `unknown`, the address and the account, logged for the four new types only | T77-07, T78-11 |
+| PC8 | 0.9 s1 | PC rows: name or amber address, account, speeds, open files, writing, folders, red during a burst | T78-08, T78-18, T78-21 |
+| PC9 | 0.9 s9 | The recording tool checks the fixtures' shapes against real output, anonymized | T78-17, T78-21 |
+| PC10 | 0.9 s3, s7 | `TransferFolders = $false` keeps counts only, everywhere | T77-07, T78-06 |
+| NM1 | 0.9 s5, Q9 | `POST /maintenance` from an address not named: 403 `not a named PC`, after the guard and before the rate limit; only the connection's address counts | T79-01, T79-02, T79-03, T79-07, T79-08 |
+| NM2 | 0.9 s5, Q10 | The server itself always counts as named; with no `NamedPCs`, only the server, and the startup log says so | T76-20, T79-03, T79-04 |
+| NM3 | 0.9 s5 | Refusals counted in the minute line with up to 5 addresses, never one line each | T79-05 |
+| NM4 | 0.9 s5 | `/stats` `viewer` from the address alone | T79-06 |
+| NM5 | 0.9 s5, Q9 | The page: the box disabled with the address it was seen as; "Viewing from" a named PC | T79-09, T79-10, T79-13 |
+| NM6 | 0.9 Q10 | README and the release notes: named PCs only, add `NamedPCs` before installing | T79-11 |
 
-**Coverage of this table:** 151 requirement rows (135 for v0.7.0, 16 for v0.8.0); every one has at least one test id. Automated tests exist for
+**Coverage of this table:** 183 requirement rows (135 for v0.7.0, 16 for v0.8.0, 32 for v0.9.0); every one has at least one test id. Automated tests exist for
 all but B8, M8 (the accepted risk), S13 (the loss on a closed window), the three-in-a-row switch in Q2, the habit
 in Q3, the release ordering in Q5, and the launcher's own log in DEP3: those are UAT or owner decisions, as noted.
 
