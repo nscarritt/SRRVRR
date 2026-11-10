@@ -57,7 +57,8 @@ function Get-SmbOpenFileList {
             Permissions = [long]$_.Permissions; Signed = [bool]$_.Signed; Encrypted = [bool]$_.Encrypted
         }
     }
-}function Get-SrrFileSystem([string]$Path) { [IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveFormat }
+}
+function Get-SrrFileSystem([string]$Path) { [IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveFormat }
 function Test-Elevated { ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
 function Get-SrrDriveType([string]$Path) { [string]([IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveType) }
 # The folder, and its state\ and logs\ when they're there (an administrator run may have closed them to others).
