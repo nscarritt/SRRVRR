@@ -171,9 +171,16 @@ function New-TransfersSnapshot {
         [bool]$Elevated, [bool]$Capped, $UpdatedMs, [int]$MaxShares = 32
     )
     $index = ConvertTo-ShareIndex $ShareList
-    $rows = @(@($Reading.shares) | Where-Object { $_.readBps + $_.writeBps -gt 0 -or $_.openFiles -gt 0 } |
-        Sort-Object -Property @{ Expression = { $_.readBps + $_.writeBps }; Descending = $true }, @{ Expression = { $_.name }; Descending = $false } |
-        Select-Object -First $MaxShares)
+    # The rows with traffic or open files, busiest first (a plain insertion sort: this runs every second, and the
+    # pipeline cmdlets cost more than the whole rest of the tick).
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($x in @($Reading.shares)) {
+        if ($x.readBps + $x.writeBps -le 0 -and $x.openFiles -le 0) { continue }
+        $at = $rows.Count
+        while ($at -gt 0 -and ($rows[$at - 1].readBps + $rows[$at - 1].writeBps) -lt ($x.readBps + $x.writeBps)) { $at-- }
+        $rows.Insert($at, $x)
+    }
+    if ($rows.Count -gt $MaxShares) { $rows.RemoveRange($MaxShares, $rows.Count - $MaxShares) }
     $shares = @()
     foreach ($s in $rows) {
         $entry = $index[[string]$s.name]
@@ -182,8 +189,7 @@ function New-TransfersSnapshot {
         if ($entry) { $row.name = $entry.name }
         $row.drive = if ($entry) { $entry.drive } else { $null }
         $shares += $row
-    }
-    $reason = if (-not $Reading.available) { 'SMB counters are not available' }
+    }    $reason = if (-not $Reading.available) { 'SMB counters are not available' }
               elseif (-not $Elevated) { 'PCs and folders need administrator' }
               elseif ($Capped) { 'more than 5,000 open files' }
               else { $null }
@@ -200,7 +206,9 @@ function Invoke-TransferTick {
     $Monitor.BurstList = @(Update-WriteBursts -State $Monitor.Bursts -Pcs $pcs -Shares @($Reading.shares) -NowMs $NowMs `
         -Files $Monitor.BurstFiles -WindowSeconds $Monitor.BurstWindowSeconds -QuietMs ([long]$Monitor.BurstQuietMinutes * 60000))
     $rows = @(Get-TransferPcRows -Pcs $pcs -SessionPcs $Monitor.SessionPcs -PcFolders $Monitor.PcFolders -Bursts $Monitor.BurstList)
-    $Monitor.Busy = [bool]($Reading.readBps + $Reading.writeBps -gt 0 -or @(@($Reading.shares) | Where-Object { $_.openFiles -gt 0 }).Count)
+    $busy = $Reading.readBps + $Reading.writeBps -gt 0
+    foreach ($x in @($Reading.shares)) { if ($x.openFiles -gt 0) { $busy = $true } }
+    $Monitor.Busy = $busy
     $State.transfers = New-TransfersSnapshot -Reading $Reading -Bottleneck $bottleneck -ShareList @($Monitor.Shares) -PcRows $rows `
         -Elevated ([bool]$Monitor.Elevated) -Capped ([bool]$Monitor.OpenFilesCapped) -UpdatedMs $Monitor.UpdatedMs
     if ($History) {

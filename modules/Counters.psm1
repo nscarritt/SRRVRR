@@ -77,66 +77,82 @@ function Get-SmbCounterReading {
     foreach ($c in 'SMB Server Shares', 'SMB Server Sessions') {
         if (-not $Previous -or -not $Current -or -not $Previous.ContainsKey($c) -or -not $Current.ContainsKey($c)) { return $out }
     }
-    $sh = 'SMB Server Shares'; $se = 'SMB Server Sessions'
-    $read = Get-CounterDelta $Previous $Current $sh 'read bytes/sec'
-    $write = Get-CounterDelta $Previous $Current $sh 'write bytes/sec'
-    $open = Get-CounterDelta $Previous $Current $sh 'current open file count'
-    $secs = Get-CounterDelta $Previous $Current $sh 'avg. sec/request'
-    $queue = Get-CounterDelta $Previous $Current $sh 'current data queue length'
-    $shares = @(); $readTotal = 0.0; $writeTotal = 0.0
-    foreach ($inst in $read.Keys) {
-        $name = $inst -replace '^.*\\', ''
-        if ($name -eq '_total' -or $name -eq 'ipc$') { continue }
-        $r = [math]::Round([double]$read[$inst]); $w = if ($write.ContainsKey($inst)) { [math]::Round([double]$write[$inst]) } else { 0 }
-        $readTotal += $r; $writeTotal += $w
-        $shares += @{
-            name = $name; readBps = $r; writeBps = $w
-            openFiles = if ($open.ContainsKey($inst)) { [int]$open[$inst] } else { 0 }
-            secPerRequest = if ($secs.ContainsKey($inst)) { [math]::Round([double]$secs[$inst], 4) } else { 0 }
-            queue = if ($queue.ContainsKey($inst)) { [int]$queue[$inst] } else { 0 }
+    # Plain loops over the counters' own tables, with no helper call per value: this runs every second inside the tick.
+    $calc = [Diagnostics.CounterSample]
+    $pS = $Previous['SMB Server Shares']; $cS = $Current['SMB Server Shares']
+    $shares = New-Object System.Collections.Generic.List[object]; $readTotal = 0.0; $writeTotal = 0.0
+    $nowRead = $cS['read bytes/sec']; $oldRead = $pS['read bytes/sec']
+    if ($nowRead -and $oldRead) {
+        $nowWrite = $cS['write bytes/sec']; $oldWrite = $pS['write bytes/sec']
+        $nowOpen = $cS['current open file count']; $nowSecs = $cS['avg. sec/request']; $oldSecs = $pS['avg. sec/request']; $nowQueue = $cS['current data queue length']
+        foreach ($inst in $nowRead.Keys) {
+            $name = $inst -replace '^.*\\', ''
+            if ($name -eq '_total' -or $name -eq 'ipc$') { continue }
+            $o = $oldRead[$inst]; if (-not $o) { continue }
+            $r = [math]::Round([double]$calc::Calculate($o.Sample, $nowRead[$inst].Sample)); $w = 0
+            if ($nowWrite -and $oldWrite -and $oldWrite[$inst]) { $w = [math]::Round([double]$calc::Calculate($oldWrite[$inst].Sample, $nowWrite[$inst].Sample)) }
+            $readTotal += $r; $writeTotal += $w
+            $secs = 0
+            if ($nowSecs -and $oldSecs -and $oldSecs[$inst]) { $secs = [math]::Round([double]$calc::Calculate($oldSecs[$inst].Sample, $nowSecs[$inst].Sample), 4) }
+            $shares.Add(@{
+                name = $name; readBps = $r; writeBps = $w
+                openFiles = $(if ($nowOpen -and $nowOpen[$inst]) { [int]$nowOpen[$inst].RawValue } else { 0 })
+                secPerRequest = $secs
+                queue = $(if ($nowQueue -and $nowQueue[$inst]) { [int]$nowQueue[$inst].RawValue } else { 0 })   # a count at this moment: no delta
+            })
         }
     }
-    $sRead = Get-CounterDelta $Previous $Current $se 'read bytes/sec'
-    $sWrite = Get-CounterDelta $Previous $Current $se 'write bytes/sec'
-    $sOpen = Get-CounterDelta $Previous $Current $se 'current open file count'
-    $sOpened = Get-CounterDelta $Previous $Current $se 'files opened/sec'
-    $sessions = @()
-    foreach ($id in $sRead.Keys) {
-        if ($id -eq '_total') { continue }
-        $sessions += @{
-            id = [string]$id; readBps = [math]::Round([double]$sRead[$id])
-            writeBps = if ($sWrite.ContainsKey($id)) { [math]::Round([double]$sWrite[$id]) } else { 0 }
-            openFiles = if ($sOpen.ContainsKey($id)) { [int]$sOpen[$id] } else { 0 }
-            filesOpened = if ($sOpened.ContainsKey($id)) { [int][math]::Round([double]$sOpened[$id]) } else { 0 }
+    $pE = $Previous['SMB Server Sessions']; $cE = $Current['SMB Server Sessions']
+    $sessions = New-Object System.Collections.Generic.List[object]
+    $nowRead = $cE['read bytes/sec']; $oldRead = $pE['read bytes/sec']
+    if ($nowRead -and $oldRead) {
+        $nowWrite = $cE['write bytes/sec']; $oldWrite = $pE['write bytes/sec']; $nowOpen = $cE['current open file count']
+        $nowOpened = $cE['files opened/sec']; $oldOpened = $pE['files opened/sec']
+        foreach ($id in $nowRead.Keys) {
+            if ($id -eq '_total') { continue }
+            $o = $oldRead[$id]; if (-not $o) { continue }
+            $w = 0; $opened = 0
+            if ($nowWrite -and $oldWrite -and $oldWrite[$id]) { $w = [math]::Round([double]$calc::Calculate($oldWrite[$id].Sample, $nowWrite[$id].Sample)) }
+            if ($nowOpened -and $oldOpened -and $oldOpened[$id]) { $opened = [int][math]::Round([double]$calc::Calculate($oldOpened[$id].Sample, $nowOpened[$id].Sample)) }
+            $sessions.Add(@{
+                id = [string]$id; readBps = [math]::Round([double]$calc::Calculate($o.Sample, $nowRead[$id].Sample)); writeBps = $w
+                openFiles = $(if ($nowOpen -and $nowOpen[$id]) { [int]$nowOpen[$id].RawValue } else { 0 }); filesOpened = $opened
+            })
         }
     }
     # Adapters that report a Current Bandwidth (bits per second); the others (loopback, tunnels) have no limit to hit.
-    $speed = Get-CounterDelta $Previous $Current 'Network Interface' 'Current Bandwidth'
-    $recv = Get-CounterDelta $Previous $Current 'Network Interface' 'Bytes Received/sec'
-    $sent = Get-CounterDelta $Previous $Current 'Network Interface' 'Bytes Sent/sec'
-    $links = @()
-    foreach ($nic in $speed.Keys) {
-        if ($speed[$nic] -le 0) { continue }
-        $links += @{
-            inBps = if ($recv.ContainsKey($nic)) { [math]::Round([double]$recv[$nic]) } else { 0 }
-            outBps = if ($sent.ContainsKey($nic)) { [math]::Round([double]$sent[$nic]) } else { 0 }
-            speedBits = [double]$speed[$nic]
+    $links = New-Object System.Collections.Generic.List[object]
+    if ($Current.ContainsKey('Network Interface') -and $Previous.ContainsKey('Network Interface')) {
+        $cN = $Current['Network Interface']; $pN = $Previous['Network Interface']
+        $speed = $cN['current bandwidth']; $nowRecv = $cN['bytes received/sec']; $oldRecv = $pN['bytes received/sec']; $nowSent = $cN['bytes sent/sec']; $oldSent = $pN['bytes sent/sec']
+        if ($speed) {
+            foreach ($nic in $speed.Keys) {
+                $bw = [double]$speed[$nic].RawValue
+                if ($bw -le 0) { continue }
+                $in = 0; $outB = 0
+                if ($nowRecv -and $oldRecv -and $oldRecv[$nic]) { $in = [math]::Round([double]$calc::Calculate($oldRecv[$nic].Sample, $nowRecv[$nic].Sample)) }
+                if ($nowSent -and $oldSent -and $oldSent[$nic]) { $outB = [math]::Round([double]$calc::Calculate($oldSent[$nic].Sample, $nowSent[$nic].Sample)) }
+                $links.Add(@{ inBps = $in; outBps = $outB; speedBits = $bw })
+            }
         }
     }
     # Drive letters only; busy is 100 minus the idle time (which can read a little over 100).
-    $idle = Get-CounterDelta $Previous $Current 'LogicalDisk' '% Idle Time'
-    $dq = Get-CounterDelta $Previous $Current 'LogicalDisk' 'Current Disk Queue Length'
     $drives = @{}
-    foreach ($k in $idle.Keys) {
-        if ($k -notmatch '^[A-Za-z]:$') { continue }
-        $drives[$k.ToUpper()] = @{
-            busy = [math]::Round([math]::Max(0.0, [math]::Min(100.0, 100 - [double]$idle[$k])), 1)
-            queue = if ($dq.ContainsKey($k)) { [int][math]::Round([double]$dq[$k]) } else { 0 }
+    if ($Current.ContainsKey('LogicalDisk') -and $Previous.ContainsKey('LogicalDisk')) {
+        $nowIdle = $Current['LogicalDisk']['% idle time']; $oldIdle = $Previous['LogicalDisk']['% idle time']; $dq = $Current['LogicalDisk']['current disk queue length']
+        if ($nowIdle -and $oldIdle) {
+            foreach ($k in $nowIdle.Keys) {
+                if ($k -notmatch '^[A-Za-z]:$' -or -not $oldIdle[$k]) { continue }
+                $idle = [double]$calc::Calculate($oldIdle[$k].Sample, $nowIdle[$k].Sample)
+                $drives[$k.ToUpper()] = @{
+                    busy = [math]::Round([math]::Max(0.0, [math]::Min(100.0, 100 - $idle)), 1)
+                    queue = $(if ($dq -and $dq[$k]) { [int]$dq[$k].RawValue } else { 0 })
+                }
+            }
         }
     }
-    @{ available = $true; readBps = $readTotal; writeBps = $writeTotal; shares = $shares; sessions = $sessions; links = $links; drives = $drives }
+    @{ available = $true; readBps = $readTotal; writeBps = $writeTotal; shares = $shares.ToArray(); sessions = $sessions.ToArray(); links = $links.ToArray(); drives = $drives }
 }
-
 # Process id -> private working set, from the Process category.
 function Get-PrivateMemory($Current) {
     $out = @{}
