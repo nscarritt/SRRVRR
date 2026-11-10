@@ -129,15 +129,6 @@ Settings), and install a boot launcher release that knows the new `modules` and 
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - **The README says what SRRVRR promises a boot launcher** ("Running SRRVRR at boot"): how to start it,
   that a hash-checking launcher must cover every file under `modules\` and `web\` (and must be updated
   first), the exit codes and when to restart, the stop signal and `state\stop-requested`, and where the
@@ -203,15 +194,6 @@ logo and the temperature, and SRRVRR is easier to start, stop and set up.
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - **`Start SRRVRR.bat` asks for administrator on its own**, so a plain double-click starts the
   version other PCs can open. Saying No still starts it without administrator, as before.
   Before, a double-click quietly started the local-only version, and other PCs got "Bad
@@ -250,15 +232,6 @@ Alerts: know when someone joins Valheim or starts a Plex stream, with an optiona
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - **Drive read/write column**: fixed-width cells that don't shift as numbers change, units that
   scale from B/s to GB/s, and colors by load: amber at 70% and red at 90% of the drive's typical
   maximum for its type (NVMe, SATA SSD, hard drive, USB), raised to the fastest speed seen.
@@ -282,15 +255,6 @@ Storage polish and friendlier guidance.
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - Storage card usage bars are about half as wide, to make room and reduce visual weight.
   ([#23](https://github.com/nscarritt/SRRVRR/pull/23))
 - When a Valheim server never answers the status query, the message now names the fix: start it
@@ -318,15 +282,6 @@ What the servers are doing: Plex streams and Valheim players, without adding vis
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - **License changed from MIT to the
   [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)**:
   noncommercial use only. Versions 0.1.0 to 0.3.0 remain available under MIT.
@@ -360,15 +315,6 @@ Server health at a glance: storage, uptime and restarts, and GPU temperature.
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - Startup step 5 is now "Starting the background samplers" and lists what each sampler checks
   and how often. ([#14](https://github.com/nscarritt/SRRVRR/pull/14))
 
@@ -409,15 +355,6 @@ the rename from System Monitor to SRRVRR.
 
 ### Changed
 
-- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
-  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
-  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
-  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
-  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
-  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
-  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
-  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
-  this, any device that could open the page could.
 - **Renamed from System Monitor to SRRVRR**: the repository, files (`SRRVRR.ps1`,
   `Start SRRVRR.bat`, `SRRVRR.config.psd1`), console messages and firewall rule names. The page
   title and header always read "SRRVRR". ([#12](https://github.com/nscarritt/SRRVRR/pull/12))
