@@ -230,13 +230,38 @@ function New-RateLimiter {
     $l
 }
 
-# POST /maintenance from start to finish: the guard (header, content type, Origin), then the body, then the rate
-# limit, then the change. Returns @{ Status; Body (for JSON); Change (the change record, or $null) }. The address
-# is the connection's own; no header can change it.
+# Counts the requests refused because the address isn't a named PC (spec 0.9.0 section 5): they are counted, never
+# logged one by one. Add(address) counts one; Take() returns @{ Count; Addresses } (the first 5 different addresses
+# seen since the last Take) and starts again. Only the count and 5 addresses are ever held, however many refusals.
+function New-RefusalCounter {
+    $c = [pscustomobject]@{ Count = 0; Addresses = (New-Object System.Collections.Generic.List[string]) }
+    $c | Add-Member ScriptMethod Add {
+        param([string]$Address)
+        $this.Count++
+        $a = if ($Address) { $Address } else { 'unknown' }
+        if ($this.Addresses.Count -lt 5 -and -not $this.Addresses.Contains($a)) { $this.Addresses.Add($a) }
+    }
+    $c | Add-Member ScriptMethod Take {
+        $r = @{ Count = $this.Count; Addresses = @($this.Addresses) }
+        $this.Count = 0; $this.Addresses = New-Object System.Collections.Generic.List[string]
+        $r
+    }
+    $c
+}
+
+# POST /maintenance from start to finish: the guard (header, content type, Origin), then the named-PC check, then the
+# body, then the rate limit, then the change. Returns @{ Status; Body (for JSON); Change (the change record, or
+# $null) }. The address is the connection's own; no header can change it. -Named is whether that address is a named
+# PC or the server itself (the caller decides, from the address alone); $false is 403 and counted in -Refusals.
 function Invoke-MaintenanceChange {
-    param($Headers, [string]$Body, [string]$Address, [object]$State, [object]$Limiter, [hashtable]$Identity, [int]$Port)
+    param($Headers, [string]$Body, [string]$Address, [object]$State, [object]$Limiter, [hashtable]$Identity, [int]$Port,
+        [bool]$Named = $true, [object]$Refusals = $null)
     $guard = Test-MaintenanceRequest -Headers $Headers -Identity $Identity -Port $Port
     if (-not $guard.Ok) { return @{ Status = $guard.Status; Body = @{ error = 'refused' }; Change = $null } }
+    if (-not $Named) {
+        if ($Refusals) { $Refusals.Add($Address) }
+        return @{ Status = 403; Body = @{ error = 'not a named PC' }; Change = $null }
+    }
     $parsed = ConvertFrom-MaintenanceBody -Body $Body
     if (-not $parsed.Ok) { return @{ Status = $parsed.Status; Body = @{ error = 'send {"on": true} or {"on": false}' }; Change = $null } }
     if (-not $Limiter.Allow($Address)) { return @{ Status = 429; Body = @{ error = 'too many changes; try again in a few seconds' }; Change = $null } }
@@ -245,4 +270,4 @@ function Invoke-MaintenanceChange {
 }
 
 Export-ModuleMember -Function New-MaintenanceState, Save-Maintenance, Import-Maintenance, ConvertFrom-MaintenanceBody,
-    Test-MaintenanceRequest, New-RateLimiter, Invoke-MaintenanceChange
+    Test-MaintenanceRequest, New-RateLimiter, New-RefusalCounter, Invoke-MaintenanceChange
