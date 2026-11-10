@@ -1,0 +1,8 @@
+[
+  { "SessionId": "1001", "Path": "D:\\Lab\\Media\\Movies\\CanaryFilmQx7.mkv", "ShareRelativePath": "Movies\\CanaryFilmQx7.mkv", "Permissions": 1179785, "Signed": true, "Encrypted": false },
+  { "SessionId": "1001", "Path": "D:\\Lab\\Docs\\Reports\\2026\\CanaryReportZk3.docx", "ShareRelativePath": "Reports\\2026\\CanaryReportZk3.docx", "Permissions": 1342177286, "Signed": true, "Encrypted": false },
+  { "SessionId": "1002", "Path": "D:\\Lab\\Docs\\Reports\\2026\\CanaryBudgetVp9.xlsx", "ShareRelativePath": "Reports\\2026\\CanaryBudgetVp9.xlsx", "Permissions": 1179785, "Signed": true, "Encrypted": false },
+  { "SessionId": "1003", "Path": "D:\\Lab\\Docs\\CanaryRootNoteJw2.txt", "ShareRelativePath": "CanaryRootNoteJw2.txt", "Permissions": 1342177286, "Signed": true, "Encrypted": true },
+  { "SessionId": "1004", "Path": "D:\\Lab\\Media\\Archive\\Old\\CanaryClipHd5.mp4", "ShareRelativePath": "Old\\CanaryClipHd5.mp4", "Permissions": 1179785, "Signed": true, "Encrypted": false },
+  { "SessionId": "1005", "Path": "E:\\Scratch\\Upload\\Batch1\\CanaryDumpLt8.bin", "ShareRelativePath": "Upload\\Batch1\\CanaryDumpLt8.bin", "Permissions": 1342177286, "Signed": false, "Encrypted": false }
+]

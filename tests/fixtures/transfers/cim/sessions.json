@@ -1,0 +1,8 @@
+[
+  { "SessionId": "1001", "ClientComputerName": "192.0.2.10", "ClientUserName": "TESTLAB\\desk-user", "Dialect": "3.1.1" },
+  { "SessionId": "1002", "ClientComputerName": "192.0.2.10", "ClientUserName": "TESTLAB\\desk-user", "Dialect": "3.1.1" },
+  { "SessionId": "1003", "ClientComputerName": "[fe80::5%3]", "ClientUserName": "TESTLAB\\laptop-user", "Dialect": "3.1.1" },
+  { "SessionId": "1004", "ClientComputerName": "::ffff:192.0.2.20", "ClientUserName": "TESTLAB\\media-user", "Dialect": "3.0.2" },
+  { "SessionId": "1005", "ClientComputerName": "192.0.2.99", "ClientUserName": "TESTLAB\\guest-user", "Dialect": "3.1.1" },
+  { "SessionId": "1006", "ClientComputerName": "192.0.2.5", "ClientUserName": "TESTLAB\\svc-backup", "Dialect": "3.1.1" }
+]

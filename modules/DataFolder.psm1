@@ -41,7 +41,23 @@ function Test-PathInShare {
 # OS wrappers, kept small so tests can replace them.
 # The comma keeps an empty list a list: a machine with no shares must not look like one whose list can't be read.
 function Get-ShareList { , @(Get-CimInstance -ClassName Win32_Share -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Path = $_.Path; Type = [long]$_.Type } }) }
-function Get-SrrFileSystem([string]$Path) { [IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveFormat }
+# The SMB sessions and open files (spec section 6; administrator only, so callers wrap them in try). The CIM classes
+# are read directly, not through the SmbShare module, to avoid its load time. An open file's Path is the only place a
+# file's name appears; Get-SessionPcs cuts it down to a folder at once. Both return their items (an empty list is nothing).
+function Get-SmbSessionList {
+    Get-CimInstance -Namespace 'root/Microsoft/Windows/SMB' -ClassName MSFT_SmbSession -ErrorAction Stop | ForEach-Object {
+        [pscustomobject]@{ SessionId = [string]$_.SessionId; ClientComputerName = [string]$_.ClientComputerName; ClientUserName = [string]$_.ClientUserName; Dialect = [string]$_.Dialect }
+    }
+}
+# Cut at 5,001 files: one past the 5,000 that are used, so the caller can tell the list was cut.
+function Get-SmbOpenFileList {
+    Get-CimInstance -Namespace 'root/Microsoft/Windows/SMB' -ClassName MSFT_SmbOpenFile -ErrorAction Stop | Select-Object -First 5001 | ForEach-Object {
+        [pscustomobject]@{
+            SessionId = [string]$_.SessionId; Path = [string]$_.Path; ShareRelativePath = [string]$_.ShareRelativePath
+            Permissions = [long]$_.Permissions; Signed = [bool]$_.Signed; Encrypted = [bool]$_.Encrypted
+        }
+    }
+}function Get-SrrFileSystem([string]$Path) { [IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveFormat }
 function Test-Elevated { ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
 function Get-SrrDriveType([string]$Path) { [string]([IO.DriveInfo]::new([IO.Path]::GetPathRoot((Resolve-SrrPath $Path))).DriveType) }
 # The folder, and its state\ and logs\ when they're there (an administrator run may have closed them to others).
@@ -213,5 +229,5 @@ function Get-DriveLevel {
     'ok'
 }
 
-Export-ModuleMember -Function Select-DrivesToShow, Get-DriveLevel, Resolve-SrrPath, Test-PathInShare, Get-ShareList, Test-Elevated, Get-SrrDriveType, Test-FolderWritable,
+Export-ModuleMember -Function Select-DrivesToShow, Get-DriveLevel, Resolve-SrrPath, Test-PathInShare, Get-ShareList, Get-SmbSessionList, Get-SmbOpenFileList, Test-Elevated, Get-SrrDriveType, Test-FolderWritable,
     Test-LockHeld, Resolve-DataPath, Get-DataFolderAclPlan, Set-DataFolderAcl, New-DataFolder
