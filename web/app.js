@@ -294,9 +294,9 @@ function pcFolderHtml(f) {
 function pcRowsHtml(t, open) {
   if (!t) return '';
   const pcs = Array.isArray(t.pcs) ? t.pcs : [];
-  const note = t.reason ? '<div class="fnone">' + esc(t.reason) + '</div>' : '';
-  if (!pcs.length) return note || '<div class="fnone">No PCs connected to the shares.</div>';
-  return note + pcs.map((p, i) => {
+  // The reason (needs administrator, more than 5,000 open files) is the card's own note (#tnote), shown once.
+  if (!pcs.length) return t.reason ? '' : '<div class="fnone">No PCs connected to the shares.</div>';
+  return pcs.map((p, i) => {
     const key = p.address || 'pc' + i, isOpen = !!(open && open.has(key));
     const who = p.name || p.address || 'A PC';
     const unknown = !p.known && !!p.address;                // an address nobody listed in NamedPCs: amber

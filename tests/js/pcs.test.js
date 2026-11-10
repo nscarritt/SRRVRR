@@ -72,12 +72,12 @@ test('T78-18 names and folders with markup are escaped', () => {
   assert.match(html, /&lt;b&gt;x&lt;\/b&gt;/);
 });
 
-test('T78-18 no PCs says so; a reason is shown as a line; nothing without a transfers object', () => {
+test('T78-18 no PCs says so; a reason is left to the card note; nothing without a transfers object', () => {
   assert.match(pcRowsHtml({ pcs: [], reason: null }), /No PCs connected to the shares\./);
-  assert.match(pcRowsHtml({ pcs: [], reason: 'PCs and folders need administrator' }), /PCs and folders need administrator/);
+  assert.strictEqual(pcRowsHtml({ pcs: [], reason: 'PCs and folders need administrator' }), '');   // the card's note says it, once
   assert.doesNotMatch(pcRowsHtml({ pcs: [], reason: 'PCs and folders need administrator' }), /No PCs connected/);
   const capped = pcRowsHtml({ pcs: [pc({})], reason: 'more than 5,000 open files' });
-  assert.match(capped, /more than 5,000 open files/);
+  assert.doesNotMatch(capped, /more than 5,000 open files/);   // the card's note says it, once
   assert.match(capped, /192\.0\.2\.99/);
   assert.strictEqual(pcRowsHtml(undefined), '');
 });
