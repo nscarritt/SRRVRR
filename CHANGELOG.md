@@ -9,6 +9,14 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-11
+
+Alerts and drives: the page and `/stats` show which version is running, every alert says when it happened in
+one 12-hour format, banners stay a minute, a drive that is filling or almost full raises an alert, and the event
+log's day window is right across clock changes. **Upgrading:** replace the code folders and files (see the
+README's Settings) and install a boot launcher release that writes `VERSION` and knows the new files first. The two
+new settings are optional; an older version warns about and ignores them.
+
 ### Added
 
 - Tests for clock changes and midnight (`tests\Clock.Tests.ps1`): dated log files, log retention, the /events
@@ -375,7 +383,8 @@ First version, as "System Monitor".
 - `-OpenFirewall` switch to add a Windows Firewall rule limited to the local network.
 - README with setup and troubleshooting.
 
-[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/nscarritt/SRRVRR/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nscarritt/SRRVRR/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nscarritt/SRRVRR/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nscarritt/SRRVRR/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nscarritt/SRRVRR/compare/v0.4.1...v0.5.0
