@@ -111,6 +111,11 @@ Describe 'T76-26 the transfer tick every 5 seconds (design Q1)' {
         Invoke-TransferTick -State $state -Monitor $m -Reading (New-Reading 300) -NowMs 1120000 -History $h
         @(Get-Line $h 'smbRead' | Where-Object { $_ -eq 300 }).Count | Should -Be 60
     }
+    It 'T76-26 a state with no cpu yet (before the fast loop''s first tick) gives no error' {
+        $state = @{}; $m = New-TransferMonitor -Elevated $false
+        { Invoke-TransferTick -State $state -Monitor $m -Reading (New-Reading 100) -NowMs 5000 -History $null } | Should -Not -Throw
+        $state.transfers.bottleneck.cpu.percent | Should -Be 0
+    }
     It 'T76-26 the fast tick reads no SMB counters: the slow sampler reads them, and reports its own time' {
         $script = Get-Content -Raw (Join-Path (Get-RepoRoot) 'SRRVRR.ps1')
         $script | Should -Not -Match "categories \+= 'SMB"

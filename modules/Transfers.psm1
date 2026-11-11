@@ -293,7 +293,10 @@ function Invoke-TransferTick {
     if ($null -ne $Monitor.LastTickMs) { $seconds = [math]::Max(1.0, [math]::Min(60.0, ($NowMs - [long]$Monitor.LastTickMs) / 1000.0)) }
     $Monitor.LastTickMs = $NowMs
     $pcs = @(Group-SessionsByPc -Sessions @($Reading.sessions) -SessionPcs $Monitor.SessionPcs)
-    $bottleneck = Get-Bottleneck -Reading $Reading -Shares @($Monitor.Shares) -Cpu ([double]$State.cpu) `
+    # The fast loop sets cpu; the slow sampler's first pass can come before its first tick (and StrictMode throws on
+    # a missing key).
+    $cpu = if ($State.ContainsKey('cpu')) { [double]$State['cpu'] } else { 0.0 }
+    $bottleneck = Get-Bottleneck -Reading $Reading -Shares @($Monitor.Shares) -Cpu $cpu `
         -Percent $Monitor.BottleneckPercent -Hold $Monitor.Hold -NowMs $NowMs
     $Monitor.BurstList = @(Update-WriteBursts -State $Monitor.Bursts -Pcs $pcs -Shares @($Reading.shares) -NowMs $NowMs `
         -Files $Monitor.BurstFiles -WindowSeconds $Monitor.BurstWindowSeconds -QuietMs ([long]$Monitor.BurstQuietMinutes * 60000) -Seconds $seconds)
