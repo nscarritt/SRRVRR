@@ -772,7 +772,7 @@ plan's "Shared interfaces" (`docs/plans/2026-11-10-srrvrr-v0.9.0-implementation-
 |---|---|---|---|---|---|
 | T76-01 | TR1, TR2 | U | `Get-SmbCounterReading` on two snapshots of `SMB Server Shares` and `SMB Server Sessions` | One share row per share instance (the name after the last backslash) with `readBps`, `writeBps`, `openFiles`, `secPerRequest`, `queue`; `IPC$` and `_Total` dropped, admin shares (`D$`, `ADMIN$`) kept; `readBps` and `writeBps` the share totals | FCR, FX |
 | T76-02 | TR1 | U | The same, sessions | One row per session id (a string), `_Total` dropped; `filesOpened` the per-second rate, rounded | FCR, FX |
-| T76-03 | TR1 | U X | A snapshot without the SMB categories; a first reading (no previous) | `available` false, empty lists, no error; `Invoke-FastTick` still sets every other field and calls the hook | FCR |
+| T76-03 | TR1 | U X | A snapshot without the SMB categories; a first reading (no previous) | `available` false, empty lists, no error; `Invoke-TransferTick` with that reading still sets `transfers` with the reason "SMB counters are not available", and the history points are missing | FCR |
 | T76-04 | TR3 | U | Network adapters with `Current Bandwidth` 1e9, 0 and missing; `LogicalDisk` letters, volumes and `_Total` | `links` only for the 1e9 adapter; `drives` per letter with `busy` = 100 - `% Idle Time` and `queue` | FCR |
 | T76-05 | TR3 | U | `Get-Bottleneck` at 2 MB/s of share traffic with link 94% of 1 Gb/s; drive 98% busy, queue 4; CPU 91% (threshold 80, held past 2 s) | `link`, `drive`, `cpu` in turn, `percent` the named one's, the other numbers alongside | CLK |
 | T76-06 | TR3 | U | Share traffic 1,048,575 and 1,048,576 B/s with CPU 100; a highest percent of 79.9 | `idle` (`percent` `$null`) below the floor; named at the floor; `none` with `percent` 79.9 | - |
@@ -783,7 +783,7 @@ plan's "Shared interfaces" (`docs/plans/2026-11-10-srrvrr-v0.9.0-implementation-
 | T76-11 | TR9, PC1 | U | `Invoke-TransferSample` for ticks 0 to 13, busy and idle, elevated and not, with counting fake readers; a reader that throws | Shares at ticks 0 and 12; sessions and open files only elevated, every tick while busy, every 6th idle; never unelevated; the error reaches the caller and the monitor keeps its last values | - |
 | T76-12 | TR2, TR6 | U | `Invoke-TransferTick` with 40 shares (some idle, no open files), unelevated, and with the SMB categories missing | `transfers` keys exactly `available`, `reason`, `bottleneck`, `shares`, `pcs`, `updatedMs`; bottleneck keys `name`, `percent`, `link`, `drive`, `cpu`; at most 32 shares, busiest first, only those with traffic or open files, each with its `drive`; `reason` "PCs and folders need administrator", or "SMB counters are not available" | FCR |
 | T76-13 | TR6, D6 | I | `GET /stats` from the router with `transfers` (4 PCs with 10 folders each, 8 shares) in the state | The `v0.6.0-shape` fixture still holds; `transfers` as T76-12; that `transfers` is at most 6 KB | FX |
-| T76-14 | TR6 | U | A history store with defaults; a saved file with an unknown extra line; one without `smbRead` | `smbRead` and `smbWrite` registered and appended each second from the share totals; the unknown line ignored and the rest loaded; the file without them loads (rollback both ways) | CLK |
+| T76-14 | TR6 | U | A history store with defaults; a saved file with an unknown extra line; one without `smbRead` | `smbRead` and `smbWrite` registered and appended from the share totals; the unknown line ignored and the rest loaded; the file without them loads (rollback both ways) | CLK |
 | T76-15 | TR7, ST5 | U X | `BottleneckPercent` 49, 100, 80.5, `'80'` | One plain settings error each naming "50 to 99"; 80 by default | - |
 | T76-16 | TR7, ST6 | S | README settings table and How it works, `SRRVRR.config.example.psd1`, `Get-SrrDefaultSettings` | `BottleneckPercent` with the same default and range in all three; How it works names both SMB categories and `transfers` | - |
 | T76-17 | TR5 | J | `bottleneckText` for each name | "Bottleneck: the network link, 94% of 1 Gb/s", "Bottleneck: the share's drive (D:), 98% busy, queue 4", "Bottleneck: the CPU, 91%", "Not the server: the client or the path to it", "Idle"; the small print with the three numbers | - |
@@ -791,10 +791,11 @@ plan's "Shared interfaces" (`docs/plans/2026-11-10-srrvrr-v0.9.0-implementation-
 | T76-19 | TR8 | U | `ConvertTo-PcAddress` on `::ffff:192.0.2.10`, `fe80::1%12`, `[2001:DB8::A]`, `192.0.2.10 `, `not-an-ip`, empty | `192.0.2.10`, `fe80::1`, `2001:db8::a`, `192.0.2.10`, `$null`, `$null` | - |
 | T76-20 | TR8, NM2 | U X | `Find-NamedPC` with an index from two named PCs, server addresses `192.0.2.1`, `2001:db8::1` | A listed address (any case, IPv4-mapped, with a zone id) gives its name and `Known`; `127.0.0.1`, `::1` and the server's addresses `Self` and `Known` with no name; anything else unknown; an empty index leaves only the server known | - |
 | T76-21 | TR8 | U | `New-TransferMonitor` with no v0.9.0 settings, then with all six | Defaults 80, 500, 60, 5, `$true` and an empty index; then the given values and the index from `NamedPCs`; the table is synchronized | - |
-| T76-22 | TR9, F5 | S | `modules\Transfers.psm1` and `SRRVRR.ps1` | The regions Shared, 76, 77, 78, 79 in order; no `Get-SmbShare`, `Get-SmbSession` or `Get-SmbOpenFile` anywhere; `SRRVRR.ps1` passes the monitor to both runspaces, imports the module there by full path, calls `Get-BurstEvents` (also with `-StopMs` in a stop saver) and `Get-UnknownPcEvents` in `Invoke-Watch`, and watches `transfersError` | - |
+| T76-22 | TR9, F5 | S | `modules\Transfers.psm1` and `SRRVRR.ps1` | The regions Shared, 76, 77, 78, 79 in order; no `Get-SmbShare`, `Get-SmbSession` or `Get-SmbOpenFile` anywhere; `SRRVRR.ps1` passes the monitor to the slow runspace, imports the module there by full path, calls `Get-BurstEvents` (also with `-StopMs` in a stop saver) and `Get-UnknownPcEvents` in `Invoke-Watch`, and watches `transfersError` | - |
 | T76-23 | B1, B3, B5, B6 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.8.0's budgets; the tick median within 10% or 5 ms of v0.8.0's | MS |
 | T76-24 | TR1, TR6 | K | An unelevated test build | `/stats` has `transfers` with `reason` "PCs and folders need administrator" (or SMB counters not available, on a machine without them) and `/history` has `smbRead` and `smbWrite` | NTB |
-| T76-25 | TR2, TR3, TR5, B8 | A | `docs\uat\76-bottleneck.md`, unelevated on the server | The owner copies a large file through the loopback name and sees the share row, the graph and the bottleneck line move, then "Idle" | UC |
+| T76-25 | TR2, TR3, TR5, B8 | A | `docs\uat\76-bottleneck.md`, unelevated on the server | The owner copies a 1 to 2 GB file from another PC and sees the share row, the graph and the bottleneck line move within about 10 s, then "Idle" | UC |
+| T76-26 | TR1, TR4, TR6, B9 | U S | `Invoke-TransferTick` called at 5 s and 10 s, then 120 s later, with a history store; `SRRVRR.ps1` and `modules\Counters.psm1` | Each second since the last call gets that call's average in `smbRead`/`smbWrite` (one second on the first call, at most 60); `Monitor.LastTickMs` is the last call; no SMB category in the fast loop's `$categories`; the slow sampler reads `$transferCategories`, calls `Get-SmbCounterReading` with its previous reading and sets `$state.slowMs`; `Counters.psm1` has no SMB code | CLK |
 
 ### 6.11 #77 Write bursts (v0.9.0)
 
@@ -820,6 +821,7 @@ or counter is needed. Files: `tests\Bursts.Tests.ps1`, `tests\js\bursts.test.js`
 | T77-15 | BU7 | J | `bannerFor` for both types, elevated and unelevated, with `reason` `stopped`; `flaggedHtml` with them | "Write burst from Desk PC" with the files, shares and folders; "Write burst from a PC (needs administrator)"; the ended text with files, bytes and the duration, "(SRRVRR stopped)" | - |
 | T77-16 | B1, B3, B5, B6 | P | `tools\Measure-SRRVRR.ps1` on the test build during a loopback copy | Within v0.8.0's budgets; the tick median within 10% or 5 ms | MS |
 | T77-17 | BU2, BU3, BU4, B8 | A | `docs\uat\77-write-bursts.md`, unelevated on the server | The owner sees the banner and both flags for 600 small files, nothing for 300, and the `stopped` end after a stop mid-burst | UC |
+| T77-18 | BU1 | U | `Update-WriteBursts` with 20 files opened a second, read every 5 s with `-Seconds 5`, against the same rate read every second; `Invoke-TransferTick` called every 5 s | Both start one burst of 500 files at the same point; bytes count 5 times the per-second rate; `Invoke-TransferTick` passes the seconds since its last call (the first call counts 1) | CLK |
 
 ### 6.12 #78 PCs and folders (v0.9.0)
 
@@ -888,7 +890,7 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54, T76-23, T77-16, T78-20, T79-12 |
 | B7 | Budgets | Disk writes up to 100 MB a day | T48-69, T49-29, T50-54 |
 | B8 | Budgets | UAT about 15 minutes per PR | UAT only (a duration, timed by the owner): T47-35, T48-70, T49-30, T50-55, T51-10, T76-25, T77-17, T78-21, T79-13 |
-| B9 | Budgets | `tickMs` in `/stats`; `tools\Measure-SRRVRR.ps1`, read-only | T47-16, T47-26, T47-27 |
+| B9 | Budgets | `tickMs` in `/stats` (and from 0.9 `slowMs`, the slow sampler's time per pass, recorded with no budget); `tools\Measure-SRRVRR.ps1`, read-only | T47-16, T47-26, T47-27, T76-26 |
 | B10 | Budgets | `/history` and `/events` 50 ms each | T49-20, T50-43 |
 | B11 | Budgets | Slow new work after serving; share list via CIM | T48-10, T48-51 (plus a `Static.Tests.ps1` check that no module calls `Get-SmbShare`, part of T50-06's AST pass) |
 | F1 | 1 | The files and modules in the spec's table | T47-01, T47-07, T47-09, T47-11 to T47-15, T47-19, T47-31 |
@@ -1031,16 +1033,16 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | DF3 | 0.8 s3 | Counts, not names, in the drive events | T65-05 |
 | DF4 | 0.8 s3 | `DriveWarnPercent` and `DriveFullPercent`: 50 to 99, warn below full, documented | T65-06, T65-10, T65-12 |
 | DF5 | 0.8 s3 | The Storage bar colors from the server's level | T65-08 |
-| TR1 | 0.9 s6, Q1 | SMB share and session counters read in the fast loop, unelevated; without them the card says so and the rest runs | T76-01, T76-02, T76-03, T76-24 |
+| TR1 | 0.9 s6, Q1 | SMB share and session counters read in the slow sampler every 5 s (decided 2026-11-11), unelevated; without them the card says so and the rest runs | T76-01, T76-02, T76-03, T76-24, T76-26 |
 | TR2 | 0.9 s1, s3 | Share rows: read, write, open files, seconds per request, queue, drive; `IPC$` dropped, admin shares kept; up to 32 with traffic or open files | T76-01, T76-10, T76-12, T76-18, T76-25 |
 | TR3 | 0.9 s2, Q4 | The bottleneck: link, share drive or CPU at `BottleneckPercent` or above, else "not the server"; "Idle" below 1 MB/s; ties link, drive, CPU | T76-04 to T76-08, T76-25 |
-| TR4 | 0.9 s2 | A new name holds 2 seconds; the raw percents every second | T76-09 |
+| TR4 | 0.9 s2 | A new name holds 2 seconds (two 5 s readings in a row); the raw percents with every reading | T76-09, T76-26 |
 | TR5 | 0.9 s1 | The card: the bottleneck line in plain words with its three numbers, the share rows, the graph with the 60 s and 15 min buttons | T76-17, T76-18, T76-25 |
-| TR6 | 0.9 s8 | `/stats` `transfers` with its keys and bounds; `/history` `smbRead` and `smbWrite`; an older version ignores both | T76-12, T76-13, T76-14, T76-24 |
+| TR6 | 0.9 s8 | `/stats` `transfers` with its keys and bounds; `/history` `smbRead` and `smbWrite`; an older version ignores both | T76-12, T76-13, T76-14, T76-24, T76-26 |
 | TR7 | 0.9 s7 | `BottleneckPercent`: 50 to 99, documented | T76-15, T76-16 |
 | TR8 | 0.9 s5, Q3 | One address match: IPv4-mapped, zone ids, case; loopback and the server's own addresses always match | T76-19, T76-20, T76-21, T78-14, T79-03 |
 | TR9 | 0.9 s6, Q2 | Share-to-drive from `Win32_Share` every 60 s, CIM classes queried directly (no SmbShare module), errors on the sampler-error path | T76-10, T76-11, T76-22 |
-| BU1 | 0.9 s4, Q5 | A burst: `BurstFiles` files opened within `BurstWindowSeconds`, counting writing seconds only; ends after `BurstQuietMinutes`; closer rises are one burst | T77-01 to T77-05 |
+| BU1 | 0.9 s4, Q5 | A burst: `BurstFiles` files opened within `BurstWindowSeconds`, counting writing seconds only; ends after `BurstQuietMinutes`; closer rises are one burst; a reading's span (`-Seconds`) counts in full | T77-01 to T77-05, T77-18 |
 | BU2 | 0.9 s4, Q6 | `write-burst` and `write-burst-ended`: flags, keys with the start time, folders and counts only | T77-06, T77-07, T77-10, T77-17 |
 | BU3 | 0.9 s4 | A burst open at a clean stop gets its ended event, `reason` `stopped` | T77-09, T77-17 |
 | BU4 | 0.9 Q11 | Unelevated: "a PC (needs administrator)" with its session id, no folders | T77-08, T77-17 |
