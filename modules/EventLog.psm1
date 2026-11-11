@@ -85,14 +85,20 @@ function Initialize-EventIndex {
     $index
 }
 
-# The indexed events from the last Days days (today is day 1, from local midnight in Now's offset), newest first,
-# at most Limit. Memory only: no file is read. Always returns an array, empty when there are none.
+# The indexed events from the last Days days (today is day 1), newest first, at most Limit. The window starts at local
+# midnight of the first day in TimeZone, with the offset that applied at that midnight (a clock change in between
+# makes days of 23 or 25 hours). Memory only: no file is read. Always returns an array, empty when there are none.
 function Get-IndexedEvents {
     param(
         [Parameter(Mandatory)][object]$Index, [Parameter(Mandatory)][ValidateRange(1, 36500)][int]$Days,
-        [Parameter(Mandatory)][DateTimeOffset]$Now, [ValidateRange(1, 1000000)][int]$Limit = 1000
+        [Parameter(Mandatory)][DateTimeOffset]$Now, [ValidateRange(1, 1000000)][int]$Limit = 1000,
+        [TimeZoneInfo]$TimeZone = [TimeZoneInfo]::Local
     )
-    $fromMs = ([DateTimeOffset]::new($Now.Date.AddDays( - ($Days - 1)), $Now.Offset)).ToUnixTimeMilliseconds()
+    $today = [TimeZoneInfo]::ConvertTime($Now, $TimeZone).Date
+    $midnight = [DateTime]::SpecifyKind($today.AddDays( - ($Days - 1)), [DateTimeKind]::Unspecified)
+    # An invalid local midnight (a zone that springs forward at 00:00) starts the window at the change.
+    if ($TimeZone.IsInvalidTime($midnight)) { $midnight = $midnight.AddHours(1) }
+    $fromMs = ([DateTimeOffset]([TimeZoneInfo]::ConvertTimeToUtc($midnight, $TimeZone))).ToUnixTimeMilliseconds()
     $events = $Index.Events
     $out = New-Object System.Collections.Generic.List[object]
     for ($i = $events.Count - 1; $i -ge 0 -and $out.Count -lt $Limit; $i--) {
