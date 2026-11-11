@@ -114,4 +114,22 @@ Describe 'New-TestBuild.ps1 refusals' -Tag 'Integration' {
         [IO.File]::ReadAllText((Join-Path $dest 'TESTBUILD.txt')) | Should -Match 'commit [0-9a-f]{40}'
         (Import-PowerShellDataFile (Join-Path $dest 'SRRVRR.config.psd1')).Port | Should -Be 8093
     }
+    It 'T62-05 writes VERSION as test-REF+COMMIT7, one ASCII line with no BOM' {
+        $dest = Join-Path (New-TestDataPath) 'copy'
+        $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\New-TestBuild.ps1') -Arguments @('-Ref', 'HEAD', '-Destination', $dest, '-Port', '8093')
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $dest 'VERSION'))
+        @($bytes | Where-Object { $_ -lt 0x20 -or $_ -gt 0x7E }) | Should -BeNullOrEmpty   # ASCII, no BOM, no line break
+        $text = [Text.Encoding]::ASCII.GetString($bytes)
+        $text | Should -Match '^test-HEAD\+[0-9a-f]{7}$'
+        $commit = [IO.File]::ReadAllText((Join-Path $dest 'TESTBUILD.txt')) -replace '(?s).*commit ([0-9a-f]{40}).*', '$1'
+        $text | Should -Be ('test-HEAD+' + $commit.Substring(0, 7))
+    }
+    It 'T62-05 keeps letters, digits, dot, underscore, slash and hyphen in the ref and replaces the rest with a hyphen' {
+        Get-TestBuildVersion -Ref 'feature/x' -Commit 'abcdef0123456789' | Should -Be 'test-feature/x+abcdef0'
+        Get-TestBuildVersion -Ref 'my branch' -Commit 'abcdef0123456789' | Should -Be 'test-my-branch+abcdef0'
+        Get-TestBuildVersion -Ref 'a"b''c' -Commit 'abcdef0123456789' | Should -Be 'test-a-b-c+abcdef0'
+        Get-TestBuildVersion -Ref 'v1.2_3-x' -Commit '0123456789abcdef' | Should -Be 'test-v1.2_3-x+0123456'
+        Get-TestBuildVersion -Ref "caf$([char]0xE9)" -Commit '0123456789abcdef' | Should -Be 'test-caf-+0123456'
+    }
 }
