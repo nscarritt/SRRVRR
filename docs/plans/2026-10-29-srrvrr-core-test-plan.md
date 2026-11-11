@@ -795,7 +795,7 @@ plan's "Shared interfaces" (`docs/plans/2026-11-10-srrvrr-v0.9.0-implementation-
 | T76-23 | B1, B3, B5, B6 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.8.0's budgets; the tick median within 10% or 5 ms of v0.8.0's | MS |
 | T76-24 | TR1, TR6 | K | An unelevated test build | `/stats` has `transfers` with `reason` "PCs and folders need administrator" (or SMB counters not available, on a machine without them) and `/history` has `smbRead` and `smbWrite` | NTB |
 | T76-25 | TR2, TR3, TR5, B8 | A | `docs\uat\76-bottleneck.md`, unelevated on the server | The owner copies a 1 to 2 GB file from another PC and sees the share row, the graph and the bottleneck line move within about 10 s, then "Idle" | UC |
-| T76-26 | TR1, TR4, TR6, B9 | U S | `Invoke-TransferTick` called at 5 s and 10 s, then 120 s later, with a history store; `SRRVRR.ps1` and `modules\Counters.psm1` | Each second since the last call gets that call's average in `smbRead`/`smbWrite` (one second on the first call, at most 60); `Monitor.LastTickMs` is the last call; no SMB category in the fast loop's `$categories`; the slow sampler reads `$transferCategories`, calls `Get-SmbCounterReading` with its previous reading and sets `$state.slowMs`; `Counters.psm1` has no SMB code | CLK |
+| T76-26 | TR1, TR4, TR6, B9 | U S | `Invoke-TransferTick` called at 5 s and 10 s, then 120 s later, with a history store; `SRRVRR.ps1` and `modules\Counters.psm1` | Each second since the last call gets that call's average in `smbRead`/`smbWrite` (one second on the first call, at most 60); `Monitor.LastTickMs` is the last call; no SMB category in the fast loop's `$categories`; the slow sampler reads `$transferCategories`, calls `Get-SmbCounterReading` with its previous reading and sets `$state.slowMs`; `Counters.psm1` has no SMB code; a state with no `cpu` yet (the slow sampler's first pass can come before the fast loop's first tick) gives no error | CLK |
 
 ### 6.11 #77 Write bursts (v0.9.0)
 
@@ -860,7 +860,7 @@ Spec section 5 and Q9, Q10. The handler's address parameter carries each test's 
 
 | Id | Req | Lvl | Inputs | Expected | Asset |
 |---|---|---|---|---|---|
-| T79-01 | NM1, M8 | U X | `Invoke-MaintenanceChange` with a good request and `-Named $false` | 403, body `{"error":"not a named PC"}`, no change, the limiter not asked, one refusal counted with the address | CLK |
+| T79-01 | NM1, M8 | U X | `Invoke-MaintenanceChange` with a good request and `-Named $false`; then with no `-Named` | 403, body `{"error":"not a named PC"}`, no change, the limiter not asked, one refusal counted with the address; with no `-Named` also 403 (it fails closed) | CLK |
 | T79-02 | NM1 | U X | From an unnamed address: no `X-SRRVRR`, a wrong content type, a bad `Origin`; from a named one: two changes within 10 s | The guard's 403 `refused` first; the named check before the body and the rate limit; 429 for the named one's second change | CLK |
 | T79-03 | NM1, NM2, TR8, M8 | I X | `Invoke-SrrRoute` with SRRVRR's matcher: `::ffff:192.0.2.20` and `fe80::5%3` (both listed), `192.0.2.99`, `127.0.0.1`, `::1`, a server address, with and without `NamedPCs` | 200, 200, 403, 200, 200, 200; with no `NamedPCs` only the last three are 200 | FX |
 | T79-04 | NM2 | S | `SRRVRR.ps1` | With `NamedPCs` empty one startup line says Maintenance can be changed only at the server itself | - |
