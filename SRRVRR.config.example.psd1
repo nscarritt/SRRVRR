@@ -62,6 +62,16 @@
     # count comes from the server's status query on the next port up.
     ValheimPort = 2456
 
+    # --- Write bursts ---------------------------------------------------------
+
+    # A PC that opens at least BurstFiles files (50 to 100000) within
+    # BurstWindowSeconds seconds (10 to 600), counting only the seconds in which it
+    # is also writing, raises a "write burst" flag. The burst ends after the PC has
+    # stayed below that for BurstQuietMinutes minutes (1 to 60).
+    BurstFiles = 500
+    BurstWindowSeconds = 60
+    BurstQuietMinutes = 5
+
     # --- Data: saved history, Maintenance and the logs ------------------------
 
     # The folder that holds SRRVRR's state\ and logs\ folders. Leave it '' to use

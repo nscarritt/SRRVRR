@@ -96,6 +96,8 @@ $script:EventTypes = @{
     'drive-filling' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
     'drive-full' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'drive-space-ok' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'write-burst' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'write-burst-ended' = @{ Severity = 'flag'; Banner = $false; Logged = $true }
     'data-fallback' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'share-found' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'history-save-failed' = @{ Severity = 'warn'; Banner = $true; Logged = $true }

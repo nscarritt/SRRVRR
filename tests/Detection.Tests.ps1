@@ -166,6 +166,8 @@ Describe 'T50-16 the spec''s table' {
             # The v0.8.0 design, section 3: drive space.
             'drive-filling' = 'warn', $true, $true; 'drive-full' = 'flag', $true, $true
             'drive-space-ok' = 'info', $false, $true
+            # The v0.9.0 design, section 4: write bursts (the unknown-PC events are #78's).
+            'write-burst' = 'flag', $true, $true; 'write-burst-ended' = 'flag', $false, $true
         }
         $types = Get-EventTypes
         @($types.Keys | Sort-Object) | Should -Be @($spec.Keys | Sort-Object)
