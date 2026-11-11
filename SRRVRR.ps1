@@ -350,8 +350,12 @@ if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Disk Read Bytes/sec', 'LogicalDisk')) { $categories += 'LogicalDisk' }   # per-drive read/write speed
 if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
+# The Transfers card's counters, read by the slow sampler every 5 seconds (v0.9.0 design, Q1), not by the fast tick.
+# With no SMB categories the list is empty and the card says the SMB counters are not available.
+$transferCategories = @()
 if ($cat::CounterExists('Read Bytes/sec', 'SMB Server Shares') -and $cat::CounterExists('Read Bytes/sec', 'SMB Server Sessions')) {
-    $categories += 'SMB Server Shares', 'SMB Server Sessions'   # the Transfers card; read in the sampler before its loop, so no tick pays the first read
+    $transferCategories = @('SMB Server Shares', 'SMB Server Sessions', 'Network Interface')
+    if ($cat::CounterExists('% Idle Time', 'LogicalDisk')) { $transferCategories += 'LogicalDisk' }
 }
 
 Set-Step 'Finding the processor, memory and graphics card'
@@ -477,6 +481,7 @@ $state = [hashtable]::Synchronized(@{
     memVendor = $memVendor
     memSticks = $memSticks
     tickMs = $null   # the fast sampler's own time per reading, once it has one
+    slowMs = $null   # the slow sampler's own time for its last pass (every 5 seconds)
 })
 
 # --- Per-process network ------------------------------------------------------
@@ -639,7 +644,7 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $transferMonitor, $transfersModulePath)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history)
     # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
     # it on "Starting..." with no reason.
     try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
@@ -648,16 +653,9 @@ $sampler = {
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
     $reader = { $s = @{}; foreach ($n in $cats.Keys) { $s[$n] = $cats[$n].ReadCategory() }; $s }.GetNewClosure()
     $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
-    # The Transfers card's module: without it the rest of the sampler runs and the page says why (transfersError).
-    $transfers = $null
-    try {
-        Import-Module -Name $transfersModulePath -Force -ErrorAction Stop
-        $transfers = { param($reading, $now) Invoke-TransferTick -State $state -Monitor $transferMonitor -Reading $reading -NowMs $now.ToUnixTimeMilliseconds() -History $history }.GetNewClosure()
-    } catch { $state.transfersError = "Couldn't load modules\Transfers.psm1: $($_.Exception.Message)" }
     $ctx = New-FastTickContext -Reader $reader -Processes { Get-Process } -Tracer $tracer -Services $services `
         -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
-        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history `
-        -Transfers $transfers
+        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
     $prev = $null
     while ($true) {
         $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
@@ -673,10 +671,9 @@ $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($transferMonitor).AddArgument((Join-Path $PSScriptRoot 'modules\Transfers.psm1'))
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history)
 [void]$worker.BeginInvoke()
 Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
-Write-Status 'Every second: the shares'' traffic and the bottleneck'
 
 # --- Slow checks --------------------------------------------------------------
 # Things that change slowly and take a few hundred milliseconds to read (like
@@ -684,7 +681,7 @@ Write-Status 'Every second: the shares'' traffic and the bottleneck'
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $transferMonitor, $transfersModulePath)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $transferMonitor, $transfersModulePath, $transferCategories, $history)
     # Select-DrivesToShow; a failure shows as drivesError on the page.
     try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
     # Get-DriveLevel (DataFolder.psm1, loaded above) decides ok, filling or full; driveLevels remembers each letter's last level.
@@ -699,6 +696,13 @@ $slowChecks = {
         Sessions = { if (Get-Command Get-SmbSessionList -ErrorAction SilentlyContinue) { Get-SmbSessionList } else { @() } }
         OpenFiles = { if (Get-Command Get-SmbOpenFileList -ErrorAction SilentlyContinue) { Get-SmbOpenFileList } else { @() } }
     }
+    # The SMB, network and disk counters for the transfer tick, read once now so the first pass has a previous reading.
+    $transferCats = @{}
+    foreach ($n in $transferCategories) { $transferCats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
+    $readTransfers = { $s = @{}; foreach ($n in $transferCats.Keys) { $s[$n] = $transferCats[$n].ReadCategory() }; $s }
+    $transferPrev = $null
+    try { $transferPrev = & $readTransfers } catch { $state.transfersError = "transfer tick: $($_.Exception.Message)" }
+    $passTimer = New-Object System.Diagnostics.Stopwatch
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
     # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
@@ -808,6 +812,7 @@ public static class SrrvrrSensorLoader {
     $ProgressPreference = 'SilentlyContinue'   # no window to show progress in; don't let records pile up in memory
     $tick = 0
     while ($true) {
+        $passTimer.Restart()
         # GPU temperature, every 5 seconds: one line per NVIDIA card, "name, degrees C".
         if ($smiPath) {
             try {
@@ -827,6 +832,16 @@ public static class SrrvrrSensorLoader {
                 foreach ($k in $r.Keys) { $state[$k] = $r[$k] }
                 $state.tempError = if ($null -eq $r.cpuTemp) { 'the processor reported no temperature' } else { $null }
             } catch { $state.cpuTemp = $null; $state.memTemp = $null; $state.tempError = "reading the sensors failed: $($_.Exception.Message)" }
+        }
+        # The shares' traffic and the bottleneck, every 5 seconds: the speeds are averages since the last pass.
+        if ($transfersReady) {
+            try {
+                $cur = & $readTransfers
+                Invoke-TransferTick -State $state -Monitor $transferMonitor -Reading (Get-SmbCounterReading -Previous $transferPrev -Current $cur) `
+                    -NowMs ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()) -History $history
+                $transferPrev = $cur
+                if ("$($state.transfersError)" -like 'transfer tick:*') { $state.transfersError = $null }
+            } catch { $state.transfersError = "transfer tick: $($_.Exception.Message)" }
         }
         # The shares' drives every minute and, elevated, the PCs and folders every 5 or 30 seconds (Invoke-TransferSample).
         if ($transfersReady) {
@@ -985,6 +1000,7 @@ public static class SrrvrrSensorLoader {
             }
             $state.activity = $activity
         }
+        $state.slowMs = [int][math]::Round($passTimer.Elapsed.TotalMilliseconds)   # this pass's own time
         $tick++
         Start-Sleep -Seconds 5
     }
@@ -1011,7 +1027,8 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($transferMonitor).AddArgument((Join-Path $PSScriptRoot 'modules\Transfers.psm1'))
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($transferMonitor).AddArgument((Join-Path $PSScriptRoot 'modules\Transfers.psm1')).AddArgument($transferCategories).AddArgument($history)
+Write-Status 'Every 5 seconds: the shares'' traffic and the bottleneck'
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }

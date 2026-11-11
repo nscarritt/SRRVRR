@@ -14,7 +14,7 @@ function New-TransferMonitor {
         BurstFiles = [int](& $get 'BurstFiles' 500); BurstWindowSeconds = [int](& $get 'BurstWindowSeconds' 60)
         BurstQuietMinutes = [int](& $get 'BurstQuietMinutes' 5); TransferFolders = [bool](& $get 'TransferFolders' $true)
         NamedIndex = (New-NamedPcIndex -NamedPCs @(& $get 'NamedPCs' @()))
-        Shares = @(); SessionPcs = @{}; PcFolders = @{}; OpenFilesCapped = $false; UpdatedMs = $null; Busy = $false
+        Shares = @(); SessionPcs = @{}; PcFolders = @{}; OpenFilesCapped = $false; UpdatedMs = $null; Busy = $false; LastTickMs = $null
         Hold = @{ Shown = 'idle'; Candidate = 'idle'; SinceMs = 0L }; Bursts = @{}; BurstList = @(); UnknownSeen = @{}
     })
 }
@@ -55,6 +55,93 @@ function Find-NamedPC {
 #endregion Shared
 
 #region 76 The bottleneck and the shares (#76)
+# SMB file-server traffic, the links and the drives since the previous reading (shapes: the v0.9.0 plan, "Data shapes"):
+# @{ available; readBps; writeBps; shares; sessions; links; drives }. Not available (and everything empty) on a
+# first reading, or when either SMB category is missing. The counters need no administrator. Counter names are
+# lower case, as the category lists them. Share instances are '\\*\name' and session instances numeric ids.
+function Get-SmbCounterReading {
+    param($Previous, $Current)
+    $out = @{ available = $false; readBps = 0; writeBps = 0; shares = @(); sessions = @(); links = @(); drives = @{} }
+    foreach ($c in 'SMB Server Shares', 'SMB Server Sessions') {
+        if (-not $Previous -or -not $Current -or -not $Previous.ContainsKey($c) -or -not $Current.ContainsKey($c)) { return $out }
+    }
+    # Plain loops over the counters' own tables, with no helper call per value (it was written for the fast tick).
+    $calc = [Diagnostics.CounterSample]
+    $pS = $Previous['SMB Server Shares']; $cS = $Current['SMB Server Shares']
+    $shares = New-Object System.Collections.Generic.List[object]; $readTotal = 0.0; $writeTotal = 0.0
+    $nowRead = $cS['read bytes/sec']; $oldRead = $pS['read bytes/sec']
+    if ($nowRead -and $oldRead) {
+        $nowWrite = $cS['write bytes/sec']; $oldWrite = $pS['write bytes/sec']
+        $nowOpen = $cS['current open file count']; $nowSecs = $cS['avg. sec/request']; $oldSecs = $pS['avg. sec/request']; $nowQueue = $cS['current data queue length']
+        foreach ($inst in $nowRead.Keys) {
+            $name = $inst -replace '^.*\\', ''
+            if ($name -eq '_total' -or $name -eq 'ipc$') { continue }
+            $o = $oldRead[$inst]; if (-not $o) { continue }
+            $r = [math]::Round([double]$calc::Calculate($o.Sample, $nowRead[$inst].Sample)); $w = 0
+            if ($nowWrite -and $oldWrite -and $oldWrite[$inst]) { $w = [math]::Round([double]$calc::Calculate($oldWrite[$inst].Sample, $nowWrite[$inst].Sample)) }
+            $readTotal += $r; $writeTotal += $w
+            $secs = 0
+            if ($nowSecs -and $oldSecs -and $oldSecs[$inst]) { $secs = [math]::Round([double]$calc::Calculate($oldSecs[$inst].Sample, $nowSecs[$inst].Sample), 4) }
+            $shares.Add(@{
+                name = $name; readBps = $r; writeBps = $w
+                openFiles = $(if ($nowOpen -and $nowOpen[$inst]) { [int]$nowOpen[$inst].RawValue } else { 0 })
+                secPerRequest = $secs
+                queue = $(if ($nowQueue -and $nowQueue[$inst]) { [int]$nowQueue[$inst].RawValue } else { 0 })   # a count at this moment: no delta
+            })
+        }
+    }
+    $pE = $Previous['SMB Server Sessions']; $cE = $Current['SMB Server Sessions']
+    $sessions = New-Object System.Collections.Generic.List[object]
+    $nowRead = $cE['read bytes/sec']; $oldRead = $pE['read bytes/sec']
+    if ($nowRead -and $oldRead) {
+        $nowWrite = $cE['write bytes/sec']; $oldWrite = $pE['write bytes/sec']; $nowOpen = $cE['current open file count']
+        $nowOpened = $cE['files opened/sec']; $oldOpened = $pE['files opened/sec']
+        foreach ($id in $nowRead.Keys) {
+            if ($id -eq '_total') { continue }
+            $o = $oldRead[$id]; if (-not $o) { continue }
+            $w = 0; $opened = 0
+            if ($nowWrite -and $oldWrite -and $oldWrite[$id]) { $w = [math]::Round([double]$calc::Calculate($oldWrite[$id].Sample, $nowWrite[$id].Sample)) }
+            if ($nowOpened -and $oldOpened -and $oldOpened[$id]) { $opened = [int][math]::Round([double]$calc::Calculate($oldOpened[$id].Sample, $nowOpened[$id].Sample)) }
+            $sessions.Add(@{
+                id = [string]$id; readBps = [math]::Round([double]$calc::Calculate($o.Sample, $nowRead[$id].Sample)); writeBps = $w
+                openFiles = $(if ($nowOpen -and $nowOpen[$id]) { [int]$nowOpen[$id].RawValue } else { 0 }); filesOpened = $opened
+            })
+        }
+    }
+    # Adapters that report a Current Bandwidth (bits per second); the others (loopback, tunnels) have no limit to hit.
+    $links = New-Object System.Collections.Generic.List[object]
+    if ($Current.ContainsKey('Network Interface') -and $Previous.ContainsKey('Network Interface')) {
+        $cN = $Current['Network Interface']; $pN = $Previous['Network Interface']
+        $speed = $cN['current bandwidth']; $nowRecv = $cN['bytes received/sec']; $oldRecv = $pN['bytes received/sec']; $nowSent = $cN['bytes sent/sec']; $oldSent = $pN['bytes sent/sec']
+        if ($speed) {
+            foreach ($nic in $speed.Keys) {
+                $bw = [double]$speed[$nic].RawValue
+                if ($bw -le 0) { continue }
+                $in = 0; $outB = 0
+                if ($nowRecv -and $oldRecv -and $oldRecv[$nic]) { $in = [math]::Round([double]$calc::Calculate($oldRecv[$nic].Sample, $nowRecv[$nic].Sample)) }
+                if ($nowSent -and $oldSent -and $oldSent[$nic]) { $outB = [math]::Round([double]$calc::Calculate($oldSent[$nic].Sample, $nowSent[$nic].Sample)) }
+                $links.Add(@{ inBps = $in; outBps = $outB; speedBits = $bw })
+            }
+        }
+    }
+    # Drive letters only; busy is 100 minus the idle time (which can read a little over 100).
+    $drives = @{}
+    if ($Current.ContainsKey('LogicalDisk') -and $Previous.ContainsKey('LogicalDisk')) {
+        $nowIdle = $Current['LogicalDisk']['% idle time']; $oldIdle = $Previous['LogicalDisk']['% idle time']; $dq = $Current['LogicalDisk']['current disk queue length']
+        if ($nowIdle -and $oldIdle) {
+            foreach ($k in $nowIdle.Keys) {
+                if ($k -notmatch '^[A-Za-z]:$' -or -not $oldIdle[$k]) { continue }
+                $idle = [double]$calc::Calculate($oldIdle[$k].Sample, $nowIdle[$k].Sample)
+                $drives[$k.ToUpper()] = @{
+                    busy = [math]::Round([math]::Max(0.0, [math]::Min(100.0, 100 - $idle)), 1)
+                    queue = $(if ($dq -and $dq[$k]) { [int]$dq[$k].RawValue } else { 0 })
+                }
+            }
+        }
+    }
+    @{ available = $true; readBps = $readTotal; writeBps = $writeTotal; shares = $shares.ToArray(); sessions = $sessions.ToArray(); links = $links.ToArray(); drives = $drives }
+}
+
 # Win32_Share-shaped list (Name, Path, Type) -> the share list: @{ name; path; drive } with the drive letter
 # ('D:') the share's path starts with, else $null (IPC$, a path with no letter such as a mount folder).
 function Get-ShareDriveMap {
@@ -197,14 +284,19 @@ function New-TransfersSnapshot {
 }
 
 # One second of the transfer monitor, called by the fast sampler with the SMB reading: PC rows, the bottleneck, the
-# bursts, the `transfers` value in the state, and the two history lines.
+# bursts, the `transfers` value in the state, and the two history lines. The slow sampler calls it every 5 seconds
+# (design Q1): the reading's speeds are averages over the time since the last call, so the burst detector is told how
+# many seconds that was (1 to 60), and each of those seconds gets the average in the history lines.
 function Invoke-TransferTick {
     param([hashtable]$State, [hashtable]$Monitor, [hashtable]$Reading, [long]$NowMs, $History)
+    $seconds = 1.0
+    if ($null -ne $Monitor.LastTickMs) { $seconds = [math]::Max(1.0, [math]::Min(60.0, ($NowMs - [long]$Monitor.LastTickMs) / 1000.0)) }
+    $Monitor.LastTickMs = $NowMs
     $pcs = @(Group-SessionsByPc -Sessions @($Reading.sessions) -SessionPcs $Monitor.SessionPcs)
     $bottleneck = Get-Bottleneck -Reading $Reading -Shares @($Monitor.Shares) -Cpu ([double]$State.cpu) `
         -Percent $Monitor.BottleneckPercent -Hold $Monitor.Hold -NowMs $NowMs
     $Monitor.BurstList = @(Update-WriteBursts -State $Monitor.Bursts -Pcs $pcs -Shares @($Reading.shares) -NowMs $NowMs `
-        -Files $Monitor.BurstFiles -WindowSeconds $Monitor.BurstWindowSeconds -QuietMs ([long]$Monitor.BurstQuietMinutes * 60000))
+        -Files $Monitor.BurstFiles -WindowSeconds $Monitor.BurstWindowSeconds -QuietMs ([long]$Monitor.BurstQuietMinutes * 60000) -Seconds $seconds)
     $rows = @(Get-TransferPcRows -Pcs $pcs -SessionPcs $Monitor.SessionPcs -PcFolders $Monitor.PcFolders -Bursts $Monitor.BurstList)
     $busy = $Reading.readBps + $Reading.writeBps -gt 0
     foreach ($x in @($Reading.shares)) { if ($x.openFiles -gt 0) { $busy = $true } }
@@ -212,14 +304,18 @@ function Invoke-TransferTick {
     $State.transfers = New-TransfersSnapshot -Reading $Reading -Bottleneck $bottleneck -ShareList @($Monitor.Shares) -PcRows $rows `
         -Elevated ([bool]$Monitor.Elevated) -Capped ([bool]$Monitor.OpenFilesCapped) -UpdatedMs $Monitor.UpdatedMs
     if ($History) {
-        $History.Append('smbRead', $(if ($Reading.available) { $Reading.readBps }), $NowMs)
-        $History.Append('smbWrite', $(if ($Reading.available) { $Reading.writeBps }), $NowMs)
+        $read = if ($Reading.available) { $Reading.readBps } else { $null }
+        $write = if ($Reading.available) { $Reading.writeBps } else { $null }
+        for ($t = $NowMs - ([long][math]::Round($seconds) - 1) * 1000; $t -le $NowMs; $t += 1000) {
+            $History.Append('smbRead', $read, $t)
+            $History.Append('smbWrite', $write, $t)
+        }
     }
 }
 #endregion 76
 
 #region 77 Write bursts (#77). Stubs until #77 lands: no bursts, no events.
-function Update-WriteBursts { param([hashtable]$State, [object[]]$Pcs, [object[]]$Shares, [long]$NowMs, [int]$Files, [int]$WindowSeconds, [long]$QuietMs) }
+function Update-WriteBursts { param([hashtable]$State, [object[]]$Pcs, [object[]]$Shares, [long]$NowMs, [int]$Files, [int]$WindowSeconds, [long]$QuietMs, [double]$Seconds = 1) }
 function Get-BurstEvents { param([object[]]$Old, [object[]]$New, [object[]]$PcRows, [hashtable]$PcFolders, [bool]$IncludeFolders, [long]$StopMs) }
 #endregion 77
 

@@ -264,8 +264,8 @@ Describe 'Test builds' -Tag 'Smoke' {
                 # against the allowed set below, and only `transfers` itself counts as the new path.
                 $pb = @($pbAll | Where-Object { $_ -notmatch '^transfers\.' })
                 @($pa | Where-Object { $pb -notcontains $_ }) | Should -BeNullOrEmpty
-                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), each drive's level (#65), and transfers (#76).
-                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs', 'transfers', 'version')
+                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), each drive's level (#65), and transfers and slowMs (#76).
+                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'slowMs', 'tickMs', 'transfers', 'version')
                 $transferPaths = '^transfers\.(available|reason|updatedMs|bottleneck(\.(name|percent|link(\.(percent|bytesPerSec|speedBits))?|drive(\.(letter|percent|queue))?|cpu(\.percent)?))?|shares(\[\](\.(name|readBps|writeBps|openFiles|secPerRequest|queue|drive))?)?|pcs(\[\].*)?)$'
                 @($pbAll | Where-Object { $_ -match '^transfers\.' -and $_ -notmatch $transferPaths }) | Should -BeNullOrEmpty
                 foreach ($path in '/', '/stats') {

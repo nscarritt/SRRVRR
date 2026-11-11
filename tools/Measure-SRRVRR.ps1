@@ -35,14 +35,18 @@ $cpuStart = $null
 if ($proc) { $p = Get-Process -Id $proc.ProcessId -ErrorAction SilentlyContinue; if ($p) { $cpuStart = $p.TotalProcessorTime.TotalSeconds; $memStart = $p.PrivateMemorySize64 } }
 
 # Poll /stats twice a second for the window, as a page does.
-$statsMs = @(); $ticks = @(); $statsBytes = 0
+$statsMs = @(); $ticks = @(); $slows = @(); $statsBytes = 0
 $until = [DateTime]::UtcNow.AddSeconds($Seconds)
 $clock = [Diagnostics.Stopwatch]::StartNew()
 while ([DateTime]::UtcNow -lt $until) {
     $r = Get-Timed '/stats'
     if ($r) {
         $statsMs += $r.Ms; $statsBytes = $r.Bytes
-        try { $t = ($r.Body | ConvertFrom-Json).tickMs; if ($null -ne $t) { $ticks += [double]$t } } catch { $null = $_ }
+        try {
+            $doc = $r.Body | ConvertFrom-Json
+            if ($null -ne $doc.tickMs) { $ticks += [double]$doc.tickMs }
+            if ($doc.PSObject.Properties['slowMs'] -and $null -ne $doc.slowMs) { $slows += [double]$doc.slowMs }   # the slow loop's last pass (v0.9.0)
+        } catch { $null = $_ }
     }
     Start-Sleep -Milliseconds 500
 }
@@ -88,6 +92,10 @@ Add-Row '/stats size' $(if ($statsMs.Count) { $statsBytes } else { $null }) 'byt
 Add-Row 'Page load (median, with every file)' (Get-Rounded (Get-Percentile $pageMs 50)) 'ms' $b.PageLoadMsMax $b.Baseline.PageLoadMs
 Add-Row 'Page size (with every file)' $(if ($pageMs.Count) { $pageBytes } else { $null }) 'bytes' $null $b.Baseline.PageBytes
 Add-Row 'Tick median' $tickMedian 'ms' $tickMax $(if ($b.TickMsBaseline) { $b.TickMsBaseline } else { $null })
+if ($slows.Count) {   # recorded, no budget: a pass every 5 s, so each value shows up in several polls
+    Add-Row 'Slow pass median' (Get-Percentile $slows 50) 'ms' $null $null
+    Add-Row 'Slow pass max' (($slows | Measure-Object -Maximum).Maximum) 'ms' $null $null
+}
 $rows.Add("| Failed requests | $($script:failures) | 0 | - | $(if ($script:failures) { 'over' } else { 'under' }) |")
 # A run that couldn't measure everything isn't a pass: failed requests, or no SRRVRR process found.
 if ($script:failures -or -not $proc) { $over = $true }

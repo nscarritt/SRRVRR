@@ -1,8 +1,7 @@
-# modules\Transfers.psm1 (regions Shared and 76) and the SMB reading in modules\Counters.psm1 (#76, test plan 6.10).
+# modules\Transfers.psm1 (regions Shared and 76, with the SMB reading) (#76, test plan 6.10).
 BeforeAll {
     Import-Module "$PSScriptRoot\TestHelpers.psm1" -Force
     Import-Module "$PSScriptRoot\fakes\FakeCounterReader.psm1" -Force
-    Import-Module (Join-Path (Get-RepoRoot) 'modules\Counters.psm1') -Force
     Import-Module (Join-Path (Get-RepoRoot) 'modules\Transfers.psm1') -Force
 
     # A counter fixture (tests\fixtures\transfers\counters\<name>.json) as a snapshot: category -> counter -> instance.
@@ -76,39 +75,51 @@ Describe 'T76-03 SMB reading: not available' {
         $r.available | Should -BeFalse
         @($r.shares).Count | Should -Be 0
     }
-    It 'T76-03 the fast tick still sets every other field and calls the hook with the reading and the time' {
-        $state = @{}
+    It 'T76-03 a not-available reading still gives the card its reason, and missing history points' {
+        $state = @{ cpu = 12 }
+        $m = New-TransferMonitor -Elevated $false
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\History.psm1') -Force
+        $h = New-HistoryStore -Slots 10 -StepMs 1000
         $snap = Read-CounterFixture 'no-smb'
-        $seen = @{ n = 0 }
-        $hook = { param($reading, $now) $seen.n++; $seen.reading = $reading; $seen.now = $now }.GetNewClosure()
-        $ctx = New-FastTickContext -Reader (New-FakeCounterReader @($snap, $snap)) -Processes { @() } -Tracer { $null } `
-            -Services @() -TotalRam 1000 -GpuLuid $null -Cores 4 -CpuCounter @('Processor', '% Processor Time') `
-            -TickStopwatch (New-FakeStopwatch 5) -IntervalStopwatch (New-FakeStopwatch 1000) -Transfers $hook
-        $t = [DateTimeOffset]::new(2026, 1, 5, 12, 0, 0, [TimeSpan]::Zero)
-        $prev = Invoke-FastTick -State $state -Context $ctx -Previous $null -Now $t
-        $null = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now $t.AddSeconds(1)
-        $state.ready | Should -BeTrue
-        $state.cpu | Should -Be 12
-        $state.error | Should -BeNullOrEmpty
-        $seen.n | Should -Be 1
-        $seen.reading.available | Should -BeFalse
-        $seen.now | Should -Be $t.AddSeconds(1)
-    }
-    It 'T76-03 a hook that throws does not stop the tick: the fields are set and transfersError says why' {
-        $state = @{}
-        $snap = Read-CounterFixture 'no-smb'
-        $ctx = New-FastTickContext -Reader (New-FakeCounterReader @($snap, $snap)) -Processes { @() } -Tracer { $null } `
-            -Services @() -TotalRam 1000 -GpuLuid $null -Cores 4 -CpuCounter @('Processor', '% Processor Time') `
-            -TickStopwatch (New-FakeStopwatch 5) -IntervalStopwatch (New-FakeStopwatch 1000) -Transfers { throw 'hook broke' }
-        $t = [DateTimeOffset]::new(2026, 1, 5, 12, 0, 0, [TimeSpan]::Zero)
-        $prev = Invoke-FastTick -State $state -Context $ctx -Previous $null -Now $t
-        $null = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now $t.AddSeconds(1)
-        $state.ready | Should -BeTrue
-        $state.error | Should -BeNullOrEmpty
-        $state.transfersError | Should -Match 'hook broke'
+        Invoke-TransferTick -State $state -Monitor $m -Reading (Get-SmbCounterReading -Previous $snap -Current $snap) -NowMs 5000 -History $h
+        $state.transfers.available | Should -BeFalse
+        $state.transfers.reason | Should -Be 'SMB counters are not available'
+        $doc = [SrrHistoryStore]::ToJson($h.Copy()) | ConvertFrom-Json
+        @($doc.lines.smbRead)[-1] | Should -BeNullOrEmpty
     }
 }
-
+Describe 'T76-26 the transfer tick every 5 seconds (design Q1)' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\History.psm1') -Force
+        function New-Reading([double]$Read) { @{ available = $true; readBps = $Read; writeBps = 0; shares = @(); sessions = @(); links = @(); drives = @{} } }
+        function Get-Line($History, [string]$Name) { @(([SrrHistoryStore]::ToJson($History.Copy()) | ConvertFrom-Json).lines.$Name) }
+    }
+    It 'T76-26 each second since the last pass gets that pass''s average in the history lines' {
+        $state = @{ cpu = 1 }; $m = New-TransferMonitor -Elevated $false; $h = New-HistoryStore -Slots 20 -StepMs 1000
+        Invoke-TransferTick -State $state -Monitor $m -Reading (New-Reading 100) -NowMs 5000 -History $h
+        Invoke-TransferTick -State $state -Monitor $m -Reading (New-Reading 700) -NowMs 10000 -History $h
+        $line = Get-Line $h 'smbRead'
+        $line[-1] | Should -Be 700
+        @($line[-5..-1] | Where-Object { $_ -eq 700 }).Count | Should -Be 5 -Because 'seconds 6 to 10 all get the 5-second average'
+        $line[-6] | Should -Be 100
+        $m.LastTickMs | Should -Be 10000
+    }
+    It 'T76-26 the first pass fills one second, and a long gap at most 60' {
+        $state = @{ cpu = 1 }; $m = New-TransferMonitor -Elevated $false; $h = New-HistoryStore -Slots 200 -StepMs 1000
+        Invoke-TransferTick -State $state -Monitor $m -Reading (New-Reading 100) -NowMs 1000000 -History $h
+        @(Get-Line $h 'smbRead' | Where-Object { $_ -eq 100 }).Count | Should -Be 1
+        Invoke-TransferTick -State $state -Monitor $m -Reading (New-Reading 300) -NowMs 1120000 -History $h
+        @(Get-Line $h 'smbRead' | Where-Object { $_ -eq 300 }).Count | Should -Be 60
+    }
+    It 'T76-26 the fast tick reads no SMB counters: the slow sampler reads them, and reports its own time' {
+        $script = Get-Content -Raw (Join-Path (Get-RepoRoot) 'SRRVRR.ps1')
+        $script | Should -Not -Match "categories \+= 'SMB"
+        $script | Should -Match "transferCategories = @\('SMB Server Shares', 'SMB Server Sessions', 'Network Interface'\)"
+        $script | Should -Match 'Get-SmbCounterReading -Previous \$transferPrev -Current \$cur'
+        $script | Should -Match 'state\.slowMs = \[int\]'
+        (Get-Content -Raw (Join-Path (Get-RepoRoot) 'modules\Counters.psm1')) | Should -Not -Match 'SMB'
+    }
+}
 Describe 'T76-04 SMB reading: links and drives' {
     BeforeAll { $snap = Read-CounterFixture 'smb-busy'; $script:Reading = Get-SmbCounterReading -Previous $snap -Current $snap }
     It 'T76-04 links only for adapters with a Current Bandwidth above zero' {
@@ -580,12 +591,11 @@ Describe 'T76-22 the wiring' {
             $text | Should -Not -Match '\bGet-Smb(Share|Session|OpenFile)\b' -Because $f
         }
     }
-    It 'T76-22 SRRVRR.ps1 passes the monitor to both runspaces, imports the module there by full path, and watches transfersError' {
-        ([regex]::Matches($Script, "AddArgument\(\`$transferMonitor\)")).Count | Should -Be 2
-        ([regex]::Matches($Script, "Import-Module -Name \`$transfersModulePath")).Count | Should -Be 2
-        ([regex]::Matches($Script, "AddArgument\(\(Join-Path \`$PSScriptRoot 'modules\\Transfers.psm1'\)\)")).Count | Should -Be 2
+    It 'T76-22 SRRVRR.ps1 passes the monitor to the slow sampler, imports the module there by full path, and watches transfersError' {
+        ([regex]::Matches($Script, "AddArgument\(\`$transferMonitor\)")).Count | Should -Be 1
+        ([regex]::Matches($Script, "Import-Module -Name \`$transfersModulePath")).Count | Should -Be 1
+        ([regex]::Matches($Script, "AddArgument\(\(Join-Path \`$PSScriptRoot 'modules\\Transfers.psm1'\)\)")).Count | Should -Be 1
         $Script | Should -Match "'tempError', 'transfersError'"
-        $Script | Should -Match "-Transfers \`$transfers"
         $Script | Should -Match 'Invoke-TransferTick -State \$state -Monitor \$transferMonitor'
         $Script | Should -Match 'Invoke-TransferSample -Monitor \$transferMonitor'
     }
