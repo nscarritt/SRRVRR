@@ -405,9 +405,15 @@ sleeps, it says so once instead of showing them all.
 **Maintenance:** tick **Maintenance** in the header before working on the server. For the next
 `MaintenanceHours` (2 by default) no page shows banners or dings; the header says "Maintenance until
 3:30 PM" in each browser's own time, in every browser at once, and it survives a restart. Events are
-still logged, marked as during maintenance. Untick it to end it early. Any device that can open the
-page can tick it; each change is logged with its address, and one address can change it at most once
-every 10 seconds and 60 times a day.
+still logged, marked as during maintenance. Untick it to end it early. Only a named PC (an address in
+`NamedPCs`) or the server itself can change it; on any other PC the box is disabled, still showing the
+state and end time, and says "Maintenance can be changed from a named PC. This PC is seen as" followed by the
+address the server saw, which you can add to `NamedPCs`. A named PC's page says "Viewing from" its name. With
+no `NamedPCs` set, Maintenance can be changed only at the server itself. Each change is logged with its
+address, and one address can change it at most once every 10 seconds and 60 times a day. A change from a PC
+that isn't named is refused (403) and counted: the once-a-minute log line gives the number and up to 5
+addresses, never one line each. The server goes by the address the connection comes from, so a device on
+the local network that takes a named PC's address would be treated as that PC.
 
 **Flagged:** the Flagged card lists the logged events of the last 31 days (or `LogRetentionDays`, if
 fewer), newest first.
@@ -493,7 +499,10 @@ line of 1 to 64 printable ASCII characters). A release carries `VERSION` holding
 anything else shows in amber on the page.
 `/stats?since=<id>` adds the events after that id (at most 50), `/events?days=n` returns the logged
 events of the last n days, newest first, and `POST /maintenance` (with an `X-SRRVRR: 1` header, a JSON
-body and this page's own origin) turns Maintenance on or off.
+body and this page's own origin) turns Maintenance on or off, but only from a named PC or the server itself:
+any other address gets 403 `{"error":"not a named PC"}`, after the Host, header, content-type and origin
+checks and before the rate limit. `/stats` also has `viewer`, `{name, canChangeMaintenance, address}`, worked
+out from the request's own connection address (never a header), which the page uses to disable the box.
 
 The code is `SRRVRR.ps1` plus modules in `modules\` (the counter math, settings, and the web server's
 request handling), always loaded from SRRVRR's own folder, never by name. The page is plain files in

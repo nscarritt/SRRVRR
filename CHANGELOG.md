@@ -55,6 +55,15 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ### Changed
 
+- **Maintenance can be changed only from a named PC or the server itself (#79).** `POST /maintenance` from any
+  other address is refused with 403 `{"error":"not a named PC"}`, after the existing Host, `X-SRRVRR`,
+  `Content-Type` and `Origin` checks and before the rate limit; refusals are counted, and the once-a-minute
+  refusal line gives the count and up to 5 addresses. Loopback and the server's own addresses always count as
+  named. `/stats` gains `viewer` (`name`, `canChangeMaintenance`, `address`), and the page disables the box with
+  "Maintenance can be changed from a named PC. This PC is seen as <address>." on a PC that isn't named, and
+  shows "Viewing from <name>" on one that is. **Upgrade note: add `NamedPCs` to the live config before
+  installing.** With none set, only the server itself can change Maintenance (one startup line says so); before
+  this, any device that could open the page could.
 - **Alert times, one 12-hour format, and banners that stay a minute (#63).** Every banner now ends with the time
   it happened, every time on the page (banners, the Flagged list, "Maintenance until 3:30 PM") uses one
   12-hour format in the browser's own time zone, and a banner closes after 60 seconds on screen instead of 15

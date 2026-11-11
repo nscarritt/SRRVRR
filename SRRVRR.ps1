@@ -264,6 +264,8 @@ if ($maintenanceLoad.Error) { Write-SrrError 'maintenance' $maintenanceLoad.Erro
 $maintenance = New-MaintenanceState -Clock { [DateTimeOffset]::Now } -Hours $settings.MaintenanceHours -MaxHours $settings.MaintenanceMaxHours -UntilMs $maintenanceLoad.UntilMs
 if ($maintenance.IsOn()) { Write-Status "Maintenance is on until $([DateTimeOffset]::FromUnixTimeMilliseconds($maintenance.UntilMs).ToLocalTime().ToString('HH:mm'))" }
 $maintenanceLimiter = New-RateLimiter -Clock { [DateTimeOffset]::Now }
+$maintenanceRefusals = New-RefusalCounter   # requests from an address that isn't a named PC (counted, one line a minute)
+if ((New-NamedPcIndex -NamedPCs @($settings['NamedPCs'])).Count -eq 0) { Write-Status 'No NamedPCs set: Maintenance can be changed only at the server itself.' }
 # A Maintenance change record -> an event; each one is its own (never suppressed as a repeat).
 function Add-MaintenanceEvent($Change) {
     Add-SrrEvent $Change.type $Change.data "$($Change.type)|$([DateTimeOffset]::Now.ToUnixTimeMilliseconds())"
@@ -276,7 +278,9 @@ if ($maintenanceLoad.Change) { Add-MaintenanceEvent $maintenanceLoad.Change; Sav
 $stopSavers.Add(@{ Name = 'Maintenance'; Save = { Save-MaintenanceNow } })
 # POST /maintenance (Invoke-MaintenanceChange); an accepted change is logged as an event and saved at once.
 function Invoke-MaintenanceRequest($Headers, [string]$Body, [string]$Address) {
-    $r = Invoke-MaintenanceChange -Headers $Headers -Body $Body -Address $Address -State $maintenance -Limiter $maintenanceLimiter -Identity $webContext.Identity -Port $settings.Port
+    # Named: the connection's own address only (loopback, the server's addresses, or a NamedPCs address); no header counts.
+    $named = (Find-NamedPC -Address $Address -Index $webContext.NamedIndex -ServerAddresses $webContext.Identity.Addresses).Known
+    $r = Invoke-MaintenanceChange -Headers $Headers -Body $Body -Address $Address -State $maintenance -Limiter $maintenanceLimiter -Identity $webContext.Identity -Port $settings.Port -Named $named -Refusals $maintenanceRefusals
     if ($r.Change) { Add-MaintenanceEvent $r.Change; Save-MaintenanceNow }
     $r
 }
@@ -1141,6 +1145,8 @@ $webContext = @{
     Maintenance = $maintenance
     ReadEvents = { param($days) if ($script:eventIndex) { Get-IndexedEvents -Index $script:eventIndex -Days $days -Now ([DateTimeOffset]::Now) } else { @() } }
     HandleMaintenance = { param($headers, $body, $address) Invoke-MaintenanceRequest $headers $body $address }
+    NamedIndex = New-NamedPcIndex -NamedPCs @($settings['NamedPCs'])
+    Viewer = { param($address) Find-NamedPC -Address $address -Index $webContext.NamedIndex -ServerAddresses $webContext.Identity.Addresses }
 }
 $identityRead = [DateTime]::UtcNow
 
@@ -1193,7 +1199,11 @@ function Invoke-Watch {
     if (([DateTime]::UtcNow - $script:refusalsLoggedAt).TotalSeconds -ge 60) {
         $script:refusalsLoggedAt = [DateTime]::UtcNow
         $refused = $maintenanceLimiter.TakeRefused()
-        if ($refused) { Write-SrrLog 'WARN' 'maintenance' "$refused Maintenance changes refused by the rate limit in the last minute" }
+        $notNamed = $maintenanceRefusals.Take()
+        if ($refused -or $notNamed.Count) {
+            $why = @(if ($refused) { "$refused by the rate limit" }; if ($notNamed.Count) { "$($notNamed.Count) from PCs that are not named ($($notNamed.Addresses -join ', '))" })
+            Write-SrrLog 'WARN' 'maintenance' "$($refused + $notNamed.Count) Maintenance changes refused in the last minute: $($why -join '; ')"
+        }
     }
     if (Test-CleanupDue -LastRun $script:cleanedAt -Now ([DateTimeOffset]::Now)) { Invoke-LogCleanup }
     Invoke-EventDrain

@@ -4,7 +4,7 @@
 #
 # Context (a hashtable): State (the shared state), WebRoot (the web\ folder), Identity (@{ Names; Addresses } of this
 # machine), BootTime ([DateTimeOffset]), Clock (scriptblock returning [DateTimeOffset]), LogError (scriptblock taking
-# one message).
+# one message). Optional: Viewer (scriptblock: the request's address -> a Find-NamedPC result; adds viewer to /stats).
 
 # The only files ever served, by URL path. File paths are never built from more of the URL than a checked name.
 $script:StaticTable = @{
@@ -54,6 +54,21 @@ function Get-HostIdentity {
         }
     } catch { $null = $_ }
     @{ Names = @($names | Where-Object { $_ } | Select-Object -Unique); Addresses = @($addresses | Select-Object -Unique) }
+}
+
+# Who is asking, for /stats (spec 0.9.0 section 5): @{ name; canChangeMaintenance; address } from a Find-NamedPC result
+# (Match). name is the named PC's name or $null; canChangeMaintenance is whether Maintenance would accept this
+# address (a named PC, or the server itself); address is the one the server saw. A missing or malformed match can
+# change nothing. -Address is only the text shown when the match has no normalized address.
+function Get-SrrViewer {
+    param([object]$Match, [string]$Address)
+    if ($Match -isnot [hashtable]) { $Match = $null }
+    $seen = if ($Match -and $Match['Address']) { [string]$Match['Address'] } elseif ($Address) { $Address } else { $null }
+    @{
+        name = if ($Match -and $Match['Name']) { [string]$Match['Name'] } else { $null }
+        canChangeMaintenance = [bool]($Match -and $Match['Known'] -eq $true)
+        address = $seen
+    }
 }
 
 # The /stats document: a copy of the shared state, plus uptime.
@@ -148,6 +163,12 @@ function Invoke-SrrRoute {
         if ($Path -eq '/stats') {
             $doc = New-StatsSnapshot -State $Context.State -BootTime $Context.BootTime -Now (& $Context.Clock)
             Add-EventFields -Doc $doc -Query $Query -Context $Context
+            # Who is asking: from the connection's own address only, never from a header.
+            if ($Context['Viewer']) {
+                $match = $null
+                try { $match = & $Context['Viewer'] $RemoteAddress } catch { Write-RouteError $Context "Couldn't tell who is viewing: $($_.Exception.Message)" }
+                $doc.viewer = Get-SrrViewer -Match $match -Address $RemoteAddress
+            }
             return New-Result 200 'application/json; charset=utf-8' ($doc | ConvertTo-Json -Compress -Depth 6)
         }
         if ($Path -eq '/events' -and $Context['ReadEvents']) { return Get-EventsResult -Query $Query -Context $Context }
@@ -247,5 +268,5 @@ function Send-SrrResponse($ListenerContext, [hashtable]$Result) {
     $resp.Close()
 }
 
-Export-ModuleMember -Function Get-StaticRoute, Test-HostAllowed, Get-HostIdentity, New-StatsSnapshot, Get-EventsSince, Read-StaticFile,
+Export-ModuleMember -Function Get-StaticRoute, Test-HostAllowed, Get-HostIdentity, Get-SrrViewer, New-StatsSnapshot, Get-EventsSince, Read-StaticFile,
     Invoke-SrrRoute, Invoke-SrrRequest, ConvertTo-SrrRequest, Send-SrrResponse
