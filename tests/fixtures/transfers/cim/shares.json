@@ -1,0 +1,10 @@
+[
+  { "Name": "Docs", "Path": "D:\\Lab\\Docs", "Type": 0 },
+  { "Name": "Docs$", "Path": "D:\\Lab\\Docs", "Type": 0 },
+  { "Name": "Media", "Path": "D:\\Lab\\Media", "Type": 0 },
+  { "Name": "Archive", "Path": "D:\\Lab\\Media\\Archive", "Type": 0 },
+  { "Name": "Scratch", "Path": "E:\\Scratch", "Type": 0 },
+  { "Name": "C$", "Path": "C:\\", "Type": 2147483648 },
+  { "Name": "D$", "Path": "D:\\", "Type": 2147483648 },
+  { "Name": "IPC$", "Path": "", "Type": 2147483651 }
+]

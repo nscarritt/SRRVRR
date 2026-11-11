@@ -503,7 +503,7 @@ Describe 'T76-13 /stats carries transfers' {
         $shares = @(foreach ($i in 1..8) { @{ name = "share$i"; readBps = 1000 * $i; writeBps = 500; openFiles = $i; secPerRequest = 0.0042; queue = 1; drive = 'D:' } })
         $pcs = @(foreach ($i in 1..4) {
             @{
-                name = "Desk PC $i"; address = "192.0.2.$i"; known = $true; account = "owner$i"; smb = '3.1.1'; signed = $true; encrypted = $false
+                name = "Desk PC $i"; address = "192.0.2.$i"; known = $true; account = "TESTLAB\user-$i"; smb = '3.1.1'; signed = $true; encrypted = $false
                 readBps = 1000; writeBps = 2000; openFiles = 12; writing = $true; burst = $false
                 folders = @(foreach ($f in 1..10) { @{ share = "share$i"; path = "Projects\Client $f\Drafts"; files = 3; writing = $true } })
             }

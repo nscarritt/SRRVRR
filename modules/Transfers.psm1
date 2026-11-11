@@ -531,10 +531,155 @@ function Get-BurstEvents {
 }
 #endregion 77
 
-#region 78 PCs and folders (#78). Stubs until #78 lands: no PCs, no events.
-function Get-SessionPcs { param([object[]]$Sessions, [object[]]$OpenFiles, [object[]]$Shares, [hashtable]$Index, [string[]]$ServerAddresses, [bool]$Folders, [int]$MaxOpenFiles = 5000) @{ SessionPcs = @{}; PcFolders = @{}; Capped = $false } }
-function Get-TransferPcRows { param([object[]]$Pcs, [hashtable]$SessionPcs, [hashtable]$PcFolders, [object[]]$Bursts, [int]$MaxPcs = 64) }
-function Get-UnknownPcEvents { param([hashtable]$Seen, [object[]]$PcRows, [bool]$Elevated) }
+#region 78 PCs and folders (#78)
+# A field of a hashtable or an object (the CIM readers' records are objects, the monitor's are hashtables), or $null.
+function Get-PcsValue {
+    param([object]$Item, [string]$Name)
+    if ($null -eq $Item) { return $null }
+    if ($Item -is [Collections.IDictionary]) { if ($Item.Contains($Name)) { return $Item[$Name] } else { return $null } }
+    $p = $Item.PSObject.Properties[$Name]
+    if ($p) { $p.Value } else { $null }
+}
+
+# The folder of an open file: its path below the share, without the last part (the file's name, which is dropped
+# here and goes no further), cut to 3 levels and 120 characters. A file in the share's root has no folder: ''.
+function Get-PcsFolderPath {
+    param([string]$Path, [int]$ShareLength, [int]$Levels = 3, [int]$Characters = 120)
+    $parts = @($Path.Substring($ShareLength).Split('\') | Where-Object { $_ })
+    if ($parts.Count -le 1) { return '' }
+    $dirs = @($parts[0..($parts.Count - 2)])
+    if ($dirs.Count -gt $Levels) { $dirs = @($dirs[0..($Levels - 1)]) }
+    $text = $dirs -join '\'
+    if ($text.Length -gt $Characters) { $text = $text.Substring(0, $Characters) }
+    $text
+}
+
+# Sessions + open files -> the session PCs and, per PC address, the folders its files are in.
+# Sessions: records with SessionId, ClientComputerName, ClientUserName, Dialect (Get-SmbSessionList). OpenFiles:
+# SessionId, Path, Permissions, Signed, Encrypted (Get-SmbOpenFileList). Shares: name and path (Monitor.Shares).
+# Returns @{ SessionPcs (session id -> session PC); PcFolders (address -> up to 10 folder rows); Capped }.
+# Privacy: a file's name is cut off in Get-PcsFolderPath and is held by nothing that comes out of here.
+function Get-SessionPcs {
+    param([object[]]$Sessions, [object[]]$OpenFiles, [object[]]$Shares, [hashtable]$Index, [string[]]$ServerAddresses, [bool]$Folders, [int]$MaxOpenFiles = 5000)
+    if (-not $Index) { $Index = @{} }
+    $sessionPcs = @{}; $keyOf = @{}
+    foreach ($s in $Sessions) {
+        $id = [string](Get-PcsValue $s 'SessionId')
+        if (-not $id) { continue }
+        $who = Find-NamedPC -Address ([string](Get-PcsValue $s 'ClientComputerName')) -Index $Index -ServerAddresses $ServerAddresses
+        $sessionPcs[$id] = @{
+            address = $who.Address; name = $who.Name; known = $who.Known; account = [string](Get-PcsValue $s 'ClientUserName')
+            smb = [string](Get-PcsValue $s 'Dialect'); signed = $null; encrypted = $null; writingFiles = $false
+        }
+        $keyOf[$id] = if ($who.Address) { $who.Address } else { "session:$id" }
+    }
+    # Shares, longest path first; at equal length a share not ending in $ comes first.
+    $shareList = New-Object System.Collections.Generic.List[object]
+    if ($Folders) {
+        foreach ($sh in $Shares) {
+            $path = [string](Get-PcsValue $sh 'path')
+            $name = [string](Get-PcsValue $sh 'name')
+            if (-not $path -or -not $name) { continue }
+            $trim = $path.TrimEnd('\')
+            $shareList.Add(@{ Name = $name; Prefix = "$trim\"; Length = $trim.Length; Admin = $name.EndsWith('$') })
+        }
+    }
+    $ordered = @($shareList | Sort-Object -Property @{ Expression = { $_.Length }; Descending = $true }, @{ Expression = { $_.Admin } })
+    $agg = @{}; $folderMap = @{}
+    $seen = 0; $capped = $false
+    foreach ($f in $OpenFiles) {
+        if ($null -eq $f) { continue }
+        if ($seen -ge $MaxOpenFiles) { $capped = $true; break }
+        $seen++
+        $id = [string](Get-PcsValue $f 'SessionId')
+        if (-not $keyOf.ContainsKey($id)) { continue }
+        $key = $keyOf[$id]
+        if (-not $agg.ContainsKey($key)) { $agg[$key] = @{ Files = 0; Signed = 0; Encrypted = 0; Writing = $false } }
+        $a = $agg[$key]
+        $a.Files++
+        if (Get-PcsValue $f 'Signed') { $a.Signed++ }
+        if (Get-PcsValue $f 'Encrypted') { $a.Encrypted++ }
+        $writing = (([long](Get-PcsValue $f 'Permissions')) -band 0x50000006) -ne 0
+        if ($writing) { $a.Writing = $true }
+        $address = $sessionPcs[$id].address
+        if (-not $Folders -or -not $address) { continue }
+        $path = [string](Get-PcsValue $f 'Path')
+        foreach ($sh in $ordered) {
+            if ($path.StartsWith($sh.Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                $folder = Get-PcsFolderPath -Path $path -ShareLength $sh.Length
+                if (-not $folderMap.ContainsKey($address)) { $folderMap[$address] = @{} }
+                $fk = "$($sh.Name)|$folder"
+                if (-not $folderMap[$address].ContainsKey($fk)) { $folderMap[$address][$fk] = @{ share = $sh.Name; path = $folder; files = 0; writing = $false } }
+                $row = $folderMap[$address][$fk]
+                $row.files++
+                if ($writing) { $row.writing = $true }
+                break
+            }
+        }
+    }
+    foreach ($id in @($sessionPcs.Keys)) {
+        $a = $agg[$keyOf[$id]]
+        if ($a) {
+            $sessionPcs[$id].signed = ($a.Signed -eq $a.Files)
+            $sessionPcs[$id].encrypted = ($a.Encrypted -eq $a.Files)
+            $sessionPcs[$id].writingFiles = [bool]$a.Writing
+        }
+    }
+    $pcFolders = @{}
+    foreach ($address in @($folderMap.Keys)) {
+        $rows = @($folderMap[$address].Values | Sort-Object -Property @{ Expression = { $_.files }; Descending = $true }, @{ Expression = { $_.share } }, @{ Expression = { $_.path } } | Select-Object -First 10)
+        $pcFolders[$address] = $rows
+    }
+    @{ SessionPcs = $sessionPcs; PcFolders = $pcFolders; Capped = $capped }
+}
+
+# PC seconds (Group-SessionsByPc) + session PCs + folders + bursts -> the /stats pcs rows, busiest first, at most MaxPcs.
+function Get-TransferPcRows {
+    param([object[]]$Pcs, [hashtable]$SessionPcs, [hashtable]$PcFolders, [object[]]$Bursts, [int]$MaxPcs = 64)
+    $active = @{}
+    foreach ($b in $Bursts) { if ($null -ne $b -and $null -eq (Get-PcsValue $b 'endedMs')) { $active[[string](Get-PcsValue $b 'key')] = $true } }
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($pc in $Pcs) {
+        if ($null -eq $pc) { continue }
+        $sp = $null
+        if ($SessionPcs) { foreach ($id in @(Get-PcsValue $pc 'sessions')) { if ($SessionPcs.ContainsKey([string]$id)) { $sp = $SessionPcs[[string]$id]; break } } }
+        $address = Get-PcsValue $pc 'address'
+        $folders = @()
+        if ($address -and $PcFolders -and $PcFolders.ContainsKey($address)) { $folders = @($PcFolders[$address]) }
+        $rows.Add(@{
+            name = (Get-PcsValue $sp 'name'); address = $address; known = [bool](Get-PcsValue $sp 'known'); account = (Get-PcsValue $sp 'account')
+            smb = (Get-PcsValue $sp 'smb'); signed = (Get-PcsValue $sp 'signed'); encrypted = (Get-PcsValue $sp 'encrypted')
+            readBps = (Get-PcsValue $pc 'readBps'); writeBps = (Get-PcsValue $pc 'writeBps'); openFiles = (Get-PcsValue $pc 'openFiles')
+            writing = [bool](Get-PcsValue $pc 'writing'); burst = [bool]$active[[string](Get-PcsValue $pc 'key')]; folders = $folders
+        })
+    }
+    $sorted = @($rows | Sort-Object -Property @{ Expression = { [double]$_.readBps + [double]$_.writeBps }; Descending = $true }, @{ Expression = { [string]$_.address } })
+    foreach ($r in ($sorted | Select-Object -First $MaxPcs)) { $r }
+}
+
+# Unknown PCs (Seen is Monitor.UnknownSeen: address -> @{ Written }): unknown-pc when an unknown address first
+# appears, unknown-pc-write on its first writing second. An address gone from the rows is forgotten, so a reconnect
+# raises both again. Nothing without administrator (the rows have no addresses to judge). Records: Type, Key, Data.
+function Get-UnknownPcEvents {
+    param([hashtable]$Seen, [object[]]$PcRows, [bool]$Elevated)
+    if (-not $Elevated) { return }
+    $present = @{}
+    foreach ($r in $PcRows) {
+        $address = [string](Get-PcsValue $r 'address')
+        if (-not $address -or (Get-PcsValue $r 'known')) { continue }
+        $present[$address] = $true
+        $data = { @{ pc = 'unknown'; address = $address; account = (Get-PcsValue $r 'account') } }
+        if (-not $Seen.ContainsKey($address)) {
+            $Seen[$address] = @{ Written = $false }
+            @{ Type = 'unknown-pc'; Key = "unknown-pc|$address"; Data = (& $data) }
+        }
+        if ((Get-PcsValue $r 'writing') -and -not $Seen[$address].Written) {
+            $Seen[$address].Written = $true
+            @{ Type = 'unknown-pc-write'; Key = "unknown-pc-write|$address"; Data = (& $data) }
+        }
+    }
+    foreach ($address in @($Seen.Keys)) { if (-not $present.ContainsKey($address)) { $Seen.Remove($address) } }
+}
 #endregion 78
 
 #region 79 (none: #79's code is in Maintenance.psm1, Web.psm1 and web\app.js)
