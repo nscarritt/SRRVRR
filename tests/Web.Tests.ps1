@@ -467,8 +467,10 @@ Describe 'T50-34 to T50-37 and T50-42 to T50-44: POST /maintenance and /events t
         $c = New-MaintContext
         $index = New-FullIndex 5000
         $now = $Now50; $c.ReadEvents = { param($days) Get-IndexedEvents -Index $index -Days $days -Now $now }.GetNewClosure()
-        $ev = foreach ($i in 1..50) { (Measure-Command { Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }).TotalMilliseconds }
-        $st = foreach ($i in 1..50) { (Measure-Command { Invoke-SrrRoute -Method 'GET' -Path '/stats' -Query @{ since = '0' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }).TotalMilliseconds }
+        # Warm up first (#69): the first calls compile the code path and once pushed a run's p95 past 50 ms.
+        foreach ($i in 1..5) { $null = Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c; $null = Invoke-SrrRoute -Method 'GET' -Path '/stats' -Query @{ since = '0' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }
+        $ev = foreach ($i in 1..100) { (Measure-Command { Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }).TotalMilliseconds }
+        $st = foreach ($i in 1..100) { (Measure-Command { Invoke-SrrRoute -Method 'GET' -Path '/stats' -Query @{ since = '0' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c }).TotalMilliseconds }
         (Invoke-SrrRoute -Method 'GET' -Path '/events' -Query @{ days = '31' } -Headers @{ Host = 'localhost:8091' } -Body '' -RemoteAddress '127.0.0.1' -LocalPort 8091 -Context $c).Status | Should -Be 200
         $p95 = { param($v) @($v | Sort-Object)[[int][Math]::Ceiling(0.95 * @($v).Count) - 1] }
         Write-Host ("    /events p95 {0:N1} ms, /stats p95 {1:N1} ms" -f (& $p95 $ev), (& $p95 $st))
