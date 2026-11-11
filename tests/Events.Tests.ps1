@@ -169,3 +169,113 @@ Describe 'T50-06 one writer for the logs' {
         $events | Should -Not -Match 'AppendAllText|Add-Content|Out-File|StreamWriter' -Because 'the drain writes only through the writers it is given'
     }
 }
+
+# Drive space levels and their events (story #65, test plan section 6.9).
+Describe 'T65 drive space' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'modules\DataFolder.psm1') -Force   # Get-DriveLevel lives there
+        # A drive of 100 GB with the given percent used.
+        function New-Drive([string]$Letter, [double]$Used, [string]$Level, [string]$Health = 'Healthy') {
+            $d = @{ letter = $Letter; label = 'Secret label'; size = 100GB; free = (100GB * (100 - $Used) / 100); health = $Health }
+            if ($Level) { $d.level = $Level }
+            $d
+        }
+        function Get-DriveEvents($OldDrives, $NewDrives) {
+            $old = if ($null -eq $OldDrives) { $null } else { @{ drives = @($OldDrives) } }
+            , @(Get-StateEvents -Old $old -New @{ drives = @($NewDrives) })
+        }
+    }
+    It 'T65-01 <used> from <was> is <level>' -ForEach @(
+        @{ used = 84; was = 'ok'; level = 'ok' }, @{ used = 85; was = 'ok'; level = 'filling' }, @{ used = 94; was = 'ok'; level = 'filling' }, @{ used = 95; was = 'ok'; level = 'full' }
+        @{ used = 83; was = 'filling'; level = 'filling' }, @{ used = 82.9; was = 'filling'; level = 'ok' }
+        @{ used = 93; was = 'full'; level = 'full' }, @{ used = 92.9; was = 'full'; level = 'filling' }
+        @{ used = 10; was = $null; level = 'ok' }, @{ used = 96; was = $null; level = 'full' }
+    ) {
+        Get-DriveLevel -UsedPercent $used -Previous $was -Warn 85 -Full 95 | Should -Be $level
+    }
+    It 'T65-01 from full a big drop skips filling, and the margin follows the settings' {
+        Get-DriveLevel -UsedPercent 50 -Previous 'full' -Warn 85 -Full 95 | Should -Be 'ok'
+        Get-DriveLevel -UsedPercent 70 -Previous 'full' -Warn 80 -Full 90 | Should -Be 'ok'
+        Get-DriveLevel -UsedPercent 78 -Previous 'full' -Warn 80 -Full 90 | Should -Be 'filling'
+        Get-DriveLevel -UsedPercent 88 -Previous 'full' -Warn 80 -Full 90 | Should -Be 'full'
+    }
+    It 'T65-02 ok to filling raises drive-filling' {
+        $e = Get-DriveEvents (New-Drive 'D:' 50 'ok') (New-Drive 'D:' 87 'filling')
+        $e.Count | Should -Be 1
+        $e[0].type | Should -Be 'drive-filling'
+        $e[0].key | Should -Be 'drive-filling|D:'
+        $e[0].group | Should -Be 'drive-space|D:'
+    }
+    It 'T65-02 filling to full raises drive-full' {
+        $e = Get-DriveEvents (New-Drive 'D:' 90 'filling') (New-Drive 'D:' 96 'full')
+        $e.Count | Should -Be 1
+        $e[0].type | Should -Be 'drive-full'
+    }
+    It 'T65-02 ok to full raises drive-full' {
+        $e = Get-DriveEvents (New-Drive 'D:' 50 'ok') (New-Drive 'D:' 97 'full')
+        @($e | ForEach-Object type) | Should -Be @('drive-full')
+    }
+    It 'T65-02 filling to ok and full to ok raise drive-space-ok' {
+        @((Get-DriveEvents (New-Drive 'D:' 84 'filling') (New-Drive 'D:' 60 'ok')) | ForEach-Object type) | Should -Be @('drive-space-ok')
+        @((Get-DriveEvents (New-Drive 'D:' 96 'full') (New-Drive 'D:' 60 'ok')) | ForEach-Object type) | Should -Be @('drive-space-ok')
+    }
+    It 'T65-02 full to filling and an unchanged level raise nothing' {
+        (Get-DriveEvents (New-Drive 'D:' 96 'full') (New-Drive 'D:' 92 'filling')).Count | Should -Be 0
+        (Get-DriveEvents (New-Drive 'D:' 96 'full') (New-Drive 'D:' 97 'full')).Count | Should -Be 0
+        (Get-DriveEvents (New-Drive 'D:' 50 'ok') (New-Drive 'D:' 51 'ok')).Count | Should -Be 0
+    }
+    It 'T65-02 each drive is compared by its own letter' {
+        $e = Get-DriveEvents @((New-Drive 'C:' 50 'ok'), (New-Drive 'D:' 90 'filling')) @((New-Drive 'D:' 96 'full'), (New-Drive 'C:' 87 'filling'))
+        @($e | ForEach-Object { "$($_.type) $($_.data.letter)" } | Sort-Object) | Should -Be @('drive-filling C:', 'drive-full D:')
+    }
+    It 'T65-03 a first reading with one drive full and one ok raises one drive-full' {
+        $e = Get-DriveEvents $null @((New-Drive 'C:' 40 'ok'), (New-Drive 'D:' 97 'full'))
+        $e.Count | Should -Be 1
+        $e[0].type | Should -Be 'drive-full'
+        $e[0].data.letter | Should -Be 'D:'
+    }
+    It 'T65-03 a reading that follows one with no drives yet counts as the first' {
+        $e = @(Get-StateEvents -Old @{ services = @() } -New @{ drives = @((New-Drive 'D:' 97 'full')) })
+        @($e | ForEach-Object type) | Should -Be @('drive-full')
+    }
+    It 'T65-04 a Missing drive has no event, and none when it was full before' {
+        (Get-DriveEvents $null @((New-Drive 'E:' 0 $null 'Missing'))).Count | Should -Be 0
+        $e = Get-DriveEvents (New-Drive 'E:' 96 'full') (New-Drive 'E:' 0 $null 'Missing')
+        @($e | ForEach-Object type) | Should -Not -Contain 'drive-space-ok'
+        @($e | ForEach-Object type) | Should -Not -Contain 'drive-full'
+        # A Missing drive that still carries a level is skipped too.
+        (Get-DriveEvents $null @((New-Drive 'E:' 99 'full' 'Missing'))).Count | Should -Be 0
+    }
+    It 'T65-04 a drive with no level has no event' {
+        (Get-DriveEvents (New-Drive 'D:' 50 'ok') (New-Drive 'D:' 99 $null)).Count | Should -Be 0
+    }
+    It 'T65-05 the new events carry only letter, usedPercent and freeGB' {
+        foreach ($case in @(@('ok', 87, 'filling'), @('filling', 96, 'full'), @('full', 50, 'ok'))) {
+            $e = Get-DriveEvents (New-Drive 'D:' 50 $case[0]) (New-Drive 'D:' $case[1] $case[2])
+            $e.Count | Should -Be 1
+            @($e[0].data.Keys | Sort-Object) | Should -Be @('freeGB', 'letter', 'usedPercent')
+            $e[0].data.letter | Should -Be 'D:'
+            $e[0].data.usedPercent | Should -BeOfType [int]
+            $e[0].data.usedPercent | Should -Be $case[1]
+            $e[0].data.freeGB | Should -Be ([Math]::Round(100 * (100 - $case[1]) / 100, 1))
+            (ConvertTo-Json -InputObject $e[0].data -Compress) | Should -Not -Match 'Secret|label'
+            (ConvertTo-Json -InputObject (ConvertTo-LoggedEvent $e[0]) -Compress) | Should -Not -Match 'Secret|label'
+        }
+    }
+    It 'T65-05 the used percent is rounded to a whole number' {
+        $e = Get-DriveEvents (New-Drive 'D:' 50 'ok') (New-Drive 'D:' 87.6 'filling')
+        $e[0].data.usedPercent | Should -Be 88
+    }
+    It 'T65-07 the three types are in the table with their severity, banner and logged values' {
+        $t = Get-EventTypes
+        $t['drive-filling'].Severity | Should -Be 'warn'; $t['drive-filling'].Banner | Should -BeTrue; $t['drive-filling'].Logged | Should -BeTrue
+        $t['drive-full'].Severity | Should -Be 'flag'; $t['drive-full'].Banner | Should -BeTrue; $t['drive-full'].Logged | Should -BeTrue
+        $t['drive-space-ok'].Severity | Should -Be 'info'; $t['drive-space-ok'].Banner | Should -BeFalse; $t['drive-space-ok'].Logged | Should -BeTrue
+    }
+    It 'T65-07 the events take their flags from the table' {
+        $e = Get-DriveEvents (New-Drive 'D:' 90 'filling') (New-Drive 'D:' 96 'full')
+        $e[0].severity | Should -Be 'flag'; $e[0].banner | Should -BeTrue; $e[0].logged | Should -BeTrue
+        $e = Get-DriveEvents (New-Drive 'D:' 96 'full') (New-Drive 'D:' 60 'ok')
+        $e[0].severity | Should -Be 'info'; $e[0].banner | Should -BeFalse; $e[0].logged | Should -BeTrue
+    }
+}

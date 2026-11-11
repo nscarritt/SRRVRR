@@ -74,3 +74,36 @@ test('T62-06 showVersion shows the text as given, amber with a title unless it i
     }
   }
 });
+
+// T65-08: the Storage bar takes its color from the server's drive level, not from numbers in the page.
+function drivesPage() {
+  const els = { drives: { innerHTML: '' }, driveCard: { hidden: true } };
+  const doc = new Proxy(anything(), { get: (t, k) => (k === 'getElementById' ? id => els[id] || anything() : t[k]) });
+  const sb = {
+    module: { exports: {} }, document: doc, window: anything(), navigator: anything(), localStorage: anything(),
+    Audio: anything(), AudioContext: anything(), fetch: () => new Promise(() => {}), setInterval: () => 0,
+    setTimeout: () => 0, clearInterval: () => {}, requestAnimationFrame: () => 0, console,
+  };
+  vm.runInNewContext(source, sb);
+  return { render: sb.module.exports.renderDrives, els, fn: sb.module.exports.renderDrives };
+}
+const GB = 1024 ** 3;
+const driveRow = (letter, used, level) => Object.assign({ letter, label: 'Disk', size: 100 * GB, free: (100 - used) * GB, health: 'Healthy' }, level === undefined ? {} : { level });
+
+test('T65-08 renderDrives colors each bar from the drive level: none, warn, crit, none', () => {
+  const { render, els } = drivesPage();
+  render({ drives: [driveRow('C:', 50, 'ok'), driveRow('D:', 90, 'filling'), driveRow('E:', 97, 'full'), driveRow('F:', 99)], diskIO: {} });
+  const bars = els.drives.innerHTML.match(/<div class="bar[^"]*">/g);
+  assert.deepStrictEqual(bars, ['<div class="bar ">', '<div class="bar warn">', '<div class="bar crit">', '<div class="bar ">']);
+});
+
+test('T65-08 the page does not decide: 99% used with level ok stays plain, 10% used with level full is red', () => {
+  const { render, els } = drivesPage();
+  render({ drives: [driveRow('C:', 99, 'ok'), driveRow('D:', 10, 'full')], diskIO: {} });
+  assert.deepStrictEqual(els.drives.innerHTML.match(/<div class="bar[^"]*">/g), ['<div class="bar ">', '<div class="bar crit">']);
+});
+
+test('T65-08 renderDrives has no 85 or 95 left in it', () => {
+  const { fn } = drivesPage();
+  assert.ok(!/\b(85|95)\b/.test(fn.toString()), 'no hard-coded thresholds');
+});

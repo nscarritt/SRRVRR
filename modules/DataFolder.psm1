@@ -200,5 +200,18 @@ function Select-DrivesToShow {
     @($shown | ForEach-Object { if (-not $_.PSObject.Properties['Missing']) { $_ | Add-Member NoteProperty Missing $false -PassThru } else { $_ } } | Sort-Object DeviceID)
 }
 
-Export-ModuleMember -Function Select-DrivesToShow, Resolve-SrrPath, Test-PathInShare, Get-ShareList, Test-Elevated, Get-SrrDriveType, Test-FolderWritable,
+# The level of a drive's space (spec 0.8 section 3), here because the slow sampler already loads this module: ok, filling or full. Going up is at the thresholds (Warn, Full, percent used); going
+# down needs 2 points of margin, so a drive hovering at a threshold doesn't flap. Previous is the last level, or $null.
+function Get-DriveLevel {
+    param([double]$UsedPercent, [object]$Previous, [int]$Warn, [int]$Full)
+    $was = if ($Previous) { [string]$Previous } else { 'ok' }
+    $margin = 2
+    if ($UsedPercent -ge $Full) { return 'full' }
+    if ($was -eq 'full' -and $UsedPercent -ge ($Full - $margin)) { return 'full' }
+    if ($UsedPercent -ge $Warn) { return 'filling' }
+    if ($was -ne 'ok' -and $UsedPercent -ge ($Warn - $margin)) { return 'filling' }
+    'ok'
+}
+
+Export-ModuleMember -Function Select-DrivesToShow, Get-DriveLevel, Resolve-SrrPath, Test-PathInShare, Get-ShareList, Test-Elevated, Get-SrrDriveType, Test-FolderWritable,
     Test-LockHeld, Resolve-DataPath, Get-DataFolderAclPlan, Set-DataFolderAcl, New-DataFolder
