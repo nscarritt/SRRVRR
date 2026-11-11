@@ -1,6 +1,6 @@
 // The graphs keep 15 minutes (900 seconds) and show the last 60 s or all 15 min, as chosen (remembered per browser).
-const N = 900, LINES = ['cpu', 'mem', 'gpu', 'rx', 'tx'];
-let hist = {cpu: [], mem: [], gpu: [], rx: [], tx: []};
+const N = 900, LINES = ['cpu', 'mem', 'gpu', 'rx', 'tx', 'smbRead', 'smbWrite'];
+let hist = {cpu: [], mem: [], gpu: [], rx: [], tx: [], smbRead: [], smbWrite: []};
 let lastTs = 0, range = 60;
 const missing = v => v == null || Number.isNaN(v);
 function rangeFromStorage(storage) {
@@ -132,6 +132,7 @@ function render(s) {
   drawGraphs();
   renderProcs(s);
   renderDrives(s);
+  renderTransfers(s);
 }
 function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
   const TB = 1099511627776, GB = 1073741824;
@@ -174,6 +175,69 @@ function renderDrives(s) {
       '<div class="dhealth ' + cls + '" title="' + title + '">' + (h || 'Unknown') + '</div>' +
       ioCells(d, io[d.letter]) + '</div>';
   }).join('');
+}
+// --- The Transfers card: the bottleneck line, the shares, and the graph of what they move.
+// A link speed given in bits per second: "1 Gb/s", "2.5 Gb/s", "100 Mb/s".
+function linkSpeed(bits) {
+  const u = bits >= 1e9 ? [1e9, 'Gb/s'] : bits >= 1e6 ? [1e6, 'Mb/s'] : [1e3, 'Kb/s'];
+  return +(bits / u[0]).toFixed(1) + ' ' + u[1];
+}
+// The server's answer (transfers.bottleneck) in words: {line, small}. The small print always carries the three numbers.
+function bottleneckText(b) {
+  if (!b) return {line: '', small: ''};
+  const l = b.link, d = b.drive, c = b.cpu;
+  const link = l ? 'Link ' + Math.round(l.percent) + '% of ' + linkSpeed(l.speedBits) : 'Link n/a';
+  const drive = d ? 'Drive ' + d.letter + ' ' + Math.round(d.percent) + '% busy, queue ' + d.queue : 'Drive n/a';
+  const cpu = c ? 'CPU ' + Math.round(c.percent) + '%' : 'CPU n/a';
+  const small = [link, drive, cpu].join(' \u00b7 ');
+  const pct = b.percent == null ? '' : Math.round(b.percent);
+  switch (b.name) {
+    case 'link': return {line: 'Bottleneck: the network link, ' + pct + '% of ' + (l ? linkSpeed(l.speedBits) : 'its speed'), small: small};
+    case 'drive': return {line: 'Bottleneck: the share\'s drive (' + (d ? d.letter : '?') + '), ' + pct + '% busy, queue ' + (d ? d.queue : 0), small: small};
+    case 'cpu': return {line: 'Bottleneck: the CPU, ' + pct + '%', small: small};
+    case 'none': return {line: 'Not the server: the client or the path to it', small: small};
+    case 'idle': return {line: 'Idle', small: small};
+  }
+  return {line: '', small: ''};
+}
+// A named resource is amber, red from 95%; "not the server" and idle are quiet.
+function bottleneckTone(b) { return !b || b.name === 'none' || b.name === 'idle' ? 'quiet' : b.percent >= 95 ? 'hot' : 'warn'; }
+// The rows of the shares table (the share list is only those with traffic or open files, busiest first).
+function shareRowsHtml(t) {
+  if (!t || !t.available) return '<tr><td colspan="5" class="tempty">' + esc((t && t.reason) || 'No share information yet.') + '</td></tr>';
+  const shares = t.shares || [];
+  if (!shares.length) return '<tr><td colspan="5" class="tempty">No share traffic or open files.</td></tr>';
+  return shares.map(x => '<tr><td title="' + esc(x.name) + '">' + esc(x.name) + '</td><td>' + esc(x.drive || '') + '</td><td>' + speed(x.readBps) +
+    '</td><td>' + speed(x.writeBps) + '</td><td>' + (x.openFiles || 0) + '</td></tr>').join('');
+}
+// What the shares move in total this second, or null when the server can't count it (the history shows a gap).
+function smbTotals(t) {
+  if (!t || !t.available) return null;
+  const sum = k => (t.shares || []).reduce((a, x) => a + (x[k] || 0), 0);
+  return {read: sum('readBps'), write: sum('writeBps')};
+}
+// A round top for the shares' graph, in bytes per second: 1, 2 or 5 times a power of ten of the unit, at least 100 KB/s.
+function niceBytes(v) {
+  let unit = 1024;
+  while (unit * 1024 <= Math.max(v, 100 * 1024)) unit *= 1024;
+  const x = Math.max(v, 100 * 1024) / unit;
+  for (const m of [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]) if (x <= m) return m * unit;
+  return 1024 * unit;
+}
+function renderTransfers(s) {
+  const t = s.transfers;
+  $('transCard').hidden = !t;               // an older server has no transfers value
+  if (!t) return;
+  const b = bottleneckText(t.bottleneck);
+  $('tline').textContent = b.line;
+  $('tline').className = 'tline ' + bottleneckTone(t.bottleneck);
+  $('tsmall').textContent = b.small;
+  $('tshares').innerHTML = shareRowsHtml(t);
+  $('tnote').hidden = !t.reason;
+  $('tnote').textContent = t.reason || '';
+  const tot = smbTotals(t);
+  $('smbS').innerHTML = '<span class="key"><i style="background:var(--rx)"></i>Read ' + (tot ? speed(tot.read) : 'n/a') +
+    '</span><span class="key"><i style="background:var(--tx)"></i>Write ' + (tot ? speed(tot.write) : 'n/a') + '</span>';
 }
 // Text from other programs (show titles, player names) is escaped before it goes into the page.
 const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
@@ -428,6 +492,8 @@ function drawGraphs() {
   draw('gpuC', [{data: v('gpu'), color: css('--gpu'), fill: true}], 100, '', range);
   const netMax = niceMax(Math.max(0, ...v('rx').concat(v('tx')).filter(x => !missing(x))));
   draw('netC', [{data: v('rx'), color: css('--rx'), fill: true}, {data: v('tx'), color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax), range);
+  const smbMax = niceBytes(Math.max(0, ...v('smbRead').concat(v('smbWrite')).filter(x => !missing(x))));
+  draw('smbC', [{data: v('smbRead'), color: css('--rx'), fill: true}, {data: v('smbWrite'), color: css('--tx'), dash: [4, 3]}], smbMax, speed(smbMax), range);
 }
 // --- The 60 s / 15 min buttons.
 function showRange() {
@@ -455,6 +521,8 @@ function pushReading(s) {
   for (let i = 0; i < skipped; i++) for (const n of LINES) push(hist[n], null);
   push(hist.cpu, s.cpu); push(hist.mem, 100 * s.memUsed / s.memTotal); push(hist.gpu, s.gpu || 0);
   push(hist.rx, s.rx); push(hist.tx, s.tx);
+  const smb = smbTotals(s.transfers);
+  push(hist.smbRead, smb ? smb.read : null); push(hist.smbWrite, smb ? smb.write : null);
   lastSecMs = sec;
 }
 async function tick() {

@@ -135,7 +135,7 @@ public class SrrHistoryStore {
 }
 
 function New-HistoryStore {
-    param([int]$Slots = 900, [int]$StepMs = 1000, [string[]]$Lines = @('cpu', 'mem', 'gpu', 'rx', 'tx'))
+    param([int]$Slots = 900, [int]$StepMs = 1000, [string[]]$Lines = @('cpu', 'mem', 'gpu', 'rx', 'tx', 'smbRead', 'smbWrite'))
     $s = New-Object SrrHistoryStore($Slots, $StepMs)
     foreach ($n in $Lines) { $s.Register($n) }
     , $s

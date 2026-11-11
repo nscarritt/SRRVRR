@@ -1,0 +1,25 @@
+{
+  "_note": "Made-up SMB, network and disk readings shaped like ReadCategory(): category, counter (lower case), instance, value. Share instances are \\\\*\\name; session instances are numeric ids.",
+  "SMB Server Shares": {
+    "read bytes/sec":   { "\\\\*\\projects": 3000000, "\\\\*\\media": 0,       "\\\\*\\d$": 500000, "\\\\*\\admin$": 0, "\\\\*\\ipc$": 120, "_total": 3500120 },
+    "write bytes/sec":  { "\\\\*\\projects": 0,       "\\\\*\\media": 2000000, "\\\\*\\d$": 0,      "\\\\*\\admin$": 0, "\\\\*\\ipc$": 40,  "_total": 2000040 },
+    "current open file count": { "\\\\*\\projects": 4, "\\\\*\\media": 2,       "\\\\*\\d$": 1,      "\\\\*\\admin$": 0, "\\\\*\\ipc$": 0,   "_total": 7 },
+    "avg. sec/request": { "\\\\*\\projects": 2,       "\\\\*\\media": 5,       "\\\\*\\d$": 1,       "\\\\*\\admin$": 0, "\\\\*\\ipc$": 0,   "_total": 3 },
+    "current data queue length": { "\\\\*\\projects": 1, "\\\\*\\media": 3,     "\\\\*\\d$": 0,      "\\\\*\\admin$": 0, "\\\\*\\ipc$": 0,   "_total": 4 }
+  },
+  "SMB Server Sessions": {
+    "read bytes/sec":   { "446676598785": 3000000, "446676598801": 500000, "_total": 3500000 },
+    "write bytes/sec":  { "446676598785": 0,       "446676598801": 2000000, "_total": 2000000 },
+    "current open file count": { "446676598785": 4, "446676598801": 3, "_total": 7 },
+    "files opened/sec": { "446676598785": 2.4,     "446676598801": 0.4, "_total": 2.8 }
+  },
+  "Network Interface": {
+    "bytes received/sec": { "ethernet 1": 94000000, "wifi 2": 100, "loopback pseudo": 5 },
+    "bytes sent/sec":     { "ethernet 1": 1000000,  "wifi 2": 200, "loopback pseudo": 5 },
+    "current bandwidth":  { "ethernet 1": 1000000000, "loopback pseudo": 0 }
+  },
+  "LogicalDisk": {
+    "% idle time":               { "c:": 99, "d:": 2, "e:": 100, "harddiskvolume3": 50, "_total": 70 },
+    "current disk queue length": { "c:": 0,  "d:": 4, "e:": 0,   "harddiskvolume3": 1,  "_total": 5 }
+  }
+}

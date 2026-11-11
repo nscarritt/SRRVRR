@@ -22,10 +22,10 @@ Describe 'T49-01 the ring' {
         $c.NewestMs | Should -Be ($T0Ms + 7000)
         $c.StepMs | Should -Be 1000
     }
-    It 'T49-01 defaults to 900 slots and the cpu, mem, gpu, rx and tx lines' {
+    It 'T49-01 defaults to 900 slots and the cpu, mem, gpu, rx, tx, smbRead and smbWrite lines' {
         $s = New-HistoryStore
         $s.Slots | Should -Be 900
-        @($s.Names) | Should -Be @('cpu', 'mem', 'gpu', 'rx', 'tx')
+        @($s.Names) | Should -Be @('cpu', 'mem', 'gpu', 'rx', 'tx', 'smbRead', 'smbWrite')   # the last two came with #76
         (Get-Values $s.Copy() 'tx').Count | Should -Be 900
     }
 }
