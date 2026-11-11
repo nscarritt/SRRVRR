@@ -103,10 +103,10 @@ test('T50-47 while Maintenance is on: no banner (so no ding), and no "more event
   assert.strictEqual(app.shouldBanner(ev(503, 'started', false, true), { on: false }), false);
 });
 
-test('T50-47 "Maintenance until HH:MM" in the browser\'s own time zone (two zones)', () => {
+test('T50-47 T63-03 "Maintenance until 3:30 PM" in the browser\'s own time zone (two zones)', () => {
   const m = { on: true, untilMs: Date.UTC(2026, 10, 4, 15, 30) };
-  assert.strictEqual(app.maintenanceText(m, 'UTC'), 'Maintenance until 15:30');
-  assert.strictEqual(app.maintenanceText(m, 'Asia/Tokyo'), 'Maintenance until 00:30');
+  assert.strictEqual(app.maintenanceText(m, 'UTC'), 'Maintenance until 3:30 PM');
+  assert.strictEqual(app.maintenanceText(m, 'Asia/Tokyo'), 'Maintenance until 12:30 AM');
   assert.strictEqual(app.maintenanceText({ on: false, untilMs: 0 }, 'UTC'), '');
   assert.match(app.maintenanceError(429), /too many changes, try again in a few seconds/i);
   assert.match(app.maintenanceError(403), /403/);
@@ -173,7 +173,46 @@ test('T50-49 the page still loads when reading localStorage itself throws (site 
   assert.strictEqual(typeof box.module.exports.soundFromStorage, 'function');
 });
 
-test('T50-50 the Flagged list: 20 events newest first, with severity and time', () => {
+test('T63-01 fmtTime: 12-hour times in a fixed zone, with a plain space before AM/PM', () => {
+  const at = (h, m) => Date.UTC(2026, 10, 6, h, m);
+  assert.strictEqual(app.fmtTime(at(19, 42), 'UTC'), '7:42 PM');
+  assert.strictEqual(app.fmtTime(at(0, 0), 'UTC'), '12:00 AM');
+  assert.strictEqual(app.fmtTime(at(12, 0), 'UTC'), '12:00 PM');
+  assert.strictEqual(app.fmtTime(at(9, 5), 'UTC'), '9:05 AM');
+  assert.strictEqual(app.fmtTime('x', 'UTC'), '');
+  assert.strictEqual(app.fmtTime(at(9, 5), 'Not/AZone'), '');
+});
+
+test('T63-02 fmtTime with a date', () => {
+  assert.strictEqual(app.fmtTime(Date.UTC(2026, 10, 6, 19, 42), 'UTC', true), 'Nov 6, 7:42 PM');
+});
+
+test('T63-04 a banner ends with the time of its event; a page-made banner with the time it appeared', () => {
+  const t = Date.UTC(2026, 10, 6, 19, 42);
+  const e = Object.assign(ev(601, 'service-offline', true, true, { name: 'Plex' }), { time: t });
+  const r = app.takeEvents({ lastEventId: 601, events: [e] }, 600);
+  assert.strictEqual(r.banners[0].time, t);
+  const lines = plain(app.bannerLines(r.banners[0].lines, r.banners[0].time, 'UTC'));
+  assert.deepStrictEqual(lines, ['It is no longer running.', '7:42 PM']);
+  assert.deepStrictEqual(plain(app.bannerLines(['Some alerts were skipped.'], Date.UTC(2026, 10, 6, 0, 5), 'UTC')),
+    ['Some alerts were skipped.', '12:05 AM']);
+  assert.deepStrictEqual(plain(app.bannerLines([], t, 'UTC')), ['7:42 PM']);
+  // the Flagged list's hover text has no time line of its own
+  assert.deepStrictEqual(plain(app.bannerFor(e).lines), ['It is no longer running.']);
+});
+
+test('T63-05 a banner closes on the 60th visible second, not before, and hidden seconds do not count', () => {
+  let hidden = false;
+  const tick = app.bannerTicker(() => hidden, 60);
+  for (let i = 0; i < 59; i++) assert.strictEqual(tick(), false, 'visible second ' + (i + 1));
+  hidden = true;
+  for (let i = 0; i < 120; i++) assert.strictEqual(tick(), false, 'hidden second ' + (i + 1));
+  hidden = false;
+  assert.strictEqual(tick(), true);
+  assert.strictEqual(app.bannerTicker(() => false)(), false);   // the default is 60, not 1
+});
+
+test('T50-50 T63-06 the Flagged list: 20 events newest first, with severity and time', () => {
   const sevs = ['flag', 'warn', 'info'];
   const events = [];
   for (let i = 1; i <= 20; i++) {
@@ -188,8 +227,9 @@ test('T50-50 the Flagged list: 20 events newest first, with severity and time', 
     assert.ok(at > last, 'Svc' + i + ' is after the newer ones');
     last = at;
   }
-  assert.ok(html.indexOf('15:20') < html.indexOf('15:19'));
-  assert.match(html, /Nov/);
+  assert.ok(html.indexOf('3:20 PM') < html.indexOf('3:19 PM'));
+  assert.match(html, /Nov 4, 3:20 PM/);
+  assert.ok(!/15:\d\d/.test(html));
   assert.match(html, /class="fsev flag">Flag</);
   assert.match(html, /class="fsev warn">Warning</);
   assert.match(html, /class="fsev info">Info</);
