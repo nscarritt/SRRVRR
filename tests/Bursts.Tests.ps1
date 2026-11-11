@@ -218,14 +218,14 @@ Describe 'T77-07 the event data' {
             @{ share = 'Code'; path = 'd'; files = 20; writing = $false }
             @{ share = 'Code'; path = 'e'; files = 10; writing = $false }
         ) }
-        $script:Rows = @(@{ name = 'Desk PC'; address = '192.0.2.10'; account = 'EXAMPLE\maria'; known = $true }, @{ name = $null; address = '192.0.2.77'; account = 'EXAMPLE\guest'; known = $false })
+        $script:Rows = @(@{ name = 'Desk PC'; address = '192.0.2.10'; account = 'TESTLAB\desk-user'; known = $true }, @{ name = $null; address = '192.0.2.77'; account = 'TESTLAB\guest-user'; known = $false })
     }
     It 'T77-07 a named PC: its name, address, account, files, bytes, start, shares from its folders and at most 5 folders with counts' {
         $e = @(Get-BurstEvents -Old @() -New @($Burst) -PcRows $Rows -PcFolders $Folders -IncludeFolders $true)
         $d = $e[0].Data
         $d.pc | Should -Be 'Desk PC'
         $d.address | Should -Be '192.0.2.10'
-        $d.account | Should -Be 'EXAMPLE\maria'
+        $d.account | Should -Be 'TESTLAB\desk-user'
         $d.files | Should -Be 612
         $d.bytes | Should -Be 7340032
         $d.startMs | Should -Be 5000
@@ -241,7 +241,7 @@ Describe 'T77-07 the event data' {
         $b = $Burst.Clone(); $b.key = '192.0.2.77'; $b.address = '192.0.2.77'
         $d = @(Get-BurstEvents -Old @() -New @($b) -PcRows $Rows -PcFolders @{} -IncludeFolders $true)[0].Data
         $d.pc | Should -Be 'unknown'
-        $d.account | Should -Be 'EXAMPLE\guest'
+        $d.account | Should -Be 'TESTLAB\guest-user'
         @($d.shares) | Should -Be @('Fallback')
     }
     It 'T77-07 with folders off there are none, but the counts stay' {
@@ -334,7 +334,7 @@ Describe 'T77-11 the log' {
             $b = @{ key = '192.0.2.10'; address = '192.0.2.10'; sessions = @('1'); startMs = 1000L; endedMs = $null; files = 600L; bytes = 1L; shares = @('Code'); reason = $null }
             $b2 = $b.Clone(); $b2.endedMs = 9000L; $b2.reason = 'quiet'
             $folders = @{ '192.0.2.10' = @(@{ share = 'Code'; path = 'src'; files = 600; writing = $true; file = 'CanaryDocQz.docx'; name = 'CanaryDocQz.docx' }) }
-            $rows = @(@{ name = 'Desk PC'; address = '192.0.2.10'; account = 'EXAMPLE\maria'; known = $true })
+            $rows = @(@{ name = 'Desk PC'; address = '192.0.2.10'; account = 'TESTLAB\desk-user'; known = $true })
             foreach ($r in @((Get-BurstEvents -Old @() -New @($b) -PcRows $rows -PcFolders $folders -IncludeFolders $true), (Get-BurstEvents -Old @($b) -New @($b2) -PcRows $rows -PcFolders $folders -IncludeFolders $true))) {
                 Add-SrrQueueItem -Queue $q -Item (New-TypedEvent -Type $r.Type -Data $r.Data -Key $r.Key)
             }
@@ -343,7 +343,7 @@ Describe 'T77-11 the log' {
             $lines.Count | Should -Be ($before + 2)
             $burstLines = @($lines | Where-Object { $_ -match 'write-burst' })
             $burstLines.Count | Should -Be 2
-            foreach ($l in $burstLines) { $l | Should -Match 'EXAMPLE\\\\maria'; $l | Should -Not -Match 'Canary' }
+            foreach ($l in $burstLines) { $l | Should -Match 'TESTLAB\\\\desk-user'; $l | Should -Not -Match 'Canary' }
         } finally { Remove-TestDataPath $dir }
     }
 }

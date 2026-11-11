@@ -445,9 +445,9 @@ Describe 'T78-17 the recording tool' {
         $utf8 = New-Object Text.UTF8Encoding($false)
         [IO.File]::WriteAllText((Join-Path $script:Raw 'sessions.json'), (@'
 [
-  { "SessionId": "77", "ClientComputerName": "10.20.30.40", "ClientUserName": "HOMEDOM\\pat.example", "Dialect": "3.1.1" },
-  { "SessionId": "78", "ClientComputerName": "[fe80::aaaa:bbbb%4]", "ClientUserName": "HOMEDOM\\mjones", "Dialect": "3.0.2" },
-  { "SessionId": "79", "ClientComputerName": "10.20.30.40", "ClientUserName": "HOMEDOM\\pat.example", "Dialect": "3.1.1" }
+  { "SessionId": "77", "ClientComputerName": "10.20.30.40", "ClientUserName": "SAMPLEDOM\\input-user-a", "Dialect": "3.1.1" },
+  { "SessionId": "78", "ClientComputerName": "[fe80::aaaa:bbbb%4]", "ClientUserName": "SAMPLEDOM\\input-user-b", "Dialect": "3.0.2" },
+  { "SessionId": "79", "ClientComputerName": "10.20.30.40", "ClientUserName": "SAMPLEDOM\\input-user-a", "Dialect": "3.1.1" }
 ]
 '@), $utf8)
         [IO.File]::WriteAllText((Join-Path $script:Raw 'openfiles.json'), (@'
@@ -476,7 +476,7 @@ Describe 'T78-17 the recording tool' {
             Test-Path -LiteralPath $p | Should -BeTrue -Because $n
             $text += [IO.File]::ReadAllText($p)
         }
-        foreach ($real in 'pat.example', 'mjones', 'HOMEDOM', 'Family', 'Photos', 'Holiday', 'IMG_4411', 'beach', 'Taxes', 'secret', 'return', '10.20.30.40', 'aaaa:bbbb', 'FamilyPhotos') {
+        foreach ($real in 'input-user-a', 'input-user-b', 'SAMPLEDOM', 'Family', 'Photos', 'Holiday', 'IMG_4411', 'beach', 'Taxes', 'secret', 'return', '10.20.30.40', 'aaaa:bbbb', 'FamilyPhotos') {
             $text | Should -Not -Match ([regex]::Escape($real)) -Because $real
         }
         $sessions = @(ConvertFrom-Json ([IO.File]::ReadAllText((Join-Path $script:Out 'sessions.json'))))

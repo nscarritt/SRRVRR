@@ -34,7 +34,7 @@ function burst(id, type, data, extra) {
     maintenance: false, banner: type === 'write-burst', logged: true }, extra || {});
 }
 const named = {
-  pc: 'Desk PC', address: '192.0.2.10', account: 'EXAMPLE\\maria', shares: ['Code', 'Photos'], files: 612, bytes: 7340032, startMs: 5000,
+  pc: 'Desk PC', address: '192.0.2.10', account: 'TESTLAB\\desk-user', shares: ['Code', 'Photos'], files: 612, bytes: 7340032, startMs: 5000,
   folders: [
     { share: 'Photos', path: 'Trips\\2026', files: 300 }, { share: 'Photos', path: 'Trips', files: 200 }, { share: 'Code', path: 'a', files: 50 },
     { share: 'Code', path: 'b', files: 40 }, { share: 'Code', path: 'c', files: 30 }, { share: 'Code', path: 'd', files: 20 },
@@ -47,7 +47,7 @@ test('T77-15 a burst from a named PC: its name, files, shares and at most 5 fold
   assert.strictEqual(b.title, 'Write burst from Desk PC');
   assert.ok(b.lines.includes('612 files opened, 7 MB written so far'));
   assert.ok(b.lines.includes('Shares: Code, Photos'));
-  assert.ok(b.lines.some(l => /192\.0\.2\.10/.test(l) && /EXAMPLE\\maria/.test(l)));
+  assert.ok(b.lines.some(l => /192\.0\.2\.10/.test(l) && /TESTLAB\\desk-user/.test(l)));
   const folders = b.lines.filter(l => /\(\d+ files?\)$/.test(l) && !/opened/.test(l));
   assert.strictEqual(folders.length, 5);
   assert.strictEqual(folders[0], 'Photos\\Trips\\2026 (300 files)');
@@ -63,9 +63,9 @@ test('T77-15 a burst from an unelevated copy says a PC (needs administrator), wi
 });
 
 test('T77-15 an unknown PC shows its address and account', () => {
-  const b = plain(sandbox.bannerFor(burst(3, 'write-burst', { pc: 'unknown', address: '192.0.2.77', account: 'EXAMPLE\\guest', shares: [], files: 501, bytes: 0, folders: [] })));
+  const b = plain(sandbox.bannerFor(burst(3, 'write-burst', { pc: 'unknown', address: '192.0.2.77', account: 'TESTLAB\\guest-user', shares: [], files: 501, bytes: 0, folders: [] })));
   assert.strictEqual(b.title, 'Write burst from unknown');
-  assert.ok(b.lines.includes('Address 192.0.2.77, account EXAMPLE\\guest'));
+  assert.ok(b.lines.includes('Address 192.0.2.77, account TESTLAB\\guest-user'));
 });
 
 test('T77-15 the ended text has the files, bytes and duration, and says when SRRVRR stopped', () => {

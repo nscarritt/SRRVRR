@@ -386,6 +386,12 @@ only seconds in which that PC was also writing; it ends once the PC has stayed b
 `write-burst-ended` flag with the duration is logged then. A burst still going when SRRVRR stops
 cleanly is ended with the reason "stopped". The log holds folders and counts, never file names.
 
+**Accounts and addresses in the log.** The four transfer events (`unknown-pc`, `unknown-pc-write`, `write-burst`
+and `write-burst-ended`) record the Windows account the PC used and its address, as evidence of who wrote what. No
+other event records a person's name (a Plex stream event never keeps the viewer). So the event logs under `logs\`
+and `/events` name your accounts and your PCs' addresses: **never paste a raw log or `/events` output into a public
+issue.** To share what the Transfers card sees, run `tools\Export-TransferSample.ps1` as administrator: it writes a
+sample with the names, addresses, accounts and paths replaced.
 **Sound:** click **Sound off** in the header to turn on a soft ding with each alert (you hear a
 sample). Browsers only play sound after you've clicked or tapped the page, so after a reload the
 button says "Sound on: tap to allow" until you click or tap anywhere on the page. The choice is remembered in each
