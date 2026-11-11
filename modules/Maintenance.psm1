@@ -252,10 +252,11 @@ function New-RefusalCounter {
 # POST /maintenance from start to finish: the guard (header, content type, Origin), then the named-PC check, then the
 # body, then the rate limit, then the change. Returns @{ Status; Body (for JSON); Change (the change record, or
 # $null) }. The address is the connection's own; no header can change it. -Named is whether that address is a named
-# PC or the server itself (the caller decides, from the address alone); $false is 403 and counted in -Refusals.
+# PC or the server itself (the caller decides, from the address alone); $false is 403 and counted in -Refusals. It
+# defaults to $false, so a caller that leaves it out is refused (it fails closed).
 function Invoke-MaintenanceChange {
     param($Headers, [string]$Body, [string]$Address, [object]$State, [object]$Limiter, [hashtable]$Identity, [int]$Port,
-        [bool]$Named = $true, [object]$Refusals = $null)
+        [bool]$Named = $false, [object]$Refusals = $null)
     $guard = Test-MaintenanceRequest -Headers $Headers -Identity $Identity -Port $Port
     if (-not $guard.Ok) { return @{ Status = $guard.Status; Body = @{ error = 'refused' }; Change = $null } }
     if (-not $Named) {

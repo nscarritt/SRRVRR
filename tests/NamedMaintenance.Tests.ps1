@@ -81,13 +81,14 @@ Describe 'T79-01 an address that is not a named PC is refused' {
         $r.Status | Should -Be 403
         $state.IsOn() | Should -BeTrue
     }
-    It 'T79-01 named (the default) still changes Maintenance, so the existing callers are unchanged' {
+    It 'T79-01 with no -Named it fails closed: 403 and no change; -Named $true changes Maintenance' {
         $state = New-MaintenanceState -Clock $Clock -Hours 2
         $r = Invoke-MaintenanceChange -Headers (Get-GoodHeader) -Body '{"on":true}' -Address '192.0.2.10' -State $state -Limiter (New-RateLimiter -Clock $Clock) -Identity $Identity -Port 8091
-        $r.Status | Should -Be 200
-        $state.IsOn() | Should -BeTrue
-        $explicit = Invoke-MaintenanceChange -Headers (Get-GoodHeader) -Body '{"on":false}' -Address '192.0.2.10' -State $state -Limiter (New-RateLimiter -Clock $Clock) -Identity $Identity -Port 8091 -Named $true
+        $r.Status | Should -Be 403
+        $state.IsOn() | Should -BeFalse
+        $explicit = Invoke-MaintenanceChange -Headers (Get-GoodHeader) -Body '{"on":true}' -Address '192.0.2.10' -State $state -Limiter (New-RateLimiter -Clock $Clock) -Identity $Identity -Port 8091 -Named $true
         $explicit.Status | Should -Be 200
+        $state.IsOn() | Should -BeTrue
     }
     It 'T79-01 a refusal with no Refusals counter given is still the 403 (nothing to count into)' {
         $r = Invoke-MaintenanceChange -Headers (Get-GoodHeader) -Body '{"on":true}' -Address '192.0.2.99' -State (New-MaintenanceState -Clock $Clock) -Limiter (New-SpyLimiter) -Identity $Identity -Port 8091 -Named $false

@@ -392,7 +392,7 @@ Describe 'T50-34 to T50-37 and T50-42 to T50-44: POST /maintenance and /events t
             $ctx = $c
             $c.HandleMaintenance = {
                 param($headers, $body, $address)
-                $r = Invoke-MaintenanceChange -Headers $headers -Body $body -Address $address -State $ctx.Maintenance -Limiter $ctx.Limiter -Identity $ctx.Identity -Port 8091
+                $r = Invoke-MaintenanceChange -Headers $headers -Body $body -Address $address -State $ctx.Maintenance -Limiter $ctx.Limiter -Identity $ctx.Identity -Port 8091 -Named $true
                 if ($r.Change) { $ctx.Changes.Add($r.Change) }
                 $r
             }.GetNewClosure()
