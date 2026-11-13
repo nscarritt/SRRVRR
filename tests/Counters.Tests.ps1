@@ -34,6 +34,13 @@ Describe 'T47-11 CPU total' {
     It 'T47-11 CPU is capped at 100' {
         Get-CpuTotal -Values @{ '_Total' = 104.2 } | Should -Be 100
     }
+    It 'T47-11 a fractional CPU total is not rounded by the cap (#81)' {
+        Get-CpuTotal -Values @{ '_Total' = 79.9 } | Should -Be 79.9
+    }
+    It 'T47-11 no percentage cap is written [math]::Min(100, ...) (it would pick the Int32 overload and round, #81)' {
+        $hits = Select-String -Path (Join-Path (Get-RepoRoot) 'modules\*.psm1') -Pattern '\[math\]::(Min|Max)\(\s*100\s*,'
+        @($hits | ForEach-Object { "$($_.Filename):$($_.LineNumber)" }) | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'T47-12 GPU' {
@@ -85,6 +92,13 @@ Describe 'T47-13 process rows' {
         $row = (Get-ServiceRows @Common -Processes $procs -PrivateMemory @{} -CpuTimes @{ 10 = 0.0 }).Rows[0]
         $row.mem | Should -Be 40
         $row.cpu | Should -Be 100
+    }
+    It 'T47-13 fractional process CPU and GPU are not rounded by the cap (#81)' {
+        $procs = @(New-Proc 10 'valheim_server' 6.392 1)   # 6.392 s / (2 s x 4 cores) = 79.9 %
+        $c = $Common.Clone(); $c.GpuByProcess = @{ 10 = @{ 'a|0|0' = 79.9 } }
+        $row = (Get-ServiceRows @c -Processes $procs -PrivateMemory @{} -CpuTimes @{ 10 = 0.0 }).Rows[0]
+        $row.cpu | Should -Be 79.9
+        $row.gpu | Should -Be 79.9
     }
     It 'T47-13 the row is offline when the main process is missing' {
         $row = (Get-ServiceRows @Common -Processes @(New-Proc 20 'notepad' 1 1) -PrivateMemory @{} -CpuTimes @{}).Rows[0]

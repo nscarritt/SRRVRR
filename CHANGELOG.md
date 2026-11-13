@@ -9,6 +9,11 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Fixed
+- (#81) CPU and GPU percentages were rounded to a whole number by the 100% cap: Windows PowerShell picks the integer
+  overload of `[math]::Min(100, ...)`, so 79.9 became 80. The caps now use `100.0`; tests check that 79.9 stays 79.9
+  and that no module writes the cap the old way.
+
 ## [0.8.0] - 2026-11-11
 
 Alerts and drives: the page and `/stats` show which version is running, every alert says when it happened in
