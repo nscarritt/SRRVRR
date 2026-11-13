@@ -26,7 +26,7 @@ function Get-CounterSum([hashtable]$Values) {
 function Get-CpuTotal([hashtable]$Values) {
     $cpu = 0
     if ($Values.ContainsKey('_Total')) { $cpu = $Values['_Total'] }
-    [math]::Min(100, $cpu)
+    [math]::Min(100.0, $cpu)
 }
 
 # Like Task Manager: add up every process on each engine, then report the busiest engine.
@@ -114,12 +114,12 @@ function Get-ServiceRows {
             name      = $svc.name
             icon      = $svc.icon
             online    = $true
-            cpu       = [math]::Round([math]::Min(100, 100 * $cpuSec / ($Elapsed * $Cores)), 1)
+            cpu       = [math]::Round([math]::Min(100.0, 100 * $cpuSec / ($Elapsed * $Cores)), 1)
             # The same CPU time in whole cores (1.0 = one core flat out); shows when a mostly single-threaded
             # server like Valheim is maxing out its main thread.
             coresUsed = [math]::Round($cpuSec / $Elapsed, 1)
             mem       = [math]::Round(100 * $mem / $TotalRam, 1)
-            gpu       = [math]::Round([math]::Min(100, $procGpu), 1)
+            gpu       = [math]::Round([math]::Min(100.0, $procGpu), 1)
             tx        = if ($Net) { [math]::Round($sent / $Elapsed) } else { $null }
             rx        = if ($Net) { [math]::Round($recv / $Elapsed) } else { $null }
         }
@@ -174,7 +174,7 @@ function Invoke-FastTick {
             $State.memUsed = $Context.TotalRam - (Get-CounterSum (Get-CounterDelta $Previous $cur 'Memory' 'Available Bytes'))
             $State.rx = [math]::Round((Get-CounterSum (Get-CounterDelta $Previous $cur 'Network Interface' 'Bytes Received/sec')))
             $State.tx = [math]::Round((Get-CounterSum (Get-CounterDelta $Previous $cur 'Network Interface' 'Bytes Sent/sec')))
-            $State.gpu = [math]::Round([math]::Min(100, $gpu.Gpu), 1)
+            $State.gpu = [math]::Round([math]::Min(100.0, $gpu.Gpu), 1)
             $State.gpuEngine = $gpu.Engine
             $State.gpuMem = Get-GpuMemory -Values (Get-CounterDelta $Previous $cur 'GPU Adapter Memory' 'Dedicated Usage') -GpuLuid $Context.GpuLuid
             $State.diskIO = Get-DiskIO -Reads (Get-CounterDelta $Previous $cur 'LogicalDisk' 'Disk Read Bytes/sec') `
