@@ -840,7 +840,8 @@ public static class SrrvrrSensorLoader {
                 $drives = @()
                 # Fixed drives of 1 GB or more (tiny system partitions aren't storage people use), plus the drive
                 # that holds the data folder, even removable, shown as Missing when it's gone (spec section 3).
-                foreach ($v in Select-DrivesToShow -Volumes @(Get-CimInstance Win32_LogicalDisk) -DataPaths $dataDrives.Paths) {
+# The filter keeps WMI from asking mapped network drives that are disconnected: that stalled this pass for about 21 s, and the AI server and top programs readings with it.
+                foreach ($v in Select-DrivesToShow -Volumes @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2 OR DriveType=3') -DataPaths $dataDrives.Paths) {
                     $disk = $null
                     $letter = $v.DeviceID.TrimEnd(':')
                     if ($diskOf.ContainsKey($letter)) { $disk = $health[$diskOf[$letter]] }
