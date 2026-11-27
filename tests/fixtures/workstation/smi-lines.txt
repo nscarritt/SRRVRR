@@ -1,0 +1,50 @@
+# nvidia-smi output for ConvertFrom-SmiDetail (tests\Workstation.Tests.ps1, region 91; test plan 6.11, T91-06 to
+# T91-08). Hand-made: every reading is made up. Each [case] holds the lines nvidia-smi prints for
+#   --query-gpu=name,temperature.gpu,power.draw,power.limit,clocks.sm,clocks.max.sm,fan.speed,pstate,
+#     <prefix>.sw_power_cap,<prefix>.hw_slowdown,<prefix>.sw_thermal_slowdown,<prefix>.hw_thermal_slowdown,
+#     <prefix>.hw_power_brake_slowdown
+#   --format=csv,noheader,nounits
+# so the five reasons come last, in that order. Lines starting with # and blank lines are not output.
+
+[busy]
+NVIDIA GeForce RTX 4090, 33.65, 312.40, 450.00, 2610, 3105, 48, P2, Active, Not Active, Not Active, Not Active, Not Active
+
+[reason-sw-power-cap]
+NVIDIA GeForce RTX 4090, 64, 449.10, 450.00, 2520, 3105, 61, P2, Active, Not Active, Not Active, Not Active, Not Active
+[reason-hw-slowdown]
+NVIDIA GeForce RTX 4090, 64, 290.60, 450.00, 1980, 3105, 61, P2, Not Active, Active, Not Active, Not Active, Not Active
+[reason-sw-thermal]
+NVIDIA GeForce RTX 4090, 84, 301.20, 450.00, 2205, 3105, 100, P2, Not Active, Not Active, Active, Not Active, Not Active
+[reason-hw-thermal]
+NVIDIA GeForce RTX 4090, 88, 280.90, 450.00, 1830, 3105, 100, P2, Not Active, Not Active, Not Active, Active, Not Active
+[reason-hw-power-brake]
+NVIDIA GeForce RTX 4090, 64, 120.30, 450.00, 1410, 3105, 61, P2, Not Active, Not Active, Not Active, Not Active, Active
+[reason-all]
+NVIDIA GeForce RTX 4090, 88, 449.80, 450.00, 1410, 3105, 100, P2, Active, Active, Active, Active, Active
+[reason-none]
+NVIDIA GeForce RTX 4090, 38, 21.40, 450.00, 210, 3105, 0, P8, Not Active, Not Active, Not Active, Not Active, Not Active
+
+# A card that reports no fan or power limit (a laptop, a passively cooled card).
+[na-fan-and-limit]
+NVIDIA GeForce RTX 4090, 41, 75.20, [N/A], 1410, 3105, [N/A], P8, Not Active, Not Active, Not Active, Not Active, Not Active
+[empty-fields]
+NVIDIA GeForce RTX 4090, 41, , 450.00, 1410, , 30, P8, Not Active, Not Active, Not Active, Not Active, Not Active
+[not-supported]
+NVIDIA GeForce RTX 4090, 41, [Not Supported], 450.00, 1410, 3105, Not Supported, P8, Not Active, Not Active, Not Active, Not Active, Not Active
+# An older driver that knows only the first of the five reasons.
+[nine-fields]
+NVIDIA GeForce RTX 4090, 34, 312.40, 450.00, 2610, 3105, 48, P2, Active
+
+[two-cards-named-second]
+NVIDIA T600, 45, 12.30, 40.00, 300, 1500, 30, P8, Not Active, Not Active, Not Active, Not Active, Not Active
+NVIDIA GeForce RTX 4090, 33.65, 312.40, 450.00, 2610, 3105, 48, P2, Active, Not Active, Not Active, Not Active, Not Active
+[two-cards-no-match]
+NVIDIA T600, 45, 12.30, 40.00, 300, 1500, 30, P8, Not Active, Not Active, Not Active, Not Active, Not Active
+NVIDIA RTX A2000, 52, 40.10, 70.00, 1200, 1770, 35, P2, Not Active, Not Active, Not Active, Not Active, Not Active
+
+# What nvidia-smi prints after a driver update, until Windows restarts.
+[driver-error]
+Failed to initialize NVML: Driver/library version mismatch
+[driver-error-two-lines]
+Failed to initialize NVML: Driver/library version mismatch
+NVML library version: 581.15

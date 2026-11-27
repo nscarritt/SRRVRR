@@ -386,3 +386,48 @@ Describe 'T90-07 to T90-09 roles on a test build' -Tag 'Smoke' {
     }
 }
 #endregion 90
+#region 91
+# Video memory and GPU detail on a Workstation test build (test plan 6.11). What it can check depends on the PC:
+# a GPU (the CI runner has none) and nvidia-smi (NVIDIA cards only).
+Describe 'T91 a Workstation test build' -Tag 'Smoke' {
+    BeforeAll {
+        $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($elevated -and -not $env:GITHUB_ACTIONS) { throw 'Run the smoke tests without administrator: an elevated test copy would change the live SRRVRR''s firewall rule.' }
+        function Get-Stats([int]$Port) { (Invoke-TestRequest -Url "http://localhost:$Port/stats").Body | ConvertFrom-Json }
+    }
+    It 'T91-16 /stats has gpuMemTotal, gpuShared and gpuSpill; with nvidia-smi the detail fields and their log line; with a GPU the Video memory line' {
+        $port = Get-FreePort
+        $folder = New-Build 'HEAD' $port
+        [IO.File]::WriteAllText((Join-Path $folder 'SRRVRR.config.psd1'), "@{`r`n    Port = $port`r`n    Role = 'Workstation'`r`n}`r`n")
+        $p = Start-Build $folder $port
+        try {
+            $s = Get-Stats $port
+            $names = @($s.PSObject.Properties.Name)
+            foreach ($k in 'gpuMemTotal', 'gpuShared', 'gpuSpill') { $names | Should -Contain $k }
+            $s.role | Should -Be 'workstation' -Because 'the build runs the Workstation role (#90)'
+            $s.gpuSpill | Should -BeOfType [bool]
+            $s.gpuShared | Should -BeGreaterOrEqual 0
+            $log = (Get-ChildItem (Join-Path $folder 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n"
+            if ($s.gpuLabel) {
+                $s.gpuMemTotal | Should -BeGreaterThan 0 -Because 'it is the picked GPU''s dedicated size'
+                $log | Should -Match ('INFO startup: Video memory: ' + [regex]::Escape($s.gpuLabel) + '.*, watching for spill \(95% full and 1 GB shared\)')
+            } else {
+                $s.gpuMemTotal | Should -Be 0 -Because 'no GPU was picked'
+                $log | Should -Not -Match 'watching for spill'
+            }
+            if ($log -match 'INFO startup: Temperature from ') {   # SRRVRR found nvidia-smi for the picked card
+                $log | Should -Match 'INFO startup: nvidia-smi detail fields: (clocks_event_reasons|clocks_throttle_reasons|none)'
+                if ($log -notmatch 'nvidia-smi detail fields: none') {
+                    $deadline = [DateTime]::UtcNow.AddSeconds(20)   # the slow sampler reads nvidia-smi every 5 s
+                    while (@($s.PSObject.Properties.Name) -notcontains 'gpuPState' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500; $s = Get-Stats $port }
+                    $names = @($s.PSObject.Properties.Name)
+                    foreach ($k in 'gpuPower', 'gpuPowerLimit', 'gpuClock', 'gpuClockMax', 'gpuFan', 'gpuPState', 'gpuLimits') { $names | Should -Contain $k }
+                    $s.gpuPState | Should -Match '^P\d+$'
+                }
+            } else {
+                $log | Should -Not -Match 'nvidia-smi detail fields:'
+            }
+        } finally { Stop-Build $p }
+    }
+}
+#endregion 91
