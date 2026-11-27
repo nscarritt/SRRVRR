@@ -856,6 +856,8 @@ public static class SrrvrrSensorLoader {
                 Counters   = { $s = @{}; foreach ($n in $wsCats.Keys) { $s[$n] = $wsCats[$n].ReadCategory() }; $s }.GetNewClosure()
                 WslProcess = { Get-Process -Name vmmemWSL -ErrorAction SilentlyContinue | Select-Object -First 1 }
                 WslConfig  = { $f = Join-Path $env:USERPROFILE '.wslconfig'; if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f) } else { $null } }
+                # The AI server: GET on 127.0.0.1 only, through the one reader in modules\Workstation.psm1 (spec section 6).
+                Http       = { param($Port, $Path) Read-LocalHttp -Port $Port -Path $Path }
             }
             $wsCtx = New-WorkstationContext -ComfyEntries @($workstation.ComfyEntries) -GpuLuid $workstation.GpuLuid -Cores $workstation.Cores `
                 -TotalRam ([double]$workstation.TotalRam) -Readers $wsReaders
@@ -1065,7 +1067,7 @@ $valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $s
 # What the slow sampler needs to build the Workstation's readings (null on a Server: no reader, no counter read).
 $workstation = if ($rolePlan.Workstation) {
     @{ ModulePath = (Join-Path $PSScriptRoot 'modules\Workstation.psm1'); GpuLuid = $gpuLuid; Cores = [int]$env:NUMBER_OF_PROCESSORS
-       TotalRam = [double]$totalRam; ComfyEntries = @() }
+       TotalRam = [double]$totalRam; ComfyEntries = @($settings.ComfyUi) }
 } else { $null }
 $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()

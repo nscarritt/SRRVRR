@@ -229,13 +229,13 @@ function Get-TopPrograms {
     foreach ($r in $rows) { $r }
 }
 
-# The slow sampler's memory, keeping what it needs from one pass to the next. Ai stays $null until story #93.
+# The slow sampler's memory, keeping what it needs from one pass to the next, with the AI server watch (#93).
 function New-WorkstationContext {
     param([object[]]$ComfyEntries = @(), [string]$GpuLuid, [int]$Cores, [double]$TotalRam, [int]$PageSize = 4096,
           [hashtable]$Readers, [int]$WslConfigEveryMs = 60000)
     @{ ComfyEntries = $ComfyEntries; GpuLuid = $GpuLuid; Cores = $Cores; TotalRam = $TotalRam; PageSize = $PageSize
        Readers = $Readers; WslConfigEveryMs = $WslConfigEveryMs
-       Previous = $null; PreviousMs = $null; WslCap = $null; WslCapReadMs = $null; Ai = $null }
+       Previous = $null; PreviousMs = $null; WslCap = $null; WslCapReadMs = $null; Ai = (New-AiWatch -Entries $ComfyEntries) }
 }
 
 # One slow-sampler pass: each part in its own try/catch, so one failing leaves the others running.
@@ -266,6 +266,12 @@ function Invoke-WorkstationTick {
             $State.top = @(Get-TopPrograms -Previous $Context.Previous -Current $snap -ElapsedSeconds $elapsed -Cores $Context.Cores -GpuLuid $Context.GpuLuid)
         } else { $State.top = @() }
     } catch { $errors.Add("top programs: $($_.Exception.Message)") }
+
+    if (@($Context.ComfyEntries).Count -gt 0) {
+        try {   # ai server: each entry's replies, after the wsl part so the VM state is this pass's
+            Update-WorkstationAi -State $State -Context $Context -NowMs $NowMs
+        } catch { $errors.Add("ai server: $($_.Exception.Message)") }
+    }
 
     if ($snap) { $Context.Previous = $snap; $Context.PreviousMs = $NowMs }
     $State.workstationError = if ($errors.Count) { $errors -join '; ' } else { $null }
