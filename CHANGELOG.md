@@ -10,6 +10,11 @@ called out under **Changed** or **Removed** with upgrade notes.
 ## [Unreleased]
 
 ### Added
+- (#93) **The AI server card.** On a Workstation, a `ComfyUi` setting (up to 4 entries of a name and a port on this PC)
+  adds an AI server card: each ComfyUI's state (Off, Starting, Idle, Working, Not answering), the queue and how long
+  it has worked, what it holds in video memory, the last batch, and the WSL virtual machine's memory. Two new alerts, "AI
+  job finished" and "AI server stopped answering during a job". SRRVRR only ever sends two `GET` requests to
+  127.0.0.1 and keeps a handful of numbers from the replies. README: "The AI server card".
 - (#90) **Roles and the host name.** A `Role` setting (`'Server'` by default, or `'Workstation'`) and a `DisplayName`.
   The header and the browser tab show the host name, and `/stats` gains `hostName` and `role`. A Workstation runs no
   Processes rows and no per-program network tracking, and its graph history gains `vram` and `vramShared` lines (filled

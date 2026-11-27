@@ -244,6 +244,21 @@ Write-Status "History and logs go to $($data.Path)"
 $rolePlan = Get-RolePlan -Role $settings.Role
 $displayName = Resolve-DisplayName -Setting $settings.DisplayName -Role $rolePlan.Role -ComputerName $env:COMPUTERNAME
 foreach ($line in @(Format-RoleLines -Plan $rolePlan)) { Write-Status $line }   # Write-Status logs it too
+# The AI server (v0.10.0): only a Workstation reads it. On the Server the setting is ignored, with a line.
+if (-not $rolePlan.Workstation -and @($settings.ComfyUi).Count -gt 0) {
+    $line = 'ComfyUi is used only on a workstation; ignored.'
+    Write-Status $line
+}
+# On a Workstation, one startup probe per entry: GET /system_stats on 127.0.0.1 only (spec section 6), 1 s, kept version only.
+if ($rolePlan.Workstation) {
+    foreach ($entry in @($settings.ComfyUi)) {
+        $probe = Read-LocalHttp -Port $entry.Port -Path '/system_stats' -TimeoutMs 1000
+        $probeStats = if ($probe.Ok) { ConvertFrom-ComfyStats -Body $probe.Body } else { $null }
+        $answer = if ($probeStats) { "answering (ComfyUI $($probeStats.version))" } elseif ($probe.Ok) { 'answering (unexpected reply)' } else { 'not answering (off or starting)' }
+        $line = "AI server '$($entry.Name)': ComfyUI on 127.0.0.1:$($entry.Port), $answer"
+        Write-Status $line
+    }
+}
 
 # Events (modules\Events.psm1): any thread adds to the queue; the main loop drains it once a second, writing the
 # logged ones to logs\events-YYYY-MM-DD.jsonl and keeping the last 200 for /stats.

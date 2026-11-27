@@ -105,6 +105,8 @@ $script:EventTypes = @{
     'worker-stopped' = @{ Severity = 'warn'; Banner = $false; Logged = $true }
     'maintenance-on' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'maintenance-off' = @{ Severity = 'info'; Banner = $false; Logged = $true }
+    'ai-job-done' = @{ Severity = 'info'; Banner = $true; Logged = $false }
+    'ai-stopped-answering' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
     'started' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'stopped' = @{ Severity = 'info'; Banner = $false; Logged = $true }
 }

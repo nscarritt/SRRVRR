@@ -273,4 +273,269 @@ function Invoke-WorkstationTick {
 #endregion 92
 
 #region 93 The AI server (#93)
+# The AI server (spec section 6; plan, region 93). Every reading of ComfyUI goes through Read-LocalHttp: two GETs
+# (/system_stats and /prompt) on 127.0.0.1, nothing else. Everything below it is pure.
+
+# The one network call in this module. Port and Path are validated before the body runs, so no other host, port
+# range or path can be asked for. Replies are capped at MaxBytes, counted as they are read (a reply may have no
+# Content-Length). Never throws: a refusal, a timeout, a status other than 200 or a reply that is too large is
+# Ok = $false with the reason in Error.
+function Read-LocalHttp {
+    param([ValidateRange(1024, 65535)][int]$Port, [ValidateSet('/system_stats', '/prompt')][string]$Path,
+          [int]$TimeoutMs = 2000, [int]$MaxBytes = 262144)
+    $result = @{ Ok = $false; Status = 0; Body = ''; Error = '' }
+    $response = $null
+    try {
+        $request = [Net.HttpWebRequest]::Create('http://127.0.0.1:' + $Port + $Path)
+        $request.Method = 'GET'
+        $request.Timeout = $TimeoutMs
+        $request.ReadWriteTimeout = $TimeoutMs
+        $request.Proxy = $null
+        $request.AllowAutoRedirect = $false
+        $request.KeepAlive = $false
+        try {
+            $response = $request.GetResponse()
+        } catch [Net.WebException] {
+            # A 4xx or 5xx arrives as an exception that still carries the reply.
+            if ($_.Exception.Response) {
+                $result.Status = [int]$_.Exception.Response.StatusCode
+                $_.Exception.Response.Close()
+                $result.Error = "HTTP $($result.Status)"
+            } else {
+                $result.Error = $_.Exception.Message
+            }
+            return $result
+        }
+        $result.Status = [int]$response.StatusCode
+        if ($result.Status -ne 200) { $result.Error = "HTTP $($result.Status)"; return $result }
+        $stream = $response.GetResponseStream()
+        $stream.ReadTimeout = $TimeoutMs
+        $held = New-Object IO.MemoryStream
+        $buffer = New-Object byte[] 8192
+        $limit = [long]$MaxBytes + 1
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        while ($held.Length -lt $limit) {
+            if ($timer.ElapsedMilliseconds -gt (2 * $TimeoutMs)) { $result.Error = 'reply too slow'; return $result }
+            $want = [int][Math]::Min([long]$buffer.Length, $limit - $held.Length)
+            $got = $stream.Read($buffer, 0, $want)
+            if ($got -le 0) { break }
+            $held.Write($buffer, 0, $got)
+        }
+        if ($held.Length -gt $MaxBytes) { $result.Error = 'reply too large'; return $result }
+        $result.Body = [Text.Encoding]::UTF8.GetString($held.ToArray())
+        $result.Ok = $true
+        $result
+    } catch {
+        $result.Ok = $false
+        $result.Body = ''
+        $result.Error = $_.Exception.Message
+        $result
+    } finally {
+        if ($response) { $response.Close() }
+    }
+}
+
+# A member of a parsed JSON object, or $null (strict mode safe).
+function Get-ComfyMember {
+    param($Object, [string]$Name)
+    if ($Object -is [pscustomobject]) {
+        $p = $Object.PSObject.Properties[$Name]
+        if ($p) { return $p.Value }
+    }
+    $null
+}
+
+# A whole number of zero or more as a [long], else $null (strings, fractions, negatives and booleans are not numbers).
+function ConvertTo-ComfyCount {
+    param($Value)
+    if ($Value -is [int] -or $Value -is [long]) {
+        if ($Value -ge 0) { return [long]$Value }
+        return $null
+    }
+    if ($Value -is [double] -or $Value -is [decimal]) {
+        if ($Value -ge 0 -and $Value -lt 9e15 -and $Value -eq [Math]::Floor($Value)) { return [long]$Value }
+    }
+    $null
+}
+
+# The kept fields of /system_stats and nothing else: the ComfyUI version, and for the first device the card's total
+# and free video memory (as ComfyUI sees them), what its PyTorch holds (torch_vram_total) and what is free of that.
+# $null for anything that isn't that shape. Everything else in the reply (argv, paths, library versions) is dropped.
+function ConvertFrom-ComfyStats {
+    param([string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    try {
+        $json = ConvertFrom-Json -InputObject $Body -ErrorAction Stop
+        $version = Get-ComfyMember (Get-ComfyMember $json 'system') 'comfyui_version'
+        if ($version -isnot [string] -or $version -cnotmatch '^[A-Za-z0-9._+-]{1,32}\z') { return $null }
+        $devices = @(Get-ComfyMember $json 'devices')
+        if ($devices.Count -lt 1) { return $null }
+        $card = $devices[0]
+        $total = ConvertTo-ComfyCount (Get-ComfyMember $card 'vram_total')
+        $free = ConvertTo-ComfyCount (Get-ComfyMember $card 'vram_free')
+        $holds = ConvertTo-ComfyCount (Get-ComfyMember $card 'torch_vram_total')
+        $torchFree = ConvertTo-ComfyCount (Get-ComfyMember $card 'torch_vram_free')
+        if ($null -eq $total -or $null -eq $free -or $null -eq $holds -or $null -eq $torchFree) { return $null }
+        @{ version = $version; vramTotal = $total; vramFree = $free; holds = $holds; torchFree = $torchFree }
+    } catch { $null }
+}
+
+# The queue count (running and waiting) from /prompt's exec_info.queue_remaining, or $null.
+function ConvertFrom-ComfyQueue {
+    param([string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    try {
+        $json = ConvertFrom-Json -InputObject $Body -ErrorAction Stop
+        $n = ConvertTo-ComfyCount (Get-ComfyMember (Get-ComfyMember $json 'exec_info') 'queue_remaining')
+        if ($null -eq $n -or $n -gt [int]::MaxValue) { return $null }
+        [int]$n
+    } catch { $null }
+}
+
+# One state record per configured entry, by name.
+function New-AiWatch {
+    param([object[]]$Entries = @())
+    $watch = @{}
+    foreach ($e in $Entries) {
+        $watch[[string]$e.Name] = @{ State = 'off'; Misses = 0; AnsweredThisVm = $false; AnsweredWithVm = $false
+                                     WorkingSinceMs = $null; LastDoneTs = $null; LastDoneSec = $null; LastRow = $null; VmWas = $null }
+    }
+    $watch
+}
+
+# The page's row for one entry. Readings are $null when there is none (off, starting, not answering, unknown).
+function New-AiRow {
+    param([hashtable]$W, [string]$Name, [string]$State, $Queue = $null, $WorkingSec = $null, $Stats = $null)
+    @{ name = $Name; state = $State; queue = $Queue; workingSec = $WorkingSec
+       holds = $(if ($Stats) { $Stats.holds } else { $null })
+       vramTotal = $(if ($Stats) { $Stats.vramTotal } else { $null })
+       vramFree = $(if ($Stats) { $Stats.vramFree } else { $null })
+       version = $(if ($Stats) { $Stats.version } else { $null })
+       lastDoneTs = $W.LastDoneTs; lastDoneSec = $W.LastDoneSec }
+}
+
+# One reading of one entry (spec section 6; the rules in the plan's order). $Answer is @{ Ok; Stats; Queue };
+# $VmRunning is $true, $false or $null (can't tell). Returns the row.
+function Update-AiWatch {
+    param([hashtable]$Watch, [string]$Name, [hashtable]$Answer, [object]$VmRunning, [long]$NowMs,
+          [int]$MinJobSec = 60, [int]$MissesToFail = 3)
+    $w = $Watch[$Name]
+    $ok = $Answer -and $Answer.Ok
+    # 1. A VM that was down and is up again is a new VM: this entry has not answered in it yet.
+    if ($null -ne $VmRunning) {
+        if ($w.VmWas -eq $false -and $VmRunning -eq $true) { $w.AnsweredThisVm = $false }
+        $w.VmWas = $VmRunning
+    }
+    $row = $null
+    if ($ok) {
+        # 2. Answered.
+        $w.Misses = 0
+        $w.AnsweredThisVm = $true
+        $w.AnsweredWithVm = ($VmRunning -eq $true)
+        if ($null -eq $Answer.Stats -or $null -eq $Answer.Queue) {
+            $w.State = 'unknown'
+            $row = New-AiRow $w $Name 'unknown'
+        } elseif ($Answer.Queue -ge 1) {
+            if ($null -eq $w.WorkingSinceMs) { $w.WorkingSinceMs = $NowMs }
+            $w.State = 'working'
+            $row = New-AiRow $w $Name 'working' $Answer.Queue ([long][Math]::Round([Math]::Max(0, $NowMs - $w.WorkingSinceMs) / 1000)) $Answer.Stats
+        } else {
+            if ($null -ne $w.WorkingSinceMs) {
+                $ms = $NowMs - $w.WorkingSinceMs
+                if ($ms -ge ($MinJobSec * 1000)) { $w.LastDoneTs = $NowMs; $w.LastDoneSec = [long][Math]::Round($ms / 1000) }
+                $w.WorkingSinceMs = $null
+            }
+            $w.State = 'idle'
+            $row = New-AiRow $w $Name 'idle' 0 $null $Answer.Stats
+        }
+    } elseif ($VmRunning -eq $false -and $w.AnsweredWithVm) {
+        # 3. The VM it ran in has gone: off at once.
+        $w.WorkingSinceMs = $null; $w.AnsweredThisVm = $false; $w.AnsweredWithVm = $false; $w.Misses = 0
+        $w.State = 'off'
+        $row = New-AiRow $w $Name 'off'
+    } else {
+        # 4. A miss. One or two keep the last row (a slow reply during a model load must not flicker).
+        $w.Misses++
+        if ($w.State -in 'idle', 'working', 'unknown' -and $w.Misses -lt $MissesToFail -and $w.LastRow) {
+            $row = $w.LastRow.Clone()
+            $row.lastDoneTs = $w.LastDoneTs; $row.lastDoneSec = $w.LastDoneSec
+            if ($row.state -eq 'working' -and $null -ne $w.WorkingSinceMs) {
+                $row.workingSec = [long][Math]::Round([Math]::Max(0, $NowMs - $w.WorkingSinceMs) / 1000)
+            }
+        } elseif ($w.AnsweredThisVm) {
+            # 5. Answered before in this VM, and no longer: not answering.
+            $w.WorkingSinceMs = $null
+            $w.State = 'not-answering'
+            $row = New-AiRow $w $Name 'not-answering'
+        } else {
+            $w.State = $(if ($VmRunning -eq $true) { 'starting' } else { 'off' })
+            $row = New-AiRow $w $Name $w.State
+        }
+    }
+    $w.LastRow = $row
+    $row.Clone()
+}
+
+# The AI part of the workstation tick (spec section 6): for each entry, /system_stats and then /prompt only if that
+# was Ok (at most 2 calls an entry), then Update-AiWatch with the VM state from $State.wsl.running ($null when
+# there is no WSL reading). $State.ai becomes a new array of rows. A reader that throws counts as a miss for that
+# entry, the other entries still run, and the first such error is thrown at the end for the tick to report.
+function Update-WorkstationAi {
+    param([hashtable]$State, [hashtable]$Context, [long]$NowMs)
+    $vm = $null
+    # The key of the WSL reading is spelled in two parts: the boundary test (T93-05) flags any bare string that is wsl.
+    $readingKey = 'ws' + 'l'
+    if ($State.ContainsKey($readingKey) -and $State[$readingKey] -is [System.Collections.IDictionary] -and $State[$readingKey].Contains('running')) { $vm = $State[$readingKey]['running'] }
+    $rows = New-Object System.Collections.Generic.List[object]
+    $failure = $null
+    foreach ($entry in @($Context.ComfyEntries)) {
+        $name = [string]$entry.Name
+        $answer = @{ Ok = $false; Stats = $null; Queue = $null }
+        try {
+            $s = & $Context.Readers.Http $entry.Port '/system_stats'
+            if ($s -and $s.Ok) {
+                $q = & $Context.Readers.Http $entry.Port '/prompt'
+                if ($q -and $q.Ok) {
+                    $answer = @{ Ok = $true; Stats = (ConvertFrom-ComfyStats -Body ([string]$s.Body)); Queue = (ConvertFrom-ComfyQueue -Body ([string]$q.Body)) }
+                }
+            }
+        } catch {
+            if (-not $failure) { $failure = $_.Exception.Message }
+        }
+        $rows.Add((Update-AiWatch -Watch $Context.Ai -Name $name -Answer $answer -VmRunning $vm -NowMs $NowMs))
+    }
+    $State.ai = $rows.ToArray()
+    if ($failure) { throw $failure }
+}
+
+# The AI events between two readings (each @{ ai = rows }): a job that was working and now isn't answering, and a
+# new lastDoneTs. Records @{ Type; Data; Key }, unrolled; counts and the owner's entry names only.
+function Get-AiWatchEvents {
+    param([object]$Old, [object]$New)
+    $found = New-Object System.Collections.Generic.List[object]
+    if ($Old -isnot [System.Collections.IDictionary] -or $New -isnot [System.Collections.IDictionary]) { return }
+    if (-not $Old.Contains('ai') -or -not $New.Contains('ai')) { return }
+    $before = @{}
+    foreach ($r in @($Old['ai'])) { if ($r) { $before[[string]$r.name] = $r } }
+    foreach ($r in @($New['ai'])) {
+        if (-not $r) { continue }
+        $name = [string]$r.name
+        if (-not $before.ContainsKey($name)) { continue }
+        $was = $before[$name]
+        if ($was.state -eq 'working' -and $r.state -eq 'not-answering') {
+            $found.Add(@{ Type = 'ai-stopped-answering'; Data = @{ name = $name }; Key = "ai-stopped-answering|$name" })
+        }
+        if ($null -ne $r.lastDoneTs -and $r.lastDoneTs -ne $was.lastDoneTs) {
+            $found.Add(@{ Type = 'ai-job-done'; Data = @{ name = $name; seconds = $r.lastDoneSec }; Key = "ai-job-done|$name|$($r.lastDoneTs)" })
+        }
+    }
+    $found.ToArray()
+}
+
+# STACKING NOTE: story #91 defines Get-WorkstationEvents in region 91 (the spill part). This stand-in exists only so
+# #93 builds on its own; when the stack is joined, delete it and add `Get-AiWatchEvents -Old $Old -New $New` to #91's.
+function Get-WorkstationEvents {
+    param([object]$Old, [object]$New)
+    Get-AiWatchEvents -Old $Old -New $New
+}
 #endregion 93

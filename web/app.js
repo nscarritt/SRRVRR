@@ -165,6 +165,50 @@ function renderMemDetail(s) {
   // With no AI server card to show it, the WSL VM goes in the hover text.
   $('memD').title = (s.ai && s.ai.length) || !w.text ? '' : w.text + (w.title ? ' (' + w.title + ')' : '');
 }
+// --- The AI server card (Workstation): one row per ComfyUI entry, then the WSL VM row. All text goes through esc.
+const AI_STATES = {off: 'Off', starting: 'Starting', idle: 'Idle', working: 'Working', 'not-answering': 'Not answering', unknown: 'Unknown reply'};
+const aiMinutes = sec => Math.max(1, Math.round(sec / 60)) + ' min';
+function aiDetail(r, timeZone) {
+  const parts = [];
+  if (r.state === 'working' && r.queue != null) {
+    const m = Math.floor((r.workingSec || 0) / 60);
+    parts.push(r.queue + ' queued, for ' + (m >= 1 ? m + ' min' : 'under 1 min'));
+  }
+  if ((r.state === 'idle' || r.state === 'working') && r.holds != null) parts.push('holds ' + gb(r.holds) + ' GB');
+  if (r.lastDoneTs != null && r.lastDoneSec != null) parts.push('last done ' + fmtTime(r.lastDoneTs, timeZone) + ', ' + aiMinutes(r.lastDoneSec));
+  return parts;
+}
+// The hover: the card as ComfyUI sees it, and its version.
+function aiTitle(r) {
+  if (r.vramTotal == null || r.vramFree == null) return '';
+  return 'The card as ComfyUI sees it: ' + gb(r.vramTotal) + ' GB total, ' + gb(r.vramFree) + ' GB free' + (r.version ? '. ComfyUI ' + r.version : '');
+}
+// The WSL VM row: its memory against its cap, amber at 90%.
+function aiWslRowHtml(wsl) {
+  if (!wsl) return '';
+  const name = '<span class="ainame">WSL VM</span>';
+  if (!wsl.running) return '<div class="airow">' + name + '<span class="aistate off">not running</span></div>';
+  if (wsl.mem == null || !wsl.cap) return '<div class="airow">' + name + '<span class="aistate idle">running</span></div>';
+  const pct = Math.min(100, 100 * wsl.mem / wsl.cap);
+  const title = 'Cap ' + gb(wsl.cap) + ' GB' + (wsl.capSource === 'config' ? ' (from .wslconfig)' : ' (default: half of RAM)');
+  return '<div class="airow" title="' + esc(title) + '">' + name + '<span class="aidetail">' + gb(wsl.mem) + ' of ' + gb(wsl.cap) + ' GB</span>' +
+    '<div class="bar' + (pct >= 90 ? ' warn' : '') + '"><i style="width:' + pct.toFixed(0) + '%"></i></div></div>';
+}
+function aiRowsHtml(ai, wsl, timeZone) {
+  const rows = (ai || []).map(r => {
+    const title = aiTitle(r);
+    return '<div class="airow"' + (title ? ' title="' + esc(title) + '"' : '') + '><span class="ainame">' + esc(r.name) + '</span>' +
+      '<span class="aistate ' + esc(r.state) + '">' + esc(AI_STATES[r.state] || AI_STATES.unknown) + '</span>' +
+      '<span class="aidetail">' + aiDetail(r, timeZone).map(esc).join(' &middot; ') + '</span></div>';
+  });
+  return rows.join('') + aiWslRowHtml(wsl);
+}
+// Sets only el.innerHTML and el.hidden, from the reading passed in. Hidden when no entry is configured.
+function renderAiCard(el, s) {
+  const rows = cardsFor(s.role).ai ? (s.ai || []) : [];
+  el.hidden = !rows.length;
+  el.innerHTML = rows.length ? '<div class="label">AI server</div>' + aiRowsHtml(rows, s.wsl) : '';
+}
 function render(s) {
   $('host').textContent = hostTitle(s);
   document.title = hostTitle(s);
@@ -219,6 +263,7 @@ function render(s) {
   renderMemDetail(s);
   renderTopCard($('topCard'), s);
   renderProcs(s);
+  renderAiCard($('aiCard'), s);
   renderDrives(s);
 }
 function size(b) {                  // bytes -> "931 GB" / "7.3 TB", counted in 1024s like Windows does
@@ -434,6 +479,8 @@ function bannerFor(e) {
     case 'vram-spill-ended': return b('', 'Video memory no longer spilling', []);
     case 'share-found': return b('', 'The data folder is shared on the network', ['Other computers may be able to read or change its files.', d.reason]);
     case 'history-save-failed': return b('', 'Could not save the graph history', ['The live graphs still work.', d.error]);
+    case 'ai-job-done': return b('', 'AI job finished', [(d.name || 'AI server') + ', took ' + aiMinutes(d.seconds || 0)]);
+    case 'ai-stopped-answering': return b('', 'AI server stopped answering during a job', [d.name]);
     case 'restart-pending': return b('', 'Windows is waiting to restart', [d.reason]);
     case 'sampler-error': return b('', 'A reading failed', [d.error]);
     case 'worker-stopped': return b('', 'A background task stopped', [d.name, d.error]);

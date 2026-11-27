@@ -279,7 +279,7 @@ Left for that release, and recorded here so this one doesn't decide them by acci
 | AI server | Two GETs per entry on `127.0.0.1` | Slow sampler, 5 s | To measure in story 4 |
 
 Nothing slower than about 50 ms goes in the fast loop (`AGENTS.md`). A refused connection on `127.0.0.1` (AI server
-off) returns at once; a hung one costs at most the 2-second timeout per request, and the PR reports the slow sampler's
+off) takes Windows about 2 seconds, within the 2-second bound, and the pass stays bounded because `/prompt` is skipped when `/system_stats` fails; a hung one costs at most the 2-second timeout per request, and the PR reports the slow sampler's
 worst pass time with the AI server off, idle and working.
 
 ## 10. Settings
