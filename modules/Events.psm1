@@ -98,6 +98,8 @@ $script:EventTypes = @{
     'drive-space-ok' = @{ Severity = 'info'; Banner = $false; Logged = $true }
     'data-fallback' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
     'share-found' = @{ Severity = 'flag'; Banner = $true; Logged = $true }
+    'vram-spill' = @{ Severity = 'warn'; Banner = $true; Logged = $true }   # 91
+    'vram-spill-ended' = @{ Severity = 'info'; Banner = $false; Logged = $true }   # 91
     'history-save-failed' = @{ Severity = 'warn'; Banner = $true; Logged = $true }
     'sampler-error' = @{ Severity = 'warn'; Banner = $false; Logged = $true }
     'worker-stopped' = @{ Severity = 'warn'; Banner = $false; Logged = $true }

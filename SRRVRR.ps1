@@ -1154,11 +1154,16 @@ $lastReading = $null; $refusalsLoggedAt = [DateTime]::UtcNow
 # so the Valheim and Plex entries (replaced whole on each reading) are copied out of it.
 function Get-DetectionReading {
     $activity = $state.activity
-    @{
+    $reading = @{
         activity = if ($activity) { @{ Valheim = $activity['Valheim']; Plex = $activity['Plex'] } } else { $null }
         services = $state.services; drives = $state.drives
         restartPending = $state.restartPending; restartReason = $state.restartReason
     }
+    # The Workstation's video memory spill (the fast sampler decides it; Get-WorkstationEvents compares it).
+    if ($rolePlan.Workstation -and $state.ContainsKey('gpuSpill')) {
+        $reading.gpuSpill = [bool]$state.gpuSpill; $reading.gpuMem = $state.gpuMem; $reading.gpuShared = $state.gpuShared
+    }
+    $reading
 }
 function Invoke-Watch {
     # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
@@ -1176,6 +1181,10 @@ function Invoke-Watch {
     $reading = Get-DetectionReading
     try { foreach ($e in Get-StateEvents -Old $script:lastReading -New $reading) { Add-SrrQueueItem -Queue $eventQueue -Item $e } }
     catch { Write-SrrError 'events' "couldn't compare the readings: $($_.Exception.Message)" }
+    if ($rolePlan.Workstation) {
+        try { foreach ($r in @(Get-WorkstationEvents -Old $script:lastReading -New $reading)) { Add-SrrEvent $r.Type $r.Data $r.Key } }
+        catch { Write-SrrError 'events' "couldn't compare the Workstation readings: $($_.Exception.Message)" }
+    }
     $script:lastReading = $reading
     # Maintenance that ran out switches itself off (once), and the rate limit's refusals make one line a minute.
     $expired = $maintenance.Poll()

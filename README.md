@@ -85,6 +85,16 @@ The CPU and Memory tiles show a temperature the same way, updated every 5 second
 When temperatures can't be read (not set up, not running as administrator, or the sensors don't
 answer), the tiles show an amber **Temp n/a**; hover for the reason.
 
+**On a [workstation](#running-on-a-workstation):** a **Video memory** tile sits beside the GPU tile. It shows the
+card's dedicated memory in use of its total (e.g. "17.8 / 24 GB"), the shared (system) memory the card is using,
+and a graph of both. When the dedicated memory has been 95% full for 10 seconds and 1 GB or more of shared memory
+is in use, the tile shows **Spilling into RAM** in amber: Windows has run out of video memory and is borrowing
+system memory, which makes work on the GPU slow. It clears when the dedicated memory has stayed below 90% (or
+shared memory below 0.5 GB) for 30 seconds. On an NVIDIA card the GPU line also shows power (of the card's limit),
+the clock and the fan, e.g. "312 of 450 W · 2,610 MHz · fan 48%", and an amber badge says why the card is being
+held back: **Hot**, **Power limit** or **Slowed**. These come from `nvidia-smi` every 5 seconds; a part the
+driver doesn't report is left out. A PC with no GPU counters shows "n/a" for video memory.
+
 The page follows your system's light/dark theme and works on phones.
 
 ## Requirements
@@ -360,6 +370,9 @@ There are banners too when Valheim or Plex goes offline or comes back, when one 
 its status query, when a drive's health changes or the data drive goes missing, when SRRVRR falls
 back to its own folder or finds the data folder shared, and when it can't save the graph history.
 
+A Workstation also raises **Video memory full: spilling into RAM** (a warning, with a banner) when the spill
+described under [What it shows](#what-it-shows) starts, and logs **Video memory no longer spilling** when it ends.
+
 **Sound:** click **Sound off** in the header to turn on a soft ding with each alert (you hear a
 sample). Browsers only play sound after you've clicked or tapped the page, so after a reload the
 button says "Sound on: tap to allow" until you click or tap anywhere on the page. The choice is remembered in each
@@ -433,8 +446,8 @@ A second SRRVRR can run on a PC, such as a gaming or AI PC, next to the one on y
 - **Unchanged:** the CPU, Memory, GPU and Network tiles, Storage, alerts, Maintenance, the event log and the
   graph history.
 - **New:** the header and the browser tab show the PC's name (`DisplayName`, or the computer's name), so you can
-  tell the two pages apart. Cards for video memory, top programs and an AI server are added by later changes in
-  this release.
+  tell the two pages apart. A **Video memory** tile and the GPU's power, clock and fan are shown too (see
+  [What it shows](#what-it-shows)). Cards for top programs and an AI server are added by later changes in this release.
 
 A copy with no `Role` is a Server and behaves exactly as before.
 
