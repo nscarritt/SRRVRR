@@ -159,6 +159,7 @@ Describe 'T90-05 the DisplayName setting' {
         @{ value = "a`tb"; shown = 'with a tab' }
         @{ value = 'Caf' + [char]0xE9; shown = 'with a non-ASCII letter' }
         @{ value = 5; shown = 'the number 5' }
+        @{ value = '   '; shown = 'only spaces (a blank header)' }
     ) {
         $err = Get-SettingsError @{ DisplayName = $value }
         $err | Should -Not -BeNullOrEmpty -Because "DisplayName $shown must be refused"

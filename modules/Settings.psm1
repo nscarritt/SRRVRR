@@ -146,8 +146,8 @@ function Test-WorkstationSettings([hashtable]$Settings) {
         throw (New-SettingsError "Role must be one of: $($roles -join ', ') (default Server).")
     }
     $name = $Settings.DisplayName
-    if ($name -isnot [string] -or ($name -ne '' -and $name -cnotmatch '^[A-Za-z0-9 ._-]{1,32}\z')) {
-        throw (New-SettingsError 'DisplayName must be empty (SRRVRR, or the computer name on a Workstation) or 1 to 32 characters: letters, digits, spaces, -, _ and .')
+    if ($name -isnot [string] -or ($name -ne '' -and ($name -cnotmatch '^[A-Za-z0-9 ._-]{1,32}\z' -or $name.Trim() -eq ''))) {
+        throw (New-SettingsError 'DisplayName must be empty (SRRVRR, or the computer name on a Workstation) or 1 to 32 characters: letters, digits, spaces, -, _ and ., not only spaces.')
     }
 }
 

@@ -243,7 +243,7 @@ Write-Status "History and logs go to $($data.Path)"
 # The role (modules\Workstation.psm1): what runs, and the name the page shows. The Server runs what v0.8.0 ran.
 $rolePlan = Get-RolePlan -Role $settings.Role
 $displayName = Resolve-DisplayName -Setting $settings.DisplayName -Role $rolePlan.Role -ComputerName $env:COMPUTERNAME
-foreach ($line in @(Format-RoleLines -Plan $rolePlan)) { Write-Status $line; Write-SrrLog 'INFO' 'startup' $line }
+foreach ($line in @(Format-RoleLines -Plan $rolePlan)) { Write-Status $line }   # Write-Status logs it too
 
 # Events (modules\Events.psm1): any thread adds to the queue; the main loop drains it once a second, writing the
 # logged ones to logs\events-YYYY-MM-DD.jsonl and keeping the last 200 for /stats.
@@ -632,7 +632,7 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
     # A Workstation shows no Processes table, so nothing is compiled or started (the Set-Step above still counts).
     $netPerProcess = $null
     $msg = 'Per-program network tracking: not used on a workstation'
-    Write-Status $msg; Write-SrrLog 'INFO' 'startup' $msg
+    Write-Status $msg   # Write-Status logs it too
 }
 
 # --- Background sampler: one reading per second -------------------------------
