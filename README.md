@@ -447,7 +447,17 @@ A second SRRVRR can run on a PC, such as a gaming or AI PC, next to the one on y
   graph history.
 - **New:** the header and the browser tab show the PC's name (`DisplayName`, or the computer's name), so you can
   tell the two pages apart. A **Video memory** tile and the GPU's power, clock and fan are shown too (see
-  [What it shows](#what-it-shows)). Cards for top programs and an AI server are added by later changes in this release.
+  [What it shows](#what-it-shows)). An AI server card is added by a later change in this release.
+- **Memory detail:** under the Memory tile, how much memory Windows has promised to programs (committed) against
+  its limit, and how fast Windows is reading pages back in from the paging file. It turns amber at 90% committed.
+- **Top programs:** a card listing up to 8 programs: the 5 using the most video memory and the 5 using the most RAM
+  (some are in both lists). Each shows its video memory on the graphics card the GPU tile uses, its RAM
+  (the working set that belongs to it alone, as Task Manager counts it) and its CPU (percent of the whole PC).
+  Several processes of one program are one row, with their number in brackets. CPU shows a dash for a program that
+  only just started. Programs can share video memory, so the rows may add up to more than the card holds.
+- **The WSL VM:** `vmmemWSL` is the memory Windows gives to WSL 2. SRRVRR shows it as "WSL VM" in the list, and
+  reads its cap from `memory=` under `[wsl2]` in `%USERPROFILE%\.wslconfig` (re-read every minute), or half of RAM
+  when that isn't set. The console prints the cap at startup. Hover the memory detail line to see it.
 
 A copy with no `Role` is a Server and behaves exactly as before.
 

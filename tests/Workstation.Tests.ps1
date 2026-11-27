@@ -246,6 +246,216 @@ Describe 'T91 the spill events' {
 #endregion 91
 
 #region 92 Memory detail and top programs (#92)
+Describe '92 memory detail, the WSL VM and top programs' {
+    BeforeAll {
+        $script:Luid = '0x00000000_0x0000a1b2'   # the chosen card; the fixtures' other card is 0x00000000_0x0000ffff
+        $script:MiB = 1048576
+
+        # The fixtures (memory.json, process.json, gpu-process-memory.json) hold each reading row by row (instance ->
+        # counter -> raw value) with each counter's type, so they can be checked by hand. ConvertTo-WsCategory turns
+        # one reading into what ReadCategory() returns: counter -> instance -> object with .Sample (a real
+        # CounterSample, so CounterSample.Calculate works on it) and .RawValue. -ShiftSeconds moves the reading later.
+        function Read-WsFixture([string]$Name) { [IO.File]::ReadAllText((Join-Path $Fixtures $Name)) | ConvertFrom-Json }
+        function ConvertTo-WsCategory($Doc, [int]$Index, [double]$ShiftSeconds = 0) {
+            $reading = $Doc.snapshots[$Index]
+            $ts = [long]$reading.timeStamp + [long]($ShiftSeconds * $Doc.systemFrequency)
+            $ts100 = [long]$reading.timeStamp100nSec + [long]($ShiftSeconds * 10000000)
+            $cat = @{}
+            foreach ($c in $Doc.counters.PSObject.Properties) {
+                $type = [Diagnostics.PerformanceCounterType]$c.Value
+                $cat[$c.Name] = @{}
+                foreach ($i in $reading.instances.PSObject.Properties) {
+                    $raw = [long]$i.Value.($c.Name)
+                    $sample = New-Object Diagnostics.CounterSample $raw, ([long]0), ([long]$Doc.counterFrequency), ([long]$Doc.systemFrequency), $ts, $ts100, $type
+                    $cat[$c.Name][$i.Name] = [pscustomobject]@{ InstanceName = $i.Name; Sample = $sample; RawValue = $raw }
+                }
+            }
+            $cat
+        }
+        # One snapshot as the Counters reader returns it (category -> ReadCategory() shape), from reading $Index of the
+        # three fixtures. -Without leaves categories out; -Docs replaces a fixture with a changed copy.
+        function Get-WsSnapshot([int]$Index, [double]$ShiftSeconds = 0, [string[]]$Without = @(), [hashtable]$Docs = @{}) {
+            $files = @{ 'Memory' = 'memory.json'; 'Process' = 'process.json'; 'GPU Process Memory' = 'gpu-process-memory.json' }
+            $snap = @{}
+            foreach ($cat in $files.Keys) {
+                if ($Without -contains $cat) { continue }
+                $doc = if ($Docs.ContainsKey($cat)) { $Docs[$cat] } else { Read-WsFixture $files[$cat] }
+                $snap[$cat] = ConvertTo-WsCategory $doc $Index $ShiftSeconds
+            }
+            $snap
+        }
+        function Get-Row([object[]]$Rows, [string]$Name) { @($Rows | Where-Object { $_.name -ceq $Name })[0] }
+        function Get-NameList([object[]]$Rows) { @($Rows | ForEach-Object { $_.name }) }
+    }
+
+    It 'T92-01 Get-MemoryDetail: commit and its limit from the current raw values, paging in bytes per second' {
+        $prev = Get-WsSnapshot 0; $cur = Get-WsSnapshot 1
+        $d = Get-MemoryDetail -Previous $prev -Current $cur
+        $d.memCommit | Should -Be 33412345856
+        $d.memCommit | Should -BeOfType [long]
+        $d.memCommitLimit | Should -Be 103079219200 -Because 'the raw value (read through a float, as CounterSample.Calculate returns, it is 103079215104)'
+        $d.memCommitLimit | Should -BeOfType [long]
+        $d.memPageIn | Should -Be 491520 -Because '600 pages in 5 s, times 4096 bytes'
+        $d.memPageIn | Should -BeOfType [long]
+        $first = Get-MemoryDetail -Previous $null -Current $cur
+        $null -eq $first.memPageIn | Should -BeTrue -Because 'there is no rate without a previous reading'
+        $first.memCommit | Should -Be 33412345856
+        $first.memCommitLimit | Should -Be 103079219200
+    }
+
+    It 'T92-02 ConvertFrom-WslConfig: memory= under [wsl2], else half of RAM' {
+        $ram = [double]64GB
+        $cases = @(
+            @{ File = '01-memory-48gb.txt'; Cap = 48GB; Source = 'config' }
+            @{ File = '02-memory-48000mb-spaces.txt'; Cap = 48000MB; Source = 'config' }
+            @{ File = '03-memory-key-case.txt'; Cap = 48GB; Source = 'config' }
+            @{ File = '04-memory-decimal.txt'; Cap = 1.5GB; Source = 'config' }
+            @{ File = '05-memory-inline-comment.txt'; Cap = 48GB; Source = 'config' }
+            @{ File = '06-memory-commented-out.txt'; Cap = $ram / 2; Source = 'default' }
+            @{ File = '07-memory-other-section.txt'; Cap = $ram / 2; Source = 'default' }
+            @{ File = '08-memory-word.txt'; Cap = $ram / 2; Source = 'default' }
+            @{ File = '09-memory-negative.txt'; Cap = $ram / 2; Source = 'default' }
+            @{ File = '10-memory-empty.txt'; Cap = $ram / 2; Source = 'default' }
+            @{ File = $null; Cap = $ram / 2; Source = 'default' }   # no .wslconfig
+        )
+        foreach ($c in $cases) {
+            $text = if ($c.File) { [IO.File]::ReadAllText((Join-Path $Fixtures "wslconfig\$($c.File)")) } else { $null }
+            $name = if ($c.File) { $c.File } else { 'no file' }
+            $r = ConvertFrom-WslConfig -Text $text -TotalRam $ram
+            $r.Cap | Should -Be $c.Cap -Because $name
+            $r.Cap | Should -BeOfType [double] -Because $name
+            $r.Source | Should -BeExactly $c.Source -Because $name
+        }
+    }
+
+    It 'T92-03 Get-WslReading: the vmmemWSL working set against the cap; not running; a working set that can''t be read' {
+        $cap = @{ Cap = [double]48GB; Source = 'config' }
+        $r = Get-WslReading -Process ([pscustomobject]@{ Id = 5500; ProcessName = 'vmmemWSL'; WorkingSet64 = [long]31e9 }) -Cap $cap
+        $r.running | Should -BeTrue
+        $r.mem | Should -Be 31e9
+        $r.cap | Should -Be 48GB
+        $r.capSource | Should -BeExactly 'config'
+        $r = Get-WslReading -Process $null -Cap $cap
+        $r.running | Should -BeFalse
+        $null -eq $r.mem | Should -BeTrue
+        # Reading a property that throws gives $null in PowerShell, and [long]$null would be 0: mem must stay $null.
+        $p = [pscustomobject]@{ Id = 5500; ProcessName = 'vmmemWSL' }
+        $p | Add-Member ScriptProperty WorkingSet64 { throw 'Access is denied' }
+        { $script:Throwing = Get-WslReading -Process $p -Cap $cap } | Should -Not -Throw
+        $Throwing.running | Should -BeTrue
+        $null -eq $Throwing.mem | Should -BeTrue
+    }
+
+    It 'T92-04 Get-TopPrograms groups by program, drops _Total and Idle, names the WSL VM, counts the chosen card only, and keeps the top 5 by each' {
+        $prev = Get-WsSnapshot 0; $cur = Get-WsSnapshot 1
+        # Every program (limits raised), to see the grouping.
+        $all = @(Get-TopPrograms -Previous $prev -Current $cur -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid -Count 50 -MaxRows 50)
+        Get-NameList $all | Should -Be @('gameapp', 'browser', 'editor', 'my#app', 'alpha', 'bravo', 'WSL VM', 'charlie', 'delta', 'echo', 'foxtrot')
+        $browser = Get-Row $all 'browser'
+        $browser.count | Should -Be 3
+        $browser.mem | Should -Be (1400 * $MiB) -Because '800 + 400 + 200 MiB in the current reading'
+        $browser.vram | Should -Be (600 * $MiB) -Because 'Dedicated Usage 300 + 200 + 100 MiB, not Shared Usage'
+        $myApp = Get-Row $all 'my#app'
+        $myApp.count | Should -Be 2 -Because 'my#app#1 is my#app; only a final #<digits> is dropped'
+        $myApp.mem | Should -Be (250 * $MiB)
+        $myApp.vram | Should -Be (150 * $MiB)
+        (Get-Row $all 'gameapp').vram | Should -Be (6000 * $MiB) -Because 'its 500 MiB on the other card is not counted'
+        (Get-Row $all 'gameapp').count | Should -Be 1 -Because 'gameapp#1 exited before the current reading'
+        (Get-Row $all 'bravo').vram | Should -Be (20 * $MiB) -Because 'its 9000 MiB on the other card is not counted'
+        $wsl = Get-Row $all 'WSL VM'
+        $wsl.mem | Should -Be (9000 * $MiB)
+        $wsl.vram | Should -Be 0
+        $names = Get-NameList $all
+        foreach ($gone in '_Total', 'Idle', 'vmmemWSL') { $names | Should -Not -Contain $gone }
+        # Defaults: video memory top 5 (gameapp, browser, editor, my#app, alpha) and RAM top 5 (WSL VM, charlie, delta,
+        # echo, gameapp) make 9 programs; sorted by video memory then RAM and cut to 8, echo is the one left out.
+        $top = @(Get-TopPrograms -Previous $prev -Current $cur -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid)
+        Get-NameList $top | Should -Be @('gameapp', 'browser', 'editor', 'my#app', 'alpha', 'WSL VM', 'charlie', 'delta')
+        foreach ($row in $top) { @($row.Keys | Sort-Object) | Should -Be @('count', 'cpu', 'mem', 'name', 'vram') }
+    }
+
+    It 'T92-05 CPU over 5 s on 24 cores, and $null for programs that came, went or changed process between readings' {
+        $prev = Get-WsSnapshot 0; $cur = Get-WsSnapshot 1
+        $rows = @(Get-TopPrograms -Previous $prev -Current $cur -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid -Count 50 -MaxRows 50)
+        (Get-Row $rows 'editor').cpu | Should -Be 8.3 -Because '10 s of CPU in 5 s on 24 cores'
+        (Get-Row $rows 'gameapp').cpu | Should -Be 25 -Because 'gameapp#1 exiting changes nothing for gameapp'
+        (Get-Row $rows 'browser').cpu | Should -Be 2.9 -Because '2 + 1 + 0.5 s across its three processes'
+        (Get-Row $rows 'WSL VM').cpu | Should -Be 10
+        $null -eq (Get-Row $rows 'foxtrot').cpu | Should -BeTrue -Because 'its ID Process changed (6600 to 6601): a restart, not 0%'
+        $null -eq (Get-Row $rows 'bravo').cpu | Should -BeTrue -Because 'it is only in the current reading'
+        $first = @(Get-TopPrograms -Previous $null -Current $cur -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid -Count 50 -MaxRows 50)
+        $first.Count | Should -Be 11
+        @($first | Where-Object { $null -ne $_.cpu }).Count | Should -Be 0 -Because 'no previous reading'
+        # Review Focus 5: browser#2 exits and Windows renames browser#3 to browser#2. The instance name is the same but
+        # the process isn't, so its delta (2010% of a core) must never be used.
+        $shifted = Read-WsFixture 'process.json'
+        $now = $shifted.snapshots[1].instances
+        foreach ($k in 'ID Process', 'Working Set - Private', '% Processor Time') { $now.'browser#2'.$k = $now.'browser#3'.$k }
+        $now.PSObject.Properties.Remove('browser#3')
+        $after = Get-WsSnapshot 1 -Docs @{ 'Process' = $shifted }
+        $rows = @(Get-TopPrograms -Previous $prev -Current $after -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid -Count 50 -MaxRows 50)
+        $browser = Get-Row $rows 'browser'
+        $browser.count | Should -Be 2
+        if ($null -ne $browser.cpu) { $browser.cpu | Should -Be 1.7 -Because 'only browser#1 (2 s) can be compared' }
+        (Get-Row $rows 'editor').cpu | Should -Be 8.3
+    }
+
+    It 'T92-06 fewer than 5 programs; no GPU Process Memory category; video memory of a pid with no process' {
+        $few = Read-WsFixture 'process.json'
+        foreach ($r in $few.snapshots) {
+            foreach ($n in @($r.instances.PSObject.Properties.Name)) { if ($n -notin 'gameapp', 'editor', 'browser#1') { $r.instances.PSObject.Properties.Remove($n) } }
+        }
+        $rows = @(Get-TopPrograms -Previous (Get-WsSnapshot 0 -Docs @{ 'Process' = $few }) -Current (Get-WsSnapshot 1 -Docs @{ 'Process' = $few }) `
+            -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid)
+        Get-NameList $rows | Should -Be @('gameapp', 'browser', 'editor')
+        (Get-Row $rows 'browser').count | Should -Be 1
+        $noGpu = @(Get-TopPrograms -Previous (Get-WsSnapshot 0 -Without 'GPU Process Memory') -Current (Get-WsSnapshot 1 -Without 'GPU Process Memory') `
+            -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid)
+        Get-NameList $noGpu | Should -Be @('WSL VM', 'charlie', 'delta', 'echo', 'gameapp') -Because 'the top 5 by RAM, in RAM order'
+        foreach ($row in $noGpu) { $row.vram | Should -Be 0 -Because $row.name }
+        # pid 9999 holds 7000 MiB on the chosen card but has no process: it adds to no row.
+        $all = @(Get-TopPrograms -Previous (Get-WsSnapshot 0) -Current (Get-WsSnapshot 1) -ElapsedSeconds 5 -Cores 24 -GpuLuid $Luid -Count 50 -MaxRows 50)
+        ($all | ForEach-Object { $_.vram } | Measure-Object -Sum).Sum | Should -Be (7060 * $MiB) -Because '6000 + 600 + 250 + 150 + 40 + 20 MiB'
+    }
+
+    It 'T92-07 Invoke-WorkstationTick sets every field each pass, reads .wslconfig every 60 s, and a failed part leaves the rest' {
+        $calls = @{ Now = 0; Snap = $null; Throw = $false; Mem = [long]0; ConfigAt = New-Object 'System.Collections.Generic.List[long]' }
+        $readers = @{
+            Counters   = { if ($calls.Throw) { throw 'counter read failed' }; $calls.Snap }.GetNewClosure()
+            WslProcess = { [pscustomobject]@{ Id = 5500; ProcessName = 'vmmemWSL'; WorkingSet64 = $calls.Mem } }.GetNewClosure()
+            WslConfig  = { $calls.ConfigAt.Add($calls.Now); "[wsl2]`r`nmemory=48GB`r`n" }.GetNewClosure()
+        }
+        $ctx = New-WorkstationContext -GpuLuid $Luid -Cores 24 -TotalRam ([double]64GB) -Readers $readers
+        $state = @{}
+        $passes = @(@{ Ms = 0; Index = 0; Shift = 0 }, @{ Ms = 5000; Index = 1; Shift = 0 }, @{ Ms = 60000; Index = 1; Shift = 55 }, @{ Ms = 65000; Index = 1; Shift = 60 })
+        foreach ($p in $passes) {
+            $calls.Now = $p.Ms; $calls.Mem = [long](20GB + $p.Ms); $calls.Snap = Get-WsSnapshot $p.Index $p.Shift
+            Invoke-WorkstationTick -State $state -Context $ctx -NowMs $p.Ms
+            $at = "the pass at $($p.Ms) ms"
+            foreach ($k in 'memCommit', 'memCommitLimit', 'memPageIn', 'wsl', 'top') { $state.ContainsKey($k) | Should -BeTrue -Because "$k, $at" }
+            $state.memCommit | Should -Not -BeNullOrEmpty -Because $at
+            $state.memCommitLimit | Should -Not -BeNullOrEmpty -Because $at
+            @($state.top).Count | Should -BeGreaterThan 0 -Because $at
+            $state.wsl.running | Should -BeTrue -Because $at
+            $state.wsl.mem | Should -Be $calls.Mem -Because "the WSL VM is read every pass, $at"
+            $state.wsl.cap | Should -Be 48GB -Because $at
+            $state.wsl.capSource | Should -BeExactly 'config' -Because $at
+            if ($p.Ms -gt 0) { $state.memPageIn | Should -Not -BeNullOrEmpty -Because $at }
+            $state['workstationError'] | Should -BeNullOrEmpty -Because $at
+        }
+        $state.memPageIn | Should -Not -BeNullOrEmpty
+        @($calls.ConfigAt) | Should -Be @(0, 60000)
+        # The Counters reader fails: the memory part reports it, and the WSL VM is still read on that pass.
+        $calls.Throw = $true; $calls.Now = 70000; $calls.Mem = [long]7GB
+        Invoke-WorkstationTick -State $state -Context $ctx -NowMs 70000
+        $state.workstationError | Should -Match '^memory: '
+        $state.wsl.mem | Should -Be 7GB
+        # A clean pass clears it.
+        $calls.Throw = $false; $calls.Now = 75000; $calls.Snap = Get-WsSnapshot 1 70
+        Invoke-WorkstationTick -State $state -Context $ctx -NowMs 75000
+        $state['workstationError'] | Should -BeNullOrEmpty
+    }
+}
 #endregion 92
 
 #region 93 The AI server (#93)

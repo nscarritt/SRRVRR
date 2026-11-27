@@ -1,0 +1,56 @@
+{
+  "category": "GPU Process Memory",
+  "notes": [
+    "Hand-made, shaped like PerformanceCounterCategory('GPU Process Memory').ReadCategory(): instances are",
+    "pid_<pid>_luid_<luid>_phys_0, values in bytes (whole MiB). The chosen card is 0x00000000_0x0000a1b2; the other",
+    "LUID 0x00000000_0x0000ffff must never count. Expected video memory on the chosen card (T92-04): gameapp 6000 MiB",
+    "(its 500 MiB on the other card left out), browser 300 + 200 + 100 = 600 MiB, editor 250, my#app 100 + 50 = 150,",
+    "alpha 40, bravo 20 (its 9000 MiB on the other card left out). pid 9999 has no process and is ignored.",
+    "Shared Usage differs from Dedicated Usage (browser#1 shares 2048 MiB), so reading the wrong counter shows."
+  ],
+  "systemFrequency": 10000000,
+  "counterFrequency": 10000000,
+  "counters": {
+    "Dedicated Usage": "NumberOfItems64",
+    "Shared Usage": "NumberOfItems64"
+  },
+  "snapshots": [
+    {
+      "label": "previous",
+      "timeStamp": 2819000200000,
+      "timeStamp100nSec": 134402317000200000,
+      "instances": {
+        "pid_1200_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 6081740800, "Shared Usage": 67108864 },
+        "pid_1200_luid_0x00000000_0x0000ffff_phys_0": { "Dedicated Usage": 524288000,  "Shared Usage": 0 },
+        "pid_1201_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 1048576000, "Shared Usage": 8388608 },
+        "pid_2101_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 314572800,  "Shared Usage": 2147483648 },
+        "pid_2102_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 209715200,  "Shared Usage": 8388608 },
+        "pid_2103_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 104857600,  "Shared Usage": 8388608 },
+        "pid_3300_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 262144000,  "Shared Usage": 8388608 },
+        "pid_4400_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 104857600,  "Shared Usage": 8388608 },
+        "pid_4401_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 52428800,   "Shared Usage": 8388608 },
+        "pid_6100_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 41943040,   "Shared Usage": 8388608 },
+        "pid_9999_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 7340032000, "Shared Usage": 0 }
+      }
+    },
+    {
+      "label": "current",
+      "timeStamp": 2819050200000,
+      "timeStamp100nSec": 134402317050200000,
+      "instances": {
+        "pid_1200_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 6291456000, "Shared Usage": 67108864 },
+        "pid_1200_luid_0x00000000_0x0000ffff_phys_0": { "Dedicated Usage": 524288000,  "Shared Usage": 0 },
+        "pid_2101_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 314572800,  "Shared Usage": 2147483648 },
+        "pid_2102_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 209715200,  "Shared Usage": 8388608 },
+        "pid_2103_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 104857600,  "Shared Usage": 8388608 },
+        "pid_3300_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 262144000,  "Shared Usage": 8388608 },
+        "pid_4400_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 104857600,  "Shared Usage": 8388608 },
+        "pid_4401_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 52428800,   "Shared Usage": 8388608 },
+        "pid_6100_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 41943040,   "Shared Usage": 8388608 },
+        "pid_6200_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 20971520,   "Shared Usage": 8388608 },
+        "pid_6200_luid_0x00000000_0x0000ffff_phys_0": { "Dedicated Usage": 9437184000, "Shared Usage": 0 },
+        "pid_9999_luid_0x00000000_0x0000a1b2_phys_0": { "Dedicated Usage": 7340032000, "Shared Usage": 0 }
+      }
+    }
+  ]
+}

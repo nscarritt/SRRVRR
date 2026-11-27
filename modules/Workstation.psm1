@@ -109,6 +109,167 @@ function Get-WorkstationEvents {
 #endregion 91
 
 #region 92 Memory detail and top programs (#92)
+# Memory detail, the WSL VM and the top programs. Every reading comes through the $Readers the context holds, so
+# nothing here reads the machine itself. Snapshots are shaped like PerformanceCounterCategory.ReadCategory():
+# category -> counter -> instance -> object with .Sample, .RawValue and .InstanceName (the real collections have
+# .Contains, not .ContainsKey, and lower-case keys).
+
+# The value of one counter of a single-instance category (Memory), or $null.
+function Get-SingleRaw {
+    param($Snapshot, [string]$Category, [string]$Counter)
+    if (-not $Snapshot -or -not $Snapshot.Contains($Category)) { return $null }
+    $c = $Snapshot[$Category]
+    if (-not $c.Contains($Counter)) { return $null }
+    foreach ($inst in $c[$Counter].Values) { return $inst }   # the first (only) instance
+    $null
+}
+
+# Commit and its limit are the current raw values (CounterSample.Calculate goes through a float and loses bytes); paging
+# in is Pages Input/sec times the page size, or $null with no previous reading.
+function Get-MemoryDetail {
+    param($Previous, $Current, [int]$PageSize = 4096)
+    $commit = Get-SingleRaw $Current 'Memory' 'Committed Bytes'
+    $limit = Get-SingleRaw $Current 'Memory' 'Commit Limit'
+    if ($null -eq $commit -or $null -eq $limit) { throw 'the Memory counters have no Committed Bytes or Commit Limit' }
+    $pageIn = $null
+    $now = Get-SingleRaw $Current 'Memory' 'Pages Input/sec'
+    $old = Get-SingleRaw $Previous 'Memory' 'Pages Input/sec'
+    if ($now -and $old) {
+        $rate = [Diagnostics.CounterSample]::Calculate($old.Sample, $now.Sample)
+        $pageIn = [long][math]::Round($rate * $PageSize)
+    }
+    @{ memCommit = [long]$commit.RawValue; memCommitLimit = [long]$limit.RawValue; memPageIn = $pageIn }
+}
+
+# The WSL VM's memory cap: memory= under [wsl2] (a number with KB, MB, GB or TB), else half of RAM.
+function ConvertFrom-WslConfig {
+    param([string]$Text, [double]$TotalRam)
+    $default = @{ Cap = [double]($TotalRam / 2); Source = 'default' }
+    if (-not $Text) { return $default }
+    $inWsl2 = $false
+    foreach ($raw in ($Text -split "`r?`n")) {
+        $line = ($raw -replace '#.*$', '').Trim()
+        if ($line -match '^\[(.*)\]$') { $inWsl2 = ($Matches[1].Trim() -ieq 'wsl2'); continue }
+        if (-not $inWsl2) { continue }
+        if ($line -match '^memory\s*=\s*(.*)$') {
+            if ($Matches[1].Trim() -match '^(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)$') {
+                $n = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)
+                $unit = switch ($Matches[2].ToUpperInvariant()) { 'KB' { 1KB } 'MB' { 1MB } 'GB' { 1GB } 'TB' { 1TB } }
+                if ($n * $unit -gt 0) { return @{ Cap = [double]($n * $unit); Source = 'config' } }
+            }
+            return $default
+        }
+    }
+    $default
+}
+
+# The WSL VM (the vmmemWSL process): running or not, its working set, and the cap.
+function Get-WslReading {
+    param([object]$Process, [hashtable]$Cap)
+    $mem = $null
+    $running = $null -ne $Process
+    if ($running) {
+        try {
+            $ws = $Process.WorkingSet64
+            if ($null -ne $ws) { $mem = [long]$ws }   # a property that throws reads as $null, and [long]$null is 0
+        } catch { $mem = $null }
+    }
+    @{ running = $running; mem = $mem
+       cap = $(if ($Cap) { $Cap.Cap } else { $null }); capSource = $(if ($Cap) { $Cap.Source } else { $null }) }
+}
+
+# Programs (processes grouped by name), the top $Count by video memory and by RAM, at most $MaxRows rows. A program's
+# CPU adds up only the instances that are in both readings with the same process id, and is $null with none.
+function Get-TopPrograms {
+    param($Previous, $Current, [double]$ElapsedSeconds, [int]$Cores, [string]$GpuLuid, [int]$Count = 5, [int]$MaxRows = 8)
+    if (-not $Current -or -not $Current.Contains('Process')) { return }
+    $proc = $Current['Process']
+    if (-not $proc.Contains('ID Process') -or -not $proc.Contains('Working Set - Private')) { return }
+    $oldProc = if ($Previous -and $Previous.Contains('Process')) { $Previous['Process'] } else { $null }
+    # Video memory on the chosen card, per process id.
+    $vramOf = @{}
+    if ($Current.Contains('GPU Process Memory') -and $Current['GPU Process Memory'].Contains('Dedicated Usage')) {
+        $ded = $Current['GPU Process Memory']['Dedicated Usage']
+        foreach ($k in $ded.Keys) {
+            if ($k -notmatch '^pid_(\d+)_luid_(\w+?_\w+?)_phys_\d+') { continue }
+            if ($GpuLuid -and $Matches[2] -ne $GpuLuid) { continue }
+            $id = [int]$Matches[1]
+            if (-not $vramOf.Contains($id)) { $vramOf[$id] = [long]0 }
+            $vramOf[$id] += [long]$ded[$k].RawValue
+        }
+    }
+    $programs = @{}
+    foreach ($inst in @($proc['ID Process'].Keys)) {
+        if ($inst -eq '_Total' -or $inst -eq 'Idle') { continue }
+        $name = ([string]$proc['ID Process'][$inst].InstanceName) -replace '#\d+$', ''   # the real collection's keys are lower-case; InstanceName keeps the case
+        if ($name -eq 'vmmemWSL') { $name = 'WSL VM' }
+        if (-not $programs.Contains($name)) { $programs[$name] = @{ name = $name; count = 0; vram = [long]0; mem = [long]0; cpu = $null } }
+        $p = $programs[$name]
+        $id = [int]$proc['ID Process'][$inst].RawValue
+        $p.count++
+        if ($proc['Working Set - Private'].Contains($inst)) { $p.mem += [long]$proc['Working Set - Private'][$inst].RawValue }
+        if ($vramOf.Contains($id)) { $p.vram += $vramOf[$id] }
+        # CPU: the same instance, the same process, in both readings.
+        if ($oldProc -and $Cores -gt 0 -and $proc.Contains('% Processor Time') -and $oldProc.Contains('% Processor Time') -and $oldProc.Contains('ID Process') -and
+            $oldProc['ID Process'].Contains($inst) -and $oldProc['% Processor Time'].Contains($inst) -and $proc['% Processor Time'].Contains($inst) -and
+            [int]$oldProc['ID Process'][$inst].RawValue -eq $id) {
+            try {
+                $v = [Diagnostics.CounterSample]::Calculate($oldProc['% Processor Time'][$inst].Sample, $proc['% Processor Time'][$inst].Sample) / $Cores
+                if ($v -ge 0 -and -not [double]::IsNaN($v)) { $p.cpu = [double]$p.cpu + $v }
+            } catch { $null = $_ }   # not comparable: no number from this instance
+        }
+    }
+    $all = @($programs.Values)
+    foreach ($p in $all) { if ($null -ne $p.cpu) { $p.cpu = [math]::Round($p.cpu, 1) } }
+    $byVram = @($all | Where-Object { $_.vram -gt 0 } | Sort-Object -Property @{ Expression = { $_.vram }; Descending = $true }, @{ Expression = { $_.mem }; Descending = $true } | Select-Object -First $Count)
+    $byMem = @($all | Sort-Object -Property @{ Expression = { $_.mem }; Descending = $true } | Select-Object -First $Count)
+    $chosen = @{}
+    foreach ($p in $byVram + $byMem) { $chosen[$p.name] = $p }
+    $rows = @($chosen.Values | Sort-Object -Property @{ Expression = { $_.vram }; Descending = $true }, @{ Expression = { $_.mem }; Descending = $true } | Select-Object -First $MaxRows)
+    foreach ($r in $rows) { $r }
+}
+
+# The slow sampler's memory, keeping what it needs from one pass to the next. Ai stays $null until story #93.
+function New-WorkstationContext {
+    param([object[]]$ComfyEntries = @(), [string]$GpuLuid, [int]$Cores, [double]$TotalRam, [int]$PageSize = 4096,
+          [hashtable]$Readers, [int]$WslConfigEveryMs = 60000)
+    @{ ComfyEntries = $ComfyEntries; GpuLuid = $GpuLuid; Cores = $Cores; TotalRam = $TotalRam; PageSize = $PageSize
+       Readers = $Readers; WslConfigEveryMs = $WslConfigEveryMs
+       Previous = $null; PreviousMs = $null; WslCap = $null; WslCapReadMs = $null; Ai = $null }
+}
+
+# One slow-sampler pass: each part in its own try/catch, so one failing leaves the others running.
+function Invoke-WorkstationTick {
+    param([hashtable]$State, [hashtable]$Context, [long]$NowMs)
+    $readers = $Context.Readers
+    $errors = New-Object 'System.Collections.Generic.List[string]'
+    $snap = $null
+
+    try {   # memory: the counter reading, commit and paging
+        $snap = & $readers.Counters
+        $d = Get-MemoryDetail -Previous $Context.Previous -Current $snap -PageSize $Context.PageSize
+        $State.memCommit = $d.memCommit; $State.memCommitLimit = $d.memCommitLimit; $State.memPageIn = $d.memPageIn
+    } catch { $snap = $null; $errors.Add("memory: $($_.Exception.Message)") }
+
+    try {   # wsl: the VM now, and .wslconfig when it is due
+        $due = $null -eq $Context.WslCapReadMs -or $NowMs -lt $Context.WslCapReadMs -or ($NowMs - $Context.WslCapReadMs) -ge $Context.WslConfigEveryMs
+        if ($due) {
+            $Context.WslCapReadMs = $NowMs
+            $Context.WslCap = ConvertFrom-WslConfig -Text (& $readers.WslConfig) -TotalRam $Context.TotalRam
+        }
+        $State.wsl = Get-WslReading -Process (& $readers.WslProcess) -Cap $Context.WslCap
+    } catch { $errors.Add("wsl: $($_.Exception.Message)") }
+
+    try {   # top programs: from the same reading
+        if ($snap) {
+            $elapsed = if ($null -ne $Context.PreviousMs) { ($NowMs - $Context.PreviousMs) / 1000.0 } else { 0.0 }
+            $State.top = @(Get-TopPrograms -Previous $Context.Previous -Current $snap -ElapsedSeconds $elapsed -Cores $Context.Cores -GpuLuid $Context.GpuLuid)
+        } else { $State.top = @() }
+    } catch { $errors.Add("top programs: $($_.Exception.Message)") }
+
+    if ($snap) { $Context.Previous = $snap; $Context.PreviousMs = $NowMs }
+    $State.workstationError = if ($errors.Count) { $errors -join '; ' } else { $null }
+}
 #endregion 92
 
 #region 93 The AI server (#93)

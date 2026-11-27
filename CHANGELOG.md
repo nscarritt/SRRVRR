@@ -20,6 +20,11 @@ called out under **Changed** or **Removed** with upgrade notes.
   line gains power, clock and fan, and a Hot, Power limit or Slowed badge, from `nvidia-smi`. Two new alerts,
   `vram-spill` (banner) and `vram-spill-ended` (logged). `/stats` gains `gpuMemTotal`, `gpuShared`, `gpuSpill` and the GPU detail
   fields on a Workstation only. The Server is unchanged.
+- (#92) **Memory detail and top programs (Workstation).** A line under the Memory tile with committed memory against
+  its limit and paging in (amber at 90% committed), and a Top programs card: the 5 programs using the most video
+  memory and the 5 using the most RAM, at most 8 rows, with their CPU. The WSL VM (`vmmemWSL`) is one of the
+  programs, against the cap from `.wslconfig` (or half of RAM). `/stats` gains `memCommit`, `memCommitLimit`,
+  `memPageIn`, `wsl`, `top` and `workstationError`, all Workstation only; the Server is unchanged.
 - **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
   a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
   detail, a Top programs card and an AI server card in place of the server's Processes and Transfers cards, designed so

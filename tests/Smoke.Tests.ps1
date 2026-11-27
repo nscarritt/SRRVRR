@@ -431,3 +431,42 @@ Describe 'T91 a Workstation test build' -Tag 'Smoke' {
     }
 }
 #endregion 91
+#region 92
+Describe 'T92-12 memory detail and top programs on test builds' -Tag 'Smoke' {
+    BeforeAll {
+        $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($elevated -and -not $env:GITHUB_ACTIONS) { throw 'Run the smoke tests without administrator: an elevated test copy would change the live SRRVRR''s firewall rule.' }
+        $script:Fields92 = @('memCommit', 'memCommitLimit', 'memPageIn', 'wsl', 'top')
+        $script:CapLine = 'WSL VM: memory cap [\d.]+ GB \((from \.wslconfig|default: half of RAM)\)'
+    }
+    It 'T92-12 a Workstation build serves memCommit, memCommitLimit, memPageIn, wsl and top and logs the WSL VM cap; a Server build has none of them' {
+        $wsPort = Get-FreePort; $ws = New-Build 'HEAD' $wsPort
+        [IO.File]::WriteAllText((Join-Path $ws 'SRRVRR.config.psd1'), "# Test copy settings (T92-12).`r`n@{`r`n    Port = $wsPort`r`n    Role = 'Workstation'`r`n}`r`n")
+        $svPort = Get-FreePort; $sv = New-Build 'HEAD' $svPort
+        $pWs = $null; $pSv = $null
+        try {
+            $pWs = Start-Build $ws $wsPort
+            $pSv = Start-Build $sv $svPort
+            # The slow sampler fills these every 5 s, so top waits for its first pass.
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            do {
+                Start-Sleep -Seconds 1
+                $s = (Invoke-TestRequest -Url "http://localhost:$wsPort/stats").Body | ConvertFrom-Json
+            } while (-not @($s.top | Where-Object { $_ }).Count -and [DateTime]::UtcNow -lt $deadline)
+            $names = @($s.PSObject.Properties.Name)
+            foreach ($k in $Fields92) { $names | Should -Contain $k -Because 'the Workstation''s /stats' }
+            @($s.top).Count | Should -BeGreaterThan 0
+            $s.memCommit | Should -BeGreaterThan 0
+            $s.memCommitLimit | Should -BeGreaterThan 0
+            foreach ($k in 'running', 'mem', 'cap', 'capSource') { @($s.wsl.PSObject.Properties.Name) | Should -Contain $k -Because 'wsl' }
+            $wsLog = (Get-ChildItem (Join-Path $ws 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n"
+            $wsLog | Should -Match $CapLine
+            $v = (Invoke-TestRequest -Url "http://localhost:$svPort/stats").Body | ConvertFrom-Json
+            $svNames = @($v.PSObject.Properties.Name)
+            foreach ($k in $Fields92) { $svNames | Should -Not -Contain $k -Because 'the Server''s /stats is unchanged' }
+            $svLog = (Get-ChildItem (Join-Path $sv 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n"
+            $svLog | Should -Not -Match 'WSL VM: memory cap'
+        } finally { Stop-Build $pWs; Stop-Build $pSv }
+    }
+}
+#endregion 92
