@@ -164,7 +164,7 @@ Describe 'T93-05 the AI server boundary in the code' {
             'wsl.exe -l', 'wsl -d Ubuntu', 'Start-Process wsl', "Start-Process 'wsl.exe'", '& "C:\Windows\System32\wsl.exe" --status',
             '$x = ''wsl --shutdown''', 'cmd /c "wsl -e ls"', 'bash -c "ls"', 'bash.exe -c ls', "Start-Process bash", '& C:\Windows\System32\bash.exe',
             'ubuntu.exe run ls', 'ubuntu2204.exe', 'ubuntu2404.exe run ls', 'debian.exe', 'kali.exe', 'opensuse-leap-15.exe', 'opensuse42.exe',
-            'Start-Process "C:\Users\x\AppData\Local\Microsoft\WindowsApps\Ubuntu.exe"', 'cmd /c "bash -lc ls"',
+            'Start-Process "C:\Apps\x\WindowsApps\Ubuntu.exe"', 'cmd /c "bash -lc ls"',
             '[DllImport("wslapi.dll")] $x', "Add-Type 'WslLaunch'", '$h = WslLaunchInteractive', "Add-Type -Path 'wslapi'",
             '$p = ''\wsl$\Ubuntu\home'''
         )
@@ -172,7 +172,7 @@ Describe 'T93-05 the AI server boundary in the code' {
     }
     It 'T93-05 Find-WslUse passes the allowed uses in sample lines (vmmemWSL, .wslconfig, the wsl key, WSL VM text)' {
         $ok = @(
-            '$n = ''vmmemWSL''', '$p = ''C:\Users\x\.wslconfig''', '$s = $State.wsl', '$s = $State[''wsl'']', '$h = @{ wsl = 1 }', '$h = @{ ''wsl'' = 1 }',
+            '$n = ''vmmemWSL''', '$p = ''C:\Apps\x\.wslconfig''', '$s = $State.wsl', '$s = $State[''wsl'']', '$h = @{ wsl = 1 }', '$h = @{ ''wsl'' = 1 }',
             '$t = ''WSL VM''', '$t = "WSL VM: $x"', '# wsl.exe -l is a comment', '$c = ''[wsl2]''', '$s = $State.bash',
             '$t = ''Debian is a distro''', '$t = ''the bash shell'''
         )
