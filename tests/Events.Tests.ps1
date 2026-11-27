@@ -298,3 +298,24 @@ Describe 'T91 the spill event types' {
     }
 }
 #endregion 91
+#region 93 The AI server's two event types (#93, test plan 6.13; spec section 7)
+Describe 'T93-12 the AI server event types' {
+    It 'T93-12 ai-job-done is info, banner, not logged; ai-stopped-answering is warn, banner, logged' {
+        $t = Get-EventTypes
+        $t.ContainsKey('ai-job-done') | Should -BeTrue
+        $t['ai-job-done'].Severity | Should -BeExactly 'info'
+        $t['ai-job-done'].Banner | Should -BeTrue
+        $t['ai-job-done'].Logged | Should -BeFalse
+        $t.ContainsKey('ai-stopped-answering') | Should -BeTrue
+        $t['ai-stopped-answering'].Severity | Should -BeExactly 'warn'
+        $t['ai-stopped-answering'].Banner | Should -BeTrue
+        $t['ai-stopped-answering'].Logged | Should -BeTrue
+    }
+    It 'T93-12 New-TypedEvent takes its flags from the table for both' {
+        $done = New-TypedEvent -Type 'ai-job-done' -Data @{ name = 'Main'; seconds = 840 } -Key 'ai-job-done|Main|1795000070000'
+        $done.severity | Should -BeExactly 'info'; $done.banner | Should -BeTrue; $done.logged | Should -BeFalse
+        $stop = New-TypedEvent -Type 'ai-stopped-answering' -Data @{ name = 'Main' } -Key 'ai-stopped-answering|Main'
+        $stop.severity | Should -BeExactly 'warn'; $stop.banner | Should -BeTrue; $stop.logged | Should -BeTrue
+    }
+}
+#endregion 93

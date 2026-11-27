@@ -95,3 +95,85 @@ Describe 'T92-08 region 92 of Workstation.psm1 reads nothing itself' {
     }
 }
 #endregion 92
+#region 93 The AI server boundary (#93, test plan 6.13; spec Q9 and section 6; plan Global Constraints)
+Describe 'T93-05 the AI server boundary in the code' {
+    BeforeAll {
+        # A script's text with its comments blanked out (offsets kept), and its syntax tree from the same parse.
+        function Get-CodeView([string]$Path) {
+            $text = [IO.File]::ReadAllText($Path)
+            $tokens = $null; $errors = $null
+            $ast = [Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors)
+            $chars = $text.ToCharArray()
+            foreach ($t in $tokens) {
+                if ($t.Kind -ne 'Comment') { continue }
+                for ($i = $t.Extent.StartOffset; $i -lt $t.Extent.EndOffset; $i++) { if ($chars[$i] -ne "`n") { $chars[$i] = ' ' } }
+            }
+            @{ Code = (-join $chars); Ast = $ast }
+        }
+        function Remove-Extent([string]$Code, $Extent) {
+            $chars = $Code.ToCharArray()
+            for ($i = $Extent.StartOffset; $i -lt $Extent.EndOffset; $i++) { if ($chars[$i] -ne "`n") { $chars[$i] = ' ' } }
+            -join $chars
+        }
+        # Every way of running wsl outside comments: a wsl or wsl.exe command, a string naming wsl.exe, a bare 'wsl'
+        # argument (Start-Process wsl), or a 'wsl -...' command line. 'WSL VM', vmmemWSL, .wslconfig and [wsl2] are fine.
+        function Find-WslUse($View) {
+            $found = New-Object System.Collections.Generic.List[string]
+            foreach ($c in $View.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true)) {
+                $name = $c.GetCommandName()
+                if ($name -and $name -match '(?i)(^|[\\/])wsl(\.exe)?$') { $found.Add("line $($c.Extent.StartLineNumber): command $name") }
+            }
+            $strings = $View.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] -or $n -is [Management.Automation.Language.ExpandableStringExpressionAst] }, $true)
+            foreach ($s in $strings) {
+                $v = [string]$s.Value
+                if ($v -match '(?i)^wsl(\.exe)?$' -or $v -match '(?i)wsl\.exe' -or $v -match '(?i)(^|[\s\\/"''])wsl\s+-') { $found.Add("line $($s.Extent.StartLineNumber): '$v'") }
+            }
+            $found.ToArray()   # unrolled: nothing when there is no wsl
+        }
+        function Get-StringValues($View) {
+            @($View.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] -or $n -is [Management.Automation.Language.ExpandableStringExpressionAst] }, $true) | ForEach-Object { [string]$_.Value })
+        }
+        # ComfyUI's other endpoints, with or without its /api prefix: prompts, history, images, uploads, unloading models.
+        $script:ForbiddenPaths = '(?i)/(queue|history|ws|view|interrupt|upload|free)\b'
+        $script:NetworkApis = '(?i)WebRequest|WebClient|HttpClient|RestMethod|TcpClient|TcpListener|UdpClient|Net\.Sockets|\bSockets?\b|BitsTransfer|DownloadString|DownloadFile|ServicePoint'
+        $script:WsModule = Get-CodeView (Join-Path (Get-RepoRoot) 'modules\Workstation.psm1')
+        $script:WsEntry = Get-CodeView (Join-Path (Get-RepoRoot) 'SRRVRR.ps1')
+        $script:Reader = $WsModule.Ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Read-LocalHttp' }, $true)
+    }
+    It 'T93-05 Read-LocalHttp is a GET to the literal http://127.0.0.1:, with no proxy, no redirects, no keep-alive and no body' {
+        $Reader | Should -Not -BeNullOrEmpty -Because 'modules\Workstation.psm1 defines Read-LocalHttp'
+        $fn = $WsModule.Code.Substring($Reader.Extent.StartOffset, $Reader.Extent.EndOffset - $Reader.Extent.StartOffset)
+        $fn | Should -Match 'HttpWebRequest'
+        $fn | Should -Match '[''"]http://127\.0\.0\.1:[''"]'
+        $fn | Should -CMatch '[''"]GET[''"]'
+        $fn | Should -Match '(?i)\.Method\s*=\s*[''"]GET[''"]'
+        $fn | Should -Match '(?i)\.Proxy\s*=\s*\$null'
+        $fn | Should -Match '(?i)\.AllowAutoRedirect\s*=\s*\$false'
+        $fn | Should -Match '(?i)\.KeepAlive\s*=\s*\$false'
+        $fn | Should -Not -Match '(?i)GetRequestStream|\.Host\s*=|\.ContentLength\s*=|\.Credentials\s*=|UseDefaultCredentials|CookieContainer'
+    }
+    It 'T93-05 in the module only Read-LocalHttp does network I/O; every URL is http://127.0.0.1:; GET only; no wsl; no other ComfyUI path' {
+        $Reader | Should -Not -BeNullOrEmpty -Because 'modules\Workstation.psm1 defines Read-LocalHttp'
+        (Remove-Extent $WsModule.Code $Reader.Extent) | Should -Not -Match $NetworkApis
+        foreach ($m in [regex]::Matches($WsModule.Code, '(?i)\b[a-z][a-z0-9+.-]*://[^\s''"]*')) { $m.Value | Should -Match '^http://127\.0\.0\.1:' }
+        $WsModule.Code | Should -Not -Match '(?i)\blocalhost\b|\[::1\]|0\.0\.0\.0'
+        $WsModule.Code | Should -Not -Match '(?i)[''"](POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE)[''"]'
+        Find-WslUse $WsModule | Should -BeNullOrEmpty
+        $WsModule.Code | Should -Not -Match $ForbiddenPaths
+        @(Get-StringValues $WsModule | Where-Object { $_ -match '^/[A-Za-z_]' } | Sort-Object -Unique) | Should -Be @('/prompt', '/system_stats')
+    }
+    It 'T93-05 SRRVRR.ps1 reaches the AI server only through Read-LocalHttp, runs no wsl, and no other module reaches it (no relay)' {
+        @($WsEntry.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Read-LocalHttp' }, $true)).Count |
+            Should -BeGreaterThan 0 -Because 'the startup probe and the Http reader call Read-LocalHttp'
+        Find-WslUse $WsEntry | Should -BeNullOrEmpty
+        $WsEntry.Code | Should -Not -Match $ForbiddenPaths
+        $WsEntry.Code | Should -Not -Match '(?i)HttpWebRequest|WebClient|HttpClient|TcpClient'
+        # The web cmdlets SRRVRR.ps1 already uses are for Plex only.
+        $web = @($WsEntry.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in 'Invoke-WebRequest', 'Invoke-RestMethod', 'iwr', 'irm', 'curl', 'wget' }, $true))
+        foreach ($c in $web) { $c.Extent.Text | Should -Match '\$plexUrl' -Because "line $($c.Extent.StartLineNumber) is a web request" }
+        foreach ($f in Get-ChildItem (Join-Path (Get-RepoRoot) 'modules') -Filter '*.psm1' | Where-Object { $_.Name -ne 'Workstation.psm1' }) {
+            (Get-CodeView $f.FullName).Code | Should -Not -Match "(?i)Read-LocalHttp|Invoke-WorkstationTick|$($NetworkApis.Substring(4))" -Because "$($f.Name) never reaches the AI server"
+        }
+    }
+}
+#endregion 93

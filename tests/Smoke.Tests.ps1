@@ -470,3 +470,105 @@ Describe 'T92-12 memory detail and top programs on test builds' -Tag 'Smoke' {
     }
 }
 #endregion 92
+#region 93 The AI server on test builds (#93, test plan 6.13): the fake ComfyUI (tests\fakes\FakeComfyUi.psm1) on a
+# random port, never the real AI server. These need #90's Role and #92's workstation tick under #93.
+Describe 'T93 the AI server on test builds' -Tag 'Smoke' {
+    BeforeAll {
+        $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($elevated -and -not $env:GITHUB_ACTIONS) { throw 'Run the smoke tests without administrator: an elevated test copy would change the live SRRVRR''s firewall rule.' }
+        Import-Module (Join-Path $Root 'tests\fakes\FakeComfyUi.psm1') -Force
+        $comfy = [IO.File]::ReadAllText((Join-Path $Root 'tests\fixtures\workstation\system_stats.json')) | ConvertFrom-Json
+        $script:ComfyVersion = $comfy.system.comfyui_version
+        $script:ComfyHolds = $comfy.devices[0].torch_vram_total
+        function Write-BuildConfig([string]$Folder, [string[]]$Lines) {
+            [IO.File]::WriteAllText((Join-Path $Folder 'SRRVRR.config.psd1'), "@{`r`n" + (($Lines | ForEach-Object { "    $_" }) -join "`r`n") + "`r`n}`r`n")
+        }
+        function Get-LogText([string]$DataFolder) { (Get-ChildItem (Join-Path $DataFolder 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n" }
+        function Get-Stats([int]$Port) { (Invoke-TestRequest -Url "http://localhost:$Port/stats").Body | ConvertFrom-Json }
+        function Get-AiRow([int]$Port, [string]$Name) { @((Get-Stats $Port).ai) | Where-Object { $_ -and $_.name -eq $Name } | Select-Object -First 1 }
+        # Polls /stats until entry Name is in State; throws with the last state seen.
+        function Wait-AiState([int]$Port, [string]$Name, [string]$State, [int]$TimeoutSeconds) {
+            $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            $last = '(no ai row)'
+            while ([DateTime]::UtcNow -lt $deadline) {
+                try { $row = Get-AiRow $Port $Name; if ($row) { $last = $row.state; if ($row.state -eq $State) { return $row } } } catch { $last = $_.Exception.Message }
+                Start-Sleep -Milliseconds 500
+            }
+            throw "'$Name' never reached '$State' within $TimeoutSeconds s; last seen: $last"
+        }
+    }
+
+    It 'T93-02 a Server test build with a ComfyUi entry logs that it is ignored, never asks the AI server, and has no ai in /stats' {
+        $fake = Start-FakeComfyUi -Mode answer
+        $p = $null
+        try {
+            $port = Get-FreePort
+            $folder = New-Build 'HEAD' $port
+            Write-BuildConfig $folder @("Port = $port", "ComfyUi = @(@{ Name = 'Main'; Port = $($fake.Port) })")
+            $p = Start-Build $folder $port
+            Start-Sleep -Seconds 7   # past the slow sampler's first passes, so any reader would have asked by now
+            $stats = Get-Stats $port
+            @($stats.PSObject.Properties.Name) | Should -Not -Contain 'ai'
+            Get-LogText $folder | Should -Match ('(?m) (INFO|WARN) startup: ' + [regex]::Escape('ComfyUi is used only on a workstation; ignored.') + '$')
+            @($fake.Requests).Count | Should -Be 0 -Because 'the Server role never reads the AI server'
+        } finally { Stop-Build $p; & $fake.Stop }
+    }
+
+    Context 'a Workstation test build with Main on the fake and Second on a closed port' {
+        BeforeAll {
+            $script:Fake = Start-FakeComfyUi -Mode answer -Queue 0
+            $script:ClosedPort = Get-FreePort
+            $script:WsPort = Get-FreePort
+            $script:WsData = Join-Path (New-TestDataPath) 'data'
+            New-Item -ItemType Directory $WsData | Out-Null
+            $script:WsFolder = Join-Path (New-TestDataPath) 'copy'
+            $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\New-TestBuild.ps1') -Arguments @('-Ref', 'HEAD', '-Destination', $WsFolder, '-Port', "$WsPort", '-DataPath', $WsData)
+            if ($r.ExitCode -ne 0) { throw "New-TestBuild failed: $($r.Output)" }
+            Write-BuildConfig $WsFolder @("Port = $WsPort", "DataPath = '$($WsData.Replace("'", "''"))'", "Role = 'Workstation'",
+                "ComfyUi = @(@{ Name = 'Main'; Port = $($Fake.Port) }, @{ Name = 'Second'; Port = $ClosedPort })")
+            $script:WsProcess = Start-Build $WsFolder $WsPort
+        }
+        AfterAll {
+            Stop-Build $WsProcess
+            if ($Fake) { & $Fake.Stop }
+        }
+
+        It 'T93-17 the startup log has the probe line of each entry: answering (ComfyUI and its version) and not answering (off or starting)' {
+            $log = Get-LogText $WsData
+            $log | Should -Match ('(?m) (INFO|WARN) startup: ' + [regex]::Escape("AI server 'Main': ComfyUI on 127.0.0.1:$($Fake.Port), answering (ComfyUI $ComfyVersion)") + '$')
+            $log | Should -Match ('(?m) (INFO|WARN) startup: ' + [regex]::Escape("AI server 'Second': ComfyUI on 127.0.0.1:$ClosedPort, not answering (off or starting)") + '$')
+        }
+
+        It 'T93-14 idle, working at queue 1, idle at 0, not-answering within 20 s of the fake stopping; only the two GETs; no CANARY anywhere' {
+            $row = Wait-AiState $WsPort 'Main' 'idle' 30
+            $row.queue | Should -Be 0
+            $row.holds | Should -Be $ComfyHolds
+            $row.version | Should -BeExactly $ComfyVersion
+            (Get-AiRow $WsPort 'Second').state | Should -BeIn @('off', 'starting') -Because 'Second has never answered'
+            & $Fake.SetQueue 1
+            (Wait-AiState $WsPort 'Main' 'working' 20).queue | Should -Be 1
+            & $Fake.SetQueue 0
+            $null = Wait-AiState $WsPort 'Main' 'idle' 20
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            & $Fake.Stop
+            $null = Wait-AiState $WsPort 'Main' 'not-answering' 30
+            $sw.Elapsed.TotalSeconds | Should -BeLessOrEqual 20 -Because 'three missed passes, 5 s apart (no VM on the runner, so the miss rule)'
+            # The boundary, end to end: every request the fake saw was a plain GET of one of the two paths.
+            $seen = @($Fake.Requests)
+            @($seen | Where-Object { $_.Line -ceq 'GET /prompt HTTP/1.1' }).Count | Should -BeGreaterThan 0
+            $odd = @($seen | Where-Object {
+                $_.Line -cnotmatch '^GET /(system_stats|prompt) HTTP/1\.1$' -or $_.Host -cne "127.0.0.1:$($Fake.Port)" -or $_.ContentLength -or $_.TransferEncoding -or $_.BodyBytes -ne 0
+            } | ForEach-Object { "$($_.Line) [Host $($_.Host)]" })
+            $odd | Should -BeNullOrEmpty
+            # Nothing the reader drops reaches /stats, the logs or any file under DataPath (after a clean stop, so every file is written and closed).
+            (Invoke-TestRequest -Url "http://localhost:$WsPort/stats").Body | Should -Not -Match 'CANARY'
+            $null = $WsProcess.Handle
+            & cmd /c "`"$WsFolder\Stop SRRVRR.bat`"" | Out-Null
+            $WsProcess.WaitForExit(15000) | Should -BeTrue
+            $files = @(Get-ChildItem $WsData -Recurse -File)
+            $files.Count | Should -BeGreaterThan 0
+            @($files | Where-Object { [IO.File]::ReadAllText($_.FullName) -match 'CANARY' } | ForEach-Object { $_.FullName }) | Should -BeNullOrEmpty
+        }
+    }
+}
+#endregion 93

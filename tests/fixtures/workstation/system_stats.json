@@ -1,0 +1,30 @@
+{
+  "system": {
+    "os": "posix",
+    "ram_total": 34359738368,
+    "ram_free": 21474836480,
+    "comfyui_version": "0.3.99",
+    "python_version": "3.12.3 (main, Jan 01 2026, 00:00:00) [GCC 13.2.0]",
+    "pytorch_version": "2.9.0+cu128",
+    "embedded_python": false,
+    "argv": [
+      "main.py",
+      "--listen",
+      "127.0.0.1",
+      "--output-directory",
+      "/opt/CANARY-PATH/output",
+      "--CANARY-ARGV"
+    ]
+  },
+  "devices": [
+    {
+      "name": "cuda:0 NVIDIA Example GPU : cudaMallocAsync",
+      "type": "cuda",
+      "index": 0,
+      "vram_total": 25769803776,
+      "vram_free": 8589934592,
+      "torch_vram_total": 16320875520,
+      "torch_vram_free": 536870912
+    }
+  ]
+}

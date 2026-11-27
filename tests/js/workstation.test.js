@@ -243,6 +243,112 @@ test('T90-12 hostTitle is the host name from /stats, or SRRVRR when there is non
 // #endregion 92
 
 // #region 93 The AI server (#93)
+// Spec section 6 (the states, "holds", "for 6 min", "last done"), section 7 and section 8 (render from data passed
+// in); plan "The page": aiRowsHtml(ai, wsl, timeZone), renderAiCard(el, s), bannerFor. In a block, so its names
+// never clash with another region's.
+{
+  const plain = x => JSON.parse(JSON.stringify(x));
+  const GiB = 2 ** 30;
+  // A row as Update-AiWatch makes it; off and starting rows carry no readings.
+  const row = o => Object.assign({ name: 'Main', state: 'idle', queue: 0, workingSec: null, holds: Math.round(15.2 * GiB),
+    vramTotal: Math.round(23.5 * GiB), vramFree: Math.round(8.4 * GiB), version: '0.3.99', lastDoneTs: null, lastDoneSec: null }, o);
+  const bare = o => row(Object.assign({ queue: null, holds: null, vramTotal: null, vramFree: null, version: null }, o));
+  const LABELS = { off: 'Off', starting: 'Starting', idle: 'Idle', working: 'Working', 'not-answering': 'Not answering', unknown: 'Unknown reply' };
+  const word = label => new RegExp('(^|[^A-Za-z])' + label + '([^A-Za-z]|$)');
+  const titles = html => Array.from(String(html).matchAll(/title="([^"]*)"/g), m => m[1]);
+  const wsl = { running: true, mem: Math.round(31.2 * GiB), cap: 48 * GiB, capSource: 'config' };
+
+  const states = [
+    ['off', bare({ state: 'off' })],
+    ['starting', bare({ state: 'starting' })],
+    ['idle', row({ state: 'idle' })],
+    ['working', row({ state: 'working', queue: 2, workingSec: 360 })],
+    ['not-answering', row({ state: 'not-answering' })],
+    ['unknown', bare({ state: 'unknown' })],
+  ];
+  for (const [state, r] of states) {
+    test('T93-15 aiRowsHtml: ' + state + ' shows "' + LABELS[state] + '" and the entry name, and no other state', () => {
+      const html = String(page.aiRowsHtml([r], null, 'UTC'));
+      assert.match(html, word(LABELS[state]));
+      assert.match(html, /Main/);
+      for (const [other, label] of Object.entries(LABELS)) {
+        if (other !== state && !LABELS[state].includes(label)) assert.doesNotMatch(html, word(label), state + ' row shows ' + label);
+      }
+      assert.doesNotMatch(html, /undefined|null|NaN/);
+    });
+  }
+
+  test('T93-15 aiRowsHtml: working with queue 2 for 360 s, and queue 1', () => {
+    assert.match(String(page.aiRowsHtml([row({ state: 'working', queue: 2, workingSec: 360 })], null, 'UTC')), /2 queued, for 6 min/);
+    assert.match(String(page.aiRowsHtml([row({ state: 'working', queue: 1, workingSec: 360 })], null, 'UTC')), /1 queued/);
+  });
+
+  test('T93-15 aiRowsHtml: idle and working rows say "holds 15.2 GB"', () => {
+    assert.match(String(page.aiRowsHtml([row({ state: 'idle' })], null, 'UTC')), /holds 15\.2 GB/);
+    assert.match(String(page.aiRowsHtml([row({ state: 'working', queue: 2, workingSec: 360 })], null, 'UTC')), /holds 15\.2 GB/);
+  });
+
+  test('T93-15 aiRowsHtml: a lastDone is "last done 7:42 PM, 14 min", its time through fmtTime', () => {
+    const ts = Date.UTC(2026, 10, 6, 19, 42);
+    assert.strictEqual(page.fmtTime(ts, 'UTC'), '7:42 PM');
+    const html = String(page.aiRowsHtml([row({ state: 'idle', lastDoneTs: ts, lastDoneSec: 840 })], null, 'UTC'));
+    assert.match(html, /last done 7:42 PM, 14 min/);
+    // On a working row too: the last batch stays shown while the next one runs (spec section 1's sketch).
+    const working = String(page.aiRowsHtml([row({ state: 'working', queue: 2, workingSec: 360, lastDoneTs: ts, lastDoneSec: 840 })], null, 'UTC'));
+    assert.match(working, /last done 7:42 PM, 14 min/);
+  });
+
+  test('T93-15 aiRowsHtml: each row has a title with the card as ComfyUI sees it (vramTotal, vramFree) and its version', () => {
+    const a = row({ name: 'Main', vramTotal: Math.round(23.5 * GiB), vramFree: Math.round(8.4 * GiB), version: '0.3.99' });
+    const b = row({ name: 'Second', vramTotal: Math.round(11.5 * GiB), vramFree: Math.round(2.5 * GiB), version: '0.4.1' });
+    for (const [r, total, free, version] of [[a, '23.5', '8.4', '0.3.99'], [b, '11.5', '2.5', '0.4.1']]) {
+      const t = titles(page.aiRowsHtml([r], null, 'UTC')).filter(x => x.includes(version));
+      assert.ok(t.length >= 1, r.name + ': a title with the version ' + version);
+      assert.ok(t.some(x => x.includes(total) && x.includes(free)), r.name + ': its title has ' + total + ' and ' + free + ' GB');
+    }
+  });
+
+  test('T93-15 aiRowsHtml: HTML in a name or a ComfyUI version shows as text', () => {
+    const evil = row({ name: '<img src=x onerror=alert(1)>', version: '<script>alert(1)</script>' });
+    const html = String(page.aiRowsHtml([evil], wsl, 'UTC'));
+    assert.doesNotMatch(html, /<img src=x|<script>/i);
+    assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    const quote = String(page.aiRowsHtml([row({ version: '0.3" onmouseover="alert(1)' })], null, 'UTC'));
+    assert.doesNotMatch(quote, /"\s*onmouseover=/, 'a quote in the version never ends the title attribute');
+  });
+
+  test('T93-15 renderAiCard: hidden with no ai or an empty list; shown with two rows and the WSL VM row; sets only innerHTML and hidden', () => {
+    const none = fakeElement();
+    page.renderAiCard(none, { role: 'workstation', wsl });
+    assert.strictEqual(none.hidden, true);
+    const empty = fakeElement();
+    page.renderAiCard(empty, { role: 'workstation', ai: [], wsl });
+    assert.strictEqual(empty.hidden, true);
+    const two = fakeElement();
+    page.renderAiCard(two, { role: 'workstation', ai: [row({ name: 'Main' }), bare({ name: 'Second', state: 'off' })], wsl });
+    assert.strictEqual(two.hidden, false);
+    assert.match(two.innerHTML, /Main/);
+    assert.match(two.innerHTML, /Second/);
+    assert.match(two.innerHTML, /WSL VM/);
+    assert.deepStrictEqual(Object.keys(two).sort(), ['hidden', 'innerHTML']);
+    // From the data passed in, not the page's globals: a second host's card in another element is its own.
+    const other = fakeElement();
+    page.renderAiCard(other, { role: 'workstation', ai: [row({ name: 'Elsewhere' })], wsl: { running: false, mem: null, cap: 16 * GiB, capSource: 'default' } });
+    assert.match(other.innerHTML, /Elsewhere/);
+    assert.doesNotMatch(other.innerHTML, /Second/);
+    assert.doesNotMatch(two.innerHTML, /Elsewhere/);
+  });
+
+  test('T93-16 bannerFor: ai-job-done (840 s) and ai-stopped-answering', () => {
+    const done = plain(page.bannerFor({ id: 1, banner: true, type: 'ai-job-done', data: { name: 'Main', seconds: 840 } }));
+    assert.strictEqual(done.title, 'AI job finished');
+    assert.deepStrictEqual(done.lines, ['Main, took 14 min']);
+    const stopped = plain(page.bannerFor({ id: 2, banner: true, type: 'ai-stopped-answering', data: { name: 'Main' } }));
+    assert.strictEqual(stopped.title, 'AI server stopped answering during a job');
+    assert.deepStrictEqual(stopped.lines, ['Main']);
+  });
+}
 // #endregion 93
 
 void test; void assert; void page; void fakeElement;
