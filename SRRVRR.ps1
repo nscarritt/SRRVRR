@@ -219,6 +219,7 @@ Set-Step 'Reading settings'
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Settings.psm1') -Force
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Web.psm1') -Force
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Counters.psm1') -Force   # Get-TracerLogEntry, for the watcher
+Import-Module -Name (Join-Path $PSScriptRoot 'modules\Workstation.psm1') -Force   # the Workstation role (v0.10.0)
 $loaded = if ($PSBoundParameters.ContainsKey('Port')) { Import-SrrSettings -Folder $PSScriptRoot -Port $Port } else { Import-SrrSettings -Folder $PSScriptRoot }
 foreach ($n in $loaded.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warning $n.Text } else { Write-Status $n.Text } }
 $settings = $loaded.Settings
