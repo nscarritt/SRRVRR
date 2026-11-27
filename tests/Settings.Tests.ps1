@@ -109,3 +109,102 @@ Describe 'T65-06 the drive space settings' {
         { Test-SrrSettings (New-Config @{ DriveWarnPercent = 90; DriveFullPercent = 90 }) } | Should -Throw '*lower than*'
     }
 }
+
+#region 90 Roles and the host name (#90)
+Describe 'T90-03 the Role setting' {
+    BeforeAll {
+        # The error Test-SrrSettings throws for a settings table, or $null when it loads.
+        function Get-SettingsError([hashtable]$Values) { try { Test-SrrSettings (New-Config $Values) | Out-Null; $null } catch { $_ } }
+    }
+    It 'T90-03 Role is Server by default, and the defaults load' {
+        (Get-SrrDefaultSettings).Role | Should -BeExactly 'Server'
+        { Test-SrrSettings (Get-SrrDefaultSettings) } | Should -Not -Throw
+    }
+    It 'T90-03 Role <value> loads from the config file (any case), with no warning' -ForEach @(
+        @{ value = 'Server' }, @{ value = 'server' }, @{ value = 'Workstation' }, @{ value = 'WORKSTATION' }
+    ) {
+        $dir = New-TestDataPath
+        try {
+            Write-ConfigFile $dir 'SRRVRR.config.psd1' "@{ Role = '$value' }"
+            $r = Import-SrrSettings -Folder $dir
+            $r.Settings.Role | Should -Be $value
+            @($r.Notes | Where-Object { $_.Level -eq 'Warning' }) | Should -BeNullOrEmpty
+        } finally { Remove-TestDataPath $dir }
+    }
+    It 'T90-03 Role <shown> is one settings error naming Server and Workstation, exit code 2' -ForEach @(
+        @{ value = 'Desktop'; shown = "'Desktop'" }, @{ value = ''; shown = "''" }, @{ value = 1; shown = '1' }, @{ value = $null; shown = '$null' }
+    ) {
+        $err = Get-SettingsError @{ Role = $value }
+        $err | Should -Not -BeNullOrEmpty -Because "Role $shown must be refused"
+        $message = $err.Exception.Message
+        $message | Should -Match 'Role'
+        $message | Should -Match 'Server'
+        $message | Should -Match 'Workstation'
+        $message | Should -Not -Match "`n"
+        Get-SrrExitCode $err.Exception | Should -Be 2
+    }
+}
+
+Describe 'T90-05 the DisplayName setting' {
+    BeforeAll {
+        function Get-SettingsError([hashtable]$Values) { try { Test-SrrSettings (New-Config $Values) | Out-Null; $null } catch { $_ } }
+    }
+    It 'T90-05 DisplayName is empty by default, and the defaults load' {
+        (Get-SrrDefaultSettings).DisplayName | Should -BeExactly ''
+        { Test-SrrSettings (Get-SrrDefaultSettings) } | Should -Not -Throw
+    }
+    It 'T90-05 DisplayName <shown> is one settings error naming "1 to 32 characters", exit code 2' -ForEach @(
+        @{ value = 'a' * 33; shown = '33 characters long' }
+        @{ value = 'a<b'; shown = "'a<b'" }
+        @{ value = "a`tb"; shown = 'with a tab' }
+        @{ value = 'Caf' + [char]0xE9; shown = 'with a non-ASCII letter' }
+        @{ value = 5; shown = 'the number 5' }
+    ) {
+        $err = Get-SettingsError @{ DisplayName = $value }
+        $err | Should -Not -BeNullOrEmpty -Because "DisplayName $shown must be refused"
+        $message = $err.Exception.Message
+        $message | Should -Match 'DisplayName'
+        $message | Should -Match '1 to 32 characters'
+        $message | Should -Not -Match "`n"
+        Get-SrrExitCode $err.Exception | Should -Be 2
+    }
+    It 'T90-05 DisplayName ''<value>'' loads from the config file as written, with no warning' -ForEach @(
+        @{ value = 'DEV-PC' }, @{ value = 'My PC 2' }, @{ value = 'a_b.c' }, @{ value = 'b' * 32 }
+    ) {
+        $dir = New-TestDataPath
+        try {
+            Write-ConfigFile $dir 'SRRVRR.config.psd1' "@{ DisplayName = '$value' }"
+            $r = Import-SrrSettings -Folder $dir
+            $r.Settings.DisplayName | Should -BeExactly $value
+            @($r.Notes | Where-Object { $_.Level -eq 'Warning' }) | Should -BeNullOrEmpty
+        } finally { Remove-TestDataPath $dir }
+    }
+}
+
+Describe 'T90-10 server-only settings on a workstation' {
+    It 'T90-10 a Workstation config with every server-only setting valid loads, keeping them as set' {
+        $dir = New-TestDataPath
+        try {
+            Write-ConfigFile $dir 'SRRVRR.config.psd1' "@{ Role = 'Workstation'; Processes = @{ Valheim = `$true; Plex = `$true }; ValheimPort = 2457 }"
+            $r = Import-SrrSettings -Folder $dir
+            $r.Settings.Role | Should -Be 'Workstation'
+            $r.Settings.ValheimPort | Should -Be 2457
+            $r.Settings.Processes.Valheim | Should -BeTrue
+            $r.Settings.Processes.Plex | Should -BeTrue
+            @($r.Notes | Where-Object { $_.Level -eq 'Warning' }) | Should -BeNullOrEmpty
+        } finally { Remove-TestDataPath $dir }
+    }
+    It 'T90-10 a Workstation config with ValheimPort 0 gets the usual ValheimPort error (validated, then ignored)' {
+        # Without a Role setting this file isn't a Workstation config at all, and the error below would prove nothing.
+        (Get-SrrDefaultSettings).ContainsKey('Role') | Should -BeTrue -Because 'Role is a setting'
+        $dir = New-TestDataPath
+        try {
+            Write-ConfigFile $dir 'SRRVRR.config.psd1' "@{ Role = 'Workstation'; ValheimPort = 0 }"
+            $err = try { Import-SrrSettings -Folder $dir | Out-Null; $null } catch { $_ }
+            $err | Should -Not -BeNullOrEmpty
+            $err.Exception.Message | Should -BeExactly "ValheimPort must be the Valheim server's game port, a number from 1 to 65534 (default 2456)."
+            Get-SrrExitCode $err.Exception | Should -Be 2
+        } finally { Remove-TestDataPath $dir }
+    }
+}
+#endregion 90

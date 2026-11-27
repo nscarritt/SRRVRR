@@ -2,7 +2,8 @@
 
 Status: draft for the owner's review. Covers stories #47 to #51 (milestone v0.7.0) against the design spec
 `docs/specs/2026-10-28-srrvrr-core-design.md`. Extended for v0.8.0 (#62, #63, #65, #66): sections 6.6 to 6.9
-and their rows in section 7, against `docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`.
+and their rows in section 7, against `docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`; and for v0.10.0 (#90 to
+#93): sections 6.10 to 6.13 and their rows in section 7, against `docs/specs/2026-11-26-srrvrr-workstation-design.md`.
 
 ## Contents
 - [1. Scope and coverage goals](#1-scope-and-coverage-goals)
@@ -359,8 +360,9 @@ required checks in the branch protection settings.
 **How to read the tables.** `Req` uses the requirement ids from section 7. `Lvl`: S static, U unit, J JS unit, I
 integration, E elevated integration (CI only), K smoke on a test build, P performance, A owner UAT; a trailing X
 marks a security / negative test. `Asset` names what the test uses: TH `tests\TestHelpers.psm1`, CLK fake clock,
-FCR fake counter reader, FSL fake share list, FPS fake process source, FSS fake stats server, FX
-`tests\fixtures\...`, NTB `tools\New-TestBuild.ps1`, MS `tools\Measure-SRRVRR.ps1`, UC `tools\Invoke-UatChecks.ps1`.
+FCR fake counter reader, FSL fake share list, FPS fake process source, FSS fake stats server, FCU fake AI server
+`tests\fakes\FakeComfyUi.psm1` (v0.10.0), FX `tests\fixtures\...`, NTB `tools\New-TestBuild.ps1`, MS
+`tools\Measure-SRRVRR.ps1`, UC `tools\Invoke-UatChecks.ps1`.
 Every Pester `It` starts with its id (`It 'T48-07 refuses a fallback folder inside a share'`), so
 `Traceability.Tests.ps1` can find it. Test file per area: `Counters.Tests.ps1`, `History.Tests.ps1`,
 `Events.Tests.ps1`, `Logging.Tests.ps1`, `Settings.Tests.ps1`, `Server.Tests.ps1`, `Static.Tests.ps1`,
@@ -759,6 +761,102 @@ Spec section 3. Files: `tests\Events.Tests.ps1`, `tests\Settings.Tests.ps1`, `te
 | T65-11 | B1, B3, B5 | P | `tools\Measure-SRRVRR.ps1` on the test build | Within v0.7.0's budgets | MS |
 | T65-12 | DF1, DF2, DF4, B8 | A | `docs\uat\v0.8.0-combined.md` | The owner sees an amber bar and one banner after lowering the threshold, none after raising it, and a refused start for `101` | UC |
 
+### 6.10 #90 Roles and the host name (v0.10.0)
+
+Files: `tests\Workstation.Tests.ps1` (region 90), `tests\Settings.Tests.ps1`, `tests\Smoke.Tests.ps1`, `tests\js\workstation.test.js`, `tests\Page.Tests.ps1`, `tests\Docs.Tests.ps1`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T90-01 | RL1 | U | `Get-RolePlan` with `Server`, `server`, `SERVER` | Role `server`; Processes, Tracer `$true`; Workstation `$false`; HistoryLines exactly cpu, mem, gpu, rx, tx | - |
+| T90-02 | RL1, RL2 | U | `Get-RolePlan Workstation` | Role `workstation`; Processes, Tracer `$false`; Workstation `$true`; HistoryLines exactly cpu, mem, gpu, rx, tx, vram, vramShared | - |
+| T90-03 | RL1 | U X | `Role` `Desktop`, `''`, `1`, `$null` | One settings error each naming `Server` and `Workstation`; `Get-SrrExitCode` gives 2; `Server` by default | - |
+| T90-04 | RL3 | U | `Resolve-DisplayName` with ('', server, ANYPC), ('', workstation, DEV-PC), ('My PC', server, X), ('My PC', workstation, X) | `SRRVRR`, `DEV-PC`, `My PC`, `My PC` | - |
+| T90-05 | RL3 | U X | `DisplayName` of 33 characters, `a<b`, a tab, a non-ASCII letter (built with `[char]0xE9`), `5`; and `DEV-PC`, `My PC 2`, `a_b.c` | Errors naming "1 to 32 characters"; the last three accepted | - |
+| T90-06 | RL2, AD1 | U | `Format-RoleLines` for both plans | Server: exactly `Role: Server`; Workstation: exactly the two lines in Shared interfaces | - |
+| T90-07 | RL2 | K | A Workstation test build (unelevated) | `/stats` `services` is empty and has no `activity`; the console and the log have no Valheim, Plex or "network tracking is on" lines, and have "Per-program network tracking: not used on a workstation" | NTB |
+| T90-08 | RL4 | K | A test build with no `Role` | `/stats` key paths are `v0.8.0-shape.json`'s plus `hostName` and `role`; `hostName` `SRRVRR`, `role` `server` | NTB, FX |
+| T90-09 | RL4 | K | A test build with `Role = 'Workstation'`, `DisplayName = 'TEST-PC'` | `hostName` `TEST-PC`, `role` `workstation`; `/history` lines exactly cpu, mem, gpu, rx, tx, vram, vramShared | NTB |
+| T90-10 | RL2 | U X | A Workstation settings table with every server-only setting valid; then with `ValheimPort` 0 | Loads; then the usual `ValheimPort` error (validated, then ignored) | - |
+| T90-11 | RL5 | J | `cardsFor('server')`, `cardsFor('workstation')`, `cardsFor(undefined)` | `{proc:true, vram:false, ai:false, top:false}`; `{proc:false, vram:true, ai:true, top:true}`; the server's | - |
+| T90-12 | RL3 | J | `hostTitle({hostName:'DEV-PC'})`, `hostTitle({})` | `DEV-PC`; `SRRVRR` | - |
+| T90-13 | RL5 | S | `web\index.html` | `h1#host` with text SRRVRR; `<title>SRRVRR</title>`; `vramCard`, `aiCard`, `topCard`, `gpuBadge`, `memD` present and `hidden`; `vramCard` between the GPU and Network tiles; `aiCard`, `topCard` before `procCard` | - |
+| T90-14 | RL1, RL3, AD1 | S | README settings table, `SRRVRR.config.example.psd1`, `Get-SrrDefaultSettings` | `Role` and `DisplayName` with the same default and values in all three; the README has "Running on a workstation" with `Role = 'Workstation'` and answering No | - |
+| T90-15 | B1, B3, B5, B6 | P | `Measure-SRRVRR.ps1` on a test build with no `Role` | Within v0.8.0's budgets; the tick median within 10% or 5 ms of v0.8.0's | MS |
+| T90-16 | WB1 | P | `Measure-SRRVRR.ps1 -Budgets tools\budgets.workstation.psd1` on a Workstation test build on the dev PC | The numbers recorded as the workstation baseline; CPU under 1% | MS |
+| T90-17 | B8, RL5 | A | `docs\uat\90-roles.md`, on the dev PC and on the server | The spec's story 1 row | - |
+
+### 6.11 #91 Video memory and GPU detail (v0.10.0)
+
+Files: `tests\Counters.Tests.ps1`, `tests\Workstation.Tests.ps1` (region 91), `tests\Events.Tests.ps1`, `tests\Smoke.Tests.ps1`, `tests\js\workstation.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T91-01 | VG1 | U | `Invoke-FastTick`, Workstation context, two snapshots with `GPU Adapter Memory` for the chosen LUID and another; the same with no `GPU Adapter Memory`; a Server context | `gpuShared` from the chosen LUID only; `vram` and `vramShared` appended in GiB, two decimals; with no category `gpuShared` 0 and `gpuSpill` `$false`; the Server context sets neither key and appends neither line | FCR |
+| T91-02 | VG2 | U | `Update-SpillWatch`, total 24 GiB, readings every 1,000 ms at exactly 95% and exactly 1 GiB shared; then at 94.99%; then shared 1 GiB minus 1 | `$false` until the reading at 10,000 ms, then `$true`; never with either just below | - |
+| T91-03 | VG2 | U | Spilling; dedicated 89.99% for 29,000 ms then 96%; for 30,000 ms; shared 0.5 GiB minus 1 for 30,000 ms; exactly 0.5 GiB for 60,000 ms | Still spilling; `$false` at 30,000 ms; `$false`; still spilling | - |
+| T91-04 | VG2 | U | The start condition true for 9 s, false once, true for 9 s; total 0 and `$null`; `NowMs` going 5,000 ms backwards mid-hold | Never starts; always `$false` and the watch reset; the hold restarts, no exception, no flip | - |
+| T91-05 | VG3 | U | `Get-SmiArguments` with each prefix | Exactly the two arguments in Shared interfaces, with that prefix | - |
+| T91-06 | VG3 | U | `ConvertFrom-SmiDetail` on `NVIDIA GeForce RTX 4090, 33.65, 312.40, 450.00, 2610, 3105, 48, P2, Active, Not Active, Not Active, Not Active, Not Active` | gpuTemp 34, gpuPower 312, gpuPowerLimit 450, gpuClock 2610, gpuClockMax 3105, gpuFan 48, gpuPState `P2`, gpuLimits `@('power')` | FX |
+| T91-07 | VG3 | U | Each reason alone `Active`; all five; none | thermal reasons `thermal`, hw_slowdown `slowed`, power brake `power`; all: `power`, `thermal`, `slowed` in that order, once each; none: empty | FX |
+| T91-08 | VG3 | U X | `[N/A]` fan and power limit; empty fields; `Not Supported`; a line with 9 fields; two cards with the named one second; two cards, no match; an error text line from a driver update | Those fields `$null`; the named card used; `$null` result for no match and for the error line; no exception | FX |
+| T91-09 | VG3 | U | `Select-SmiPrefix`: event exit 0; event exit 2 with `Field "clocks_event_reasons.sw_power_cap" is not a valid field to query.` and throttle exit 0; both fail that way; event exit 9 with other text | `clocks_event_reasons`; `clocks_throttle_reasons`; `none`; `none` | - |
+| T91-10 | AL1 | U | `Get-EventTypes` | `vram-spill` warn, banner, logged; `vram-spill-ended` info, no banner, logged | - |
+| T91-11 | AL1 | U | `Get-WorkstationEvents`: gpuSpill false to true (dedicated 23.1 GiB, shared 2.04 GiB); true to false; Old `$null`; unchanged; missing on either side | One `vram-spill`, Data dedicatedGb 23.1 and sharedGb 2.0, Key `vram-spill`; one `vram-spill-ended`; nothing for the other three | - |
+| T91-12 | VG4 | J | `vramTile` with 17.8 of 24 GiB and 0.1 GiB shared; spilling; `gpuMemTotal` 0 and missing | value `17.8 / 24 GB`, sub `shared 0.1 GB`, spill false; spill true with the badge text `Spilling into RAM`; value `n/a` | - |
+| T91-13 | VG4 | J | `gpuDetailText` with every field; without the limit; all missing; `gpuBadge` with `['power']`, `['power','thermal']`, `['slowed']`, `[]` | `312 of 450 W`, dot, `2,610 MHz`, dot, `fan 48%`; `312 W` first; `''`; `Power limit`, `Hot`, `Slowed`, `''` | - |
+| T91-14 | AL3 | J | `bannerFor` for `vram-spill` and `vram-spill-ended` | Title `Video memory full: spilling into RAM` with line `Work on the GPU will be slow`; `Video memory no longer spilling` | - |
+| T91-15 | VG1 | J | `fillFromHistory` with the two lines; `pushReading` with and without `gpuShared` | Both lines filled; GiB values pushed; `null` for both when `gpuShared` is missing | - |
+| T91-16 | VG1, VG3, AD1 | K | A Workstation test build | `/stats` has `gpuMemTotal`, `gpuShared`, `gpuSpill`; with nvidia-smi present, the detail fields and the log line `nvidia-smi detail fields:`; the `Video memory:` line when there is a GPU | NTB |
+| T91-17 | WB1 | P | `Measure-SRRVRR.ps1 -Budgets tools\budgets.workstation.psd1` | Within the workstation budgets; the tick median within tolerance of #90's | MS |
+| T91-18 | B8, VG4 | A | `docs\uat\91-video-memory.md` | The spec's story 2 row | - |
+
+### 6.12 #92 Memory detail and top programs (v0.10.0)
+
+Files: `tests\Workstation.Tests.ps1` (region 92), `tests\Static.Tests.ps1`, `tests\Smoke.Tests.ps1`, `tests\js\workstation.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T92-01 | MM1 | U | `Get-MemoryDetail` on the two `memory.json` snapshots; Previous `$null` | memCommit and memCommitLimit from the current raw values; memPageIn the `Pages Input/sec` rate times 4096, whole bytes; with no Previous memPageIn `$null` and the commit values set | FX |
+| T92-02 | MM2 | U | `ConvertFrom-WslConfig` on `memory=48GB`; `memory = 48000MB`; `Memory=48gb`; `memory=1.5GB`; `memory=48GB # note`; `# memory=8GB`; `memory` only under `[experimental]`; `memory=lots`, `memory=-1GB`, `memory=`; `$null` | 48 GiB, 48000 MiB, 48 GiB, 1.5 GiB, 48 GiB, all `config`; the rest `TotalRam / 2`, `default` | FX |
+| T92-03 | MM2 | U X | `Get-WslReading` with a process of WorkingSet64 31e9; `$null`; a process whose WorkingSet64 throws | running, mem 31e9, cap and capSource; running `$false`, mem `$null`; running `$true`, mem `$null`, no exception | - |
+| T92-04 | TP1 | U | `Get-TopPrograms` on `process.json` and `gpu-process-memory.json`: `browser#1` to `#3`, `my#app` and `my#app#1`, `gameapp`, `vmmemWSL`, `_Total`, `Idle`, video memory on two LUIDs | browser count 3 with summed RAM and video memory; `my#app` count 2; no `_Total` or `Idle`; `vmmemWSL` named `WSL VM`; only the chosen LUID counted; the top 5 by each merged, at most 8, sorted by video memory then RAM | FX |
+| T92-05 | TP1 | U X | Two snapshots 5 s apart, 24 cores: a program with 10 s of CPU; an instance whose `ID Process` changed; an instance only in Current; Previous `$null` | cpu 8.3; cpu `$null`; cpu `$null`; every cpu `$null`; no exception | FX |
+| T92-06 | TP1 | U | Fewer than 5 programs; no `GPU Process Memory` category; a pid in GPU memory with no process | All of them; rows by RAM only with video memory 0; that pid ignored | FX |
+| T92-07 | MM1, MM2, TP1 | U | `Invoke-WorkstationTick` with fake readers at 0, 5,000, 60,000 and 65,000 ms; then with the `Counters` reader throwing | All fields set; the `WslConfig` reader called at 0 and 60,000 ms only; then `workstationError` starts with `memory:` and `wsl` is still set; a later clean pass clears it | - |
+| T92-08 | MM1, TP1 | S | `modules\Workstation.psm1` region 92 | No `Get-Process`, `Get-CimInstance`, `PerformanceCounterCategory`, `Get-Content`, `[IO.File]` or `[DateTime]`/`[DateTimeOffset]` now-calls | - |
+| T92-09 | MM1 | J | `memDetailText` with 31 of 96 GiB and 0 B/s; 90% committed; memPageIn `null` | `Committed 31 of 96 GB`, dot, `paging 0 MB/s`, warn false; warn true; `Committed 31 of 96 GB` | - |
+| T92-10 | TP1, SB1 | J X | `topRowsHtml` with three rows, one named `<img src=x onerror=alert(1)>`, one with count 3; `renderTopCard({innerHTML:'', hidden:true}, s)` with and without `s.top` | Rows in order with `(3)`, the name escaped, the overlap line; `hidden` false with the HTML set; `hidden` true | - |
+| T92-11 | MM2 | J | `wslText` with 31.2 of 48 GiB; at 90%; running false; mem `null`; capSource default | `WSL VM 31.2 of 48 GB`; warn true; `WSL VM: not running`; `WSL VM: running`; title says default, half of RAM | - |
+| T92-12 | MM1, MM2, TP1, AD1 | K | A Workstation test build; a Server test build | `/stats` has memCommit, memCommitLimit, memPageIn, `wsl`, a non-empty `top`, and the log has a `WSL VM: memory cap` line; the Server has none of them | NTB |
+| T92-13 | WB1 | P | As T91-17 | As T91-17 | MS |
+| T92-14 | B8, TP1 | A | `docs\uat\92-memory-top.md` | The spec's story 3 row | - |
+
+### 6.13 #93 The AI server card (v0.10.0)
+
+Files: `tests\Settings.Tests.ps1`, `tests\Workstation.Tests.ps1` (region 93, and its Integration block for T93-03), `tests\Static.Tests.ps1`, `tests\Events.Tests.ps1`, `tests\Smoke.Tests.ps1`, `tests\js\workstation.test.js`.
+
+| Id | Req | Lvl | Inputs | Expected | Asset |
+|---|---|---|---|---|---|
+| T93-01 | AS5 | U X | `ComfyUi` with 5 entries; a name `''`, 21 characters, duplicated; a port 1023, 65536, `'8188'`, equal to `Port`, duplicated; an entry that isn't a hashtable; an extra key | One error each, naming the entry's position; two valid entries accepted; `@()` by default | - |
+| T93-02 | AS5, AD1 | K | A Server test build with one `ComfyUi` entry | The line `ComfyUi is used only on a workstation; ignored.`; no `ai` in `/stats` | NTB |
+| T93-03 | AS1 | I X | `Read-LocalHttp` against the fake: answer; a closed port; slow (3 s); a 262,145-byte body; a 262,144-byte body; status 500; a 302 | Ok with Status 200 and the body; Ok false in under 500 ms; Ok false in under 2,500 ms; Ok false `reply too large`; Ok; Ok false; Ok false, not followed. The fake saw `GET /system_stats HTTP/1.1` with Host `127.0.0.1:<port>` and no body | FCU |
+| T93-04 | AS1 | U X | `Read-LocalHttp -Path '/queue'` and `-Port 80` | A parameter validation error each; no request made | - |
+| T93-05 | AS1 | S | `modules\Workstation.psm1` and `SRRVRR.ps1` | No `wsl.exe` or `wsl ` command; no `/queue`, `/history`, `/ws`, `/view`, `/interrupt`, `/upload`; in the module, `Read-LocalHttp` is the only use of `HttpWebRequest`, `WebClient`, `Invoke-WebRequest`, `Invoke-RestMethod`, `TcpClient`, with the literal `http://127.0.0.1:`, `'GET'` and `Proxy = $null` | - |
+| T93-06 | AS2 | U X | `ConvertFrom-ComfyStats` on `system_stats.json`; with no devices; with no `system`; non-JSON; numbers as strings | Exactly the keys version, vramTotal, vramFree, holds, torchFree, with no value containing `CANARY`; `$null` for the other four | FX |
+| T93-07 | AS2 | U X | `ConvertFrom-ComfyQueue` on `{"exec_info":{"queue_remaining":2}}`, `0`, `-1`, `"2"`, missing, junk | 2, 0, then `$null` for the rest | FX |
+| T93-08 | AS3 | U | `Update-AiWatch`, one case per transition: off to starting; starting to idle; idle to working; 1 and 2 misses held; the 3rd miss with the VM up; not-answering to idle; any state after answering with the VM up, then the VM down; answered with bad stats; VM `$null` before and after answering once; the VM down all along (ComfyUI on Windows), answered, then 3 misses | starting; idle; working, workingSec 0; the last row; not-answering; idle; off at once (even working); unknown; off, then not-answering; held twice, then not-answering | - |
+| T93-09 | AS3 | U | Answered, then the VM down, then up again with no answer | off, then starting (not not-answering) | - |
+| T93-10 | AS4 | U | Queue 5 at 0 s, 3 at 30 s, 0 at 70 s; a held miss at 40 s; working with a 59 s run; `NowMs` 10,000 ms backwards while working | One lastDone at 70 s with lastDoneSec 70, WorkingSinceMs kept across the miss; no lastDone for 59 s; workingSec 0, never negative | - |
+| T93-11 | AL1, AL2 | U | `Get-WorkstationEvents`: working to not-answering; idle to not-answering; a new lastDoneTs with 840 s; the same lastDoneTs again; Old `$null`; two entries | One `ai-stopped-answering` with Key `ai-stopped-answering|Main`; none; one `ai-job-done` with Data name `Main`, seconds 840, Key `ai-job-done|Main|<ts>`; none; none; each entry on its own | - |
+| T93-12 | AL1 | U | `Get-EventTypes` | `ai-job-done` info, banner, not logged; `ai-stopped-answering` warn, banner, logged | - |
+| T93-13 | AS1, AS3 | U | `Invoke-WorkstationTick` with a counting fake `Http` reader: both Ok; `/system_stats` failing | Calls per entry `/system_stats` then `/prompt`; only `/system_stats` when it failed; at most 2 per entry per tick; `$State.ai` a new array each tick | - |
+| T93-14 | AS1, AS2, AS3 | K X | A Workstation test build with `ComfyUi` on the fake; the fake's queue set to 1, then 0; the fake stopped | idle; working; idle; not-answering within 20 s (no VM on the runner, so the miss rule); no `CANARY` in `/stats`, the logs or any file under `DataPath` | NTB, FCU |
+| T93-15 | AS6, SB1 | J X | `aiRowsHtml` for each state; working with queue 2 and 1; holds 15.2 GiB; a lastDone; a name and version with `<script>`; `renderAiCard` with no `ai`, empty, two rows | Each state's label; `2 queued, for 6 min`, `1 queued`; `holds 15.2 GB`; `last done 7:42 PM, 14 min` (through `fmtTime`); each row's `title` with the card as ComfyUI sees it (`vramTotal`, `vramFree`) and its version; escaped; hidden, hidden, shown with the WSL row | - |
+| T93-16 | AL3 | J | `bannerFor` for `ai-job-done` (840 s) and `ai-stopped-answering` | `AI job finished`, `Main, took 14 min`; `AI server stopped answering during a job`, `Main` | - |
+| T93-17 | AD1 | K | A Workstation test build with one entry on the fake and one on a closed port | The two startup lines, `answering (ComfyUI <version>)` and `not answering (off or starting)` | NTB, FCU |
+| T93-18 | WB1 | P | `Measure-SRRVRR.ps1 -Budgets tools\budgets.workstation.psd1` with the fake off, idle and slow | Within the workstation budgets; the slow sampler's worst pass for each, recorded | MS, FCU |
+| T93-19 | B8, AS6 | A | `docs\uat\93-ai-server.md` | The spec's story 4 row | - |
+
 ## 7. Traceability
 
 Every requirement in the spec (as revised 2026-10-29), by section, with its tests. `Traceability.Tests.ps1`
@@ -767,14 +865,14 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 
 | Req | Spec section | Requirement (short) | Tests |
 |---|---|---|---|
-| B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54, T65-11 |
+| B1 | Budgets | SRRVRR's own CPU at most 1% of the machine over 60 s | T47-28, T48-69, T49-29, T50-54, T65-11, T90-15 |
 | B2 | Budgets | Private bytes after 60 min within 25 MB of the previous release | T50-56 (soak before the release; the per-PR runs record the 60 s figure) |
-| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58, T65-11 |
+| B3 | Budgets | `/stats` p95 30 ms, also while `/history` and `/events` are requested | T47-28, T49-07, T49-29, T50-43, T50-54, T50-58, T65-11, T90-15 |
 | B4 | Budgets | Page load 150 ms | T47-28 |
-| B5 | Budgets | Startup to serving 20 s | T47-28, T48-51, T65-11 |
-| B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54 |
+| B5 | Budgets | Startup to serving 20 s | T47-28, T48-51, T65-11, T90-15 |
+| B6 | Budgets | Tick median within 10% (or 5 ms) of PR 1's | T47-16, T47-28, T48-69, T49-29, T50-54, T90-15 |
 | B7 | Budgets | Disk writes up to 100 MB a day | T48-69, T49-29, T50-54 |
-| B8 | Budgets | UAT about 15 minutes per PR | UAT only (a duration, timed by the owner): T47-35, T48-70, T49-30, T50-55, T51-10 |
+| B8 | Budgets | UAT about 15 minutes per PR | UAT only (a duration, timed by the owner): T47-35, T48-70, T49-30, T50-55, T51-10, T90-17, T91-18, T92-14, T93-19 |
 | B9 | Budgets | `tickMs` in `/stats`; `tools\Measure-SRRVRR.ps1`, read-only | T47-16, T47-26, T47-27 |
 | B10 | Budgets | `/history` and `/events` 50 ms each | T49-20, T50-43 |
 | B11 | Budgets | Slow new work after serving; share list via CIM | T48-10, T48-51 (plus a `Static.Tests.ps1` check that no module calls `Get-SmbShare`, part of T50-06's AST pass) |
@@ -918,8 +1016,32 @@ at least once. "UAT only" marks requirements with no automated test, with the re
 | DF3 | 0.8 s3 | Counts, not names, in the drive events | T65-05 |
 | DF4 | 0.8 s3 | `DriveWarnPercent` and `DriveFullPercent`: 50 to 99, warn below full, documented | T65-06, T65-10, T65-12 |
 | DF5 | 0.8 s3 | The Storage bar colors from the server's level | T65-08 |
+| RL1 | 0.10 s2, s10 | The `Role` setting: `'Server'` (default) or `'Workstation'`, any case; else exit 2 | T90-01, T90-02, T90-03, T90-14 |
+| RL2 | 0.10 s2 | The Workstation runs no server-only readers (Processes, the tracer); their settings validated, then ignored, with a line | T90-02, T90-06, T90-07, T90-10 |
+| RL3 | 0.10 Q4, s10 | `DisplayName`: `''` = SRRVRR on the Server, the computer's name on the Workstation; else 1 to 32 characters | T90-04, T90-05, T90-12, T90-14 |
+| RL4 | 0.10 s2, s11 | `/stats` has `hostName` and `role`; the Server's `/stats` is v0.8.0's plus those two only | T90-08, T90-09 |
+| RL5 | 0.10 s1 | The page picks its cards by role; the Server's page is unchanged | T90-11, T90-13, T90-17 |
+| VG1 | 0.10 s3 | Shared video memory every second, and the two video memory history lines | T91-01, T91-15, T91-16 |
+| VG2 | 0.10 s3 | The spill rule: 95% and 1 GB for 10 s to start, below 90% or 0.5 GB for 30 s to end | T91-02, T91-03, T91-04 |
+| VG3 | 0.10 s3 | Power, clocks, fan and throttle reasons from the one nvidia-smi call; the field prefix chosen once; `[N/A]` left out | T91-05, T91-06, T91-07, T91-08, T91-09, T91-16 |
+| VG4 | 0.10 s1, s3 | The Video memory tile, the GPU line and its badge | T91-12, T91-13, T91-18 |
+| MM1 | 0.10 s4 | Committed of the commit limit (amber at 90%) and paging from disk | T92-01, T92-07, T92-08, T92-09, T92-12 |
+| MM2 | 0.10 s4 | The WSL VM's memory against its cap from `.wslconfig` (or half of RAM), read every 60 s | T92-02, T92-03, T92-07, T92-11, T92-12 |
+| TP1 | 0.10 s5 | Top programs: the top 5 by video memory and by RAM, grouped by name, at most 8 rows, every 5 s | T92-04, T92-05, T92-06, T92-07, T92-08, T92-10, T92-12, T92-14 |
+| AS1 | 0.10 s6 | The AI server boundary: two GETs on `127.0.0.1`, 2 s timeout, 256 KB cap, no relay, no WSL | T93-03, T93-04, T93-05, T93-13, T93-14 |
+| AS2 | 0.10 s6 | Only the kept fields leave the reader; nothing else from the replies | T93-06, T93-07, T93-14 |
+| AS3 | 0.10 s6 | The states: off, starting, idle, working, not answering, unknown; the one-miss hold; the VM rule | T93-08, T93-09, T93-13, T93-14 |
+| AS4 | 0.10 s6 | Job timing: "for N min", and last done after at least 60 s of work | T93-10 |
+| AS5 | 0.10 s10 | The `ComfyUi` setting: up to 4 entries, names and ports checked; ignored with a line on the Server | T93-01, T93-02 |
+| AS6 | 0.10 s1, s6 | The AI server card and its WSL VM row | T93-15, T93-19 |
+| AL1 | 0.10 s7 | The four new event types: severity, banner, logged | T91-10, T91-11, T93-11, T93-12 |
+| AL2 | 0.10 s7 | `ai-job-done` once per batch | T93-11 |
+| AL3 | 0.10 s7 | The new banner texts | T91-14, T93-16 |
+| SB1 | 0.10 s8 | New cards render from one host's `/stats` passed in, into the element given | T92-10, T93-15 |
+| WB1 | 0.10 s13 | The Workstation budgets against #90's workstation baseline | T90-16, T91-17, T92-13, T93-18 |
+| AD1 | 0.10 s12 | The new startup log lines | T90-06, T90-14, T91-16, T92-12, T93-02, T93-17 |
 
-**Coverage of this table:** 151 requirement rows (135 for v0.7.0, 16 for v0.8.0); every one has at least one test id. Automated tests exist for
+**Coverage of this table:** 175 requirement rows (135 for v0.7.0, 16 for v0.8.0, 24 for v0.10.0); every one has at least one test id. Automated tests exist for
 all but B8, M8 (the accepted risk), S13 (the loss on a closed window), the three-in-a-row switch in Q2, the habit
 in Q3, the release ordering in Q5, and the launcher's own log in DEP3: those are UAT or owner decisions, as noted.
 

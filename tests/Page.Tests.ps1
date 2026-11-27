@@ -80,3 +80,63 @@ Describe 'T63-07 one time formatter' {
         $js.IndexOf('Intl.DateTimeFormat(') | Should -BeLessThan ($start + 600)
     }
 }
+
+#region 90 Roles and the host name (#90)
+Describe 'T90-13 the page''s markup for the roles' {
+    BeforeAll {
+        $script:Html = [IO.File]::ReadAllText((Join-Path $Web 'index.html'))
+        # The opening tag of the element with this id (empty when there is none).
+        function Get-OpenTag([string]$Id) { [regex]::Match($Html, '<(\w+)\b[^>]*\bid="' + [regex]::Escape($Id) + '"[^>]*>').Value }
+        # The cards in <main>, in page order: each from its <section to the next (sections don't nest here).
+        $main = [regex]::Match($Html, '(?s)<main>(.*)</main>').Groups[1].Value
+        $script:Cards = @([regex]::Split($main, '(?=<section\b)') | Where-Object { $_ -match '^<section\b' })
+        # The position of the card holding this id, or -1.
+        function Get-CardIndex([string]$Id) {
+            for ($i = 0; $i -lt $Cards.Count; $i++) { if ($Cards[$i] -match ('\bid="' + [regex]::Escape($Id) + '"')) { return $i } }
+            -1
+        }
+    }
+    It 'T90-13 the header is h1#host with the text SRRVRR, and the tab title is SRRVRR' {
+        $Html | Should -Match '<h1\b[^>]*\bid="host"[^>]*>SRRVRR</h1>'
+        $Html | Should -Match '<title>SRRVRR</title>'
+    }
+    It 'T90-13 <id> is a <tag> and hidden' -ForEach @(
+        @{ id = 'vramCard'; tag = 'section'; class = 'card' }
+        @{ id = 'aiCard'; tag = 'section'; class = 'card wide' }
+        @{ id = 'topCard'; tag = 'section'; class = 'card wide' }
+        @{ id = 'gpuBadge'; tag = 'span'; class = $null }
+        @{ id = 'memD'; tag = 'div'; class = 'sub' }
+    ) {
+        $open = Get-OpenTag $id
+        $open | Should -Not -BeNullOrEmpty -Because "index.html has an element with id $id"
+        $open | Should -Match "^<$tag\b"
+        $open | Should -Match '\shidden(?=[\s/>=])' -Because "$id starts hidden"
+        if ($class) { $open | Should -Match ('\bclass="' + [regex]::Escape($class) + '"') }
+    }
+    It 'T90-13 vramCard is the tile between the GPU and Network tiles' {
+        $gpu = Get-CardIndex 'gpuV'; $vram = Get-CardIndex 'vramCard'; $net = Get-CardIndex 'netV'
+        $gpu | Should -BeGreaterThan -1
+        $vram | Should -Be ($gpu + 1) -Because 'the Video memory tile comes right after the GPU tile'
+        $net | Should -Be ($vram + 1) -Because 'the Network tile comes right after the Video memory tile'
+    }
+    It 'T90-13 aiCard, then topCard, come after the Network tile and before procCard' {
+        $net = Get-CardIndex 'netV'; $ai = Get-CardIndex 'aiCard'; $top = Get-CardIndex 'topCard'; $proc = Get-CardIndex 'procCard'
+        $net | Should -BeGreaterThan -1
+        $ai | Should -Be ($net + 1) -Because 'the AI server card comes right after the Network tile'
+        $top | Should -Be ($ai + 1) -Because 'the Top programs card comes right after the AI server card'
+        $proc | Should -Be ($top + 1) -Because 'the Processes card comes right after the Top programs card'
+    }
+    It 'T90-13 gpuBadge is in the GPU tile''s top row, memD under memS, and vramCard holds vramV, vramBadge, vramS and the canvas vramC' {
+        $gpuCard = $Cards[(Get-CardIndex 'gpuV')]
+        $gpuCard.IndexOf('id="gpuBadge"') | Should -BeGreaterThan $gpuCard.IndexOf('class="top"') -Because 'gpuBadge is in the GPU tile'
+        $gpuCard.IndexOf('id="gpuBadge"') | Should -BeLessThan $gpuCard.IndexOf('id="gpuS"') -Because 'gpuBadge is in the top row, above the sub line'
+        $memCard = $Cards[(Get-CardIndex 'memV')]
+        $memCard.IndexOf('id="memD"') | Should -BeGreaterThan $memCard.IndexOf('id="memS"') -Because 'memD is in the Memory tile, under memS'
+        $memCard.IndexOf('id="memD"') | Should -BeLessThan $memCard.IndexOf('id="memC"') -Because 'memD is above the graph'
+        Get-CardIndex 'vramCard' | Should -BeGreaterThan -1 -Because 'index.html has the Video memory tile'
+        $vramCard = $Cards[(Get-CardIndex 'vramCard')]
+        foreach ($id in 'vramV', 'vramBadge', 'vramS') { $vramCard | Should -Match ('\bid="' + $id + '"') -Because "the Video memory tile holds $id" }
+        $vramCard | Should -Match '<canvas\b[^>]*\bid="vramC"' -Because 'the Video memory tile has its graph'
+    }
+}
+#endregion 90
