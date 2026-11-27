@@ -472,6 +472,15 @@ $state = [hashtable]::Synchronized(@{
     hostName = $displayName   # the name the page shows (DisplayName, the computer name on a Workstation, else SRRVRR)
     role = $rolePlan.Role   # 'server' or 'workstation'
 })
+$gpuMemTotal = if ($gpu) { [double]$gpu.Dedicated } else { 0.0 }
+if ($rolePlan.Workstation) {
+    $state.gpuMemTotal = $gpuMemTotal   # the picked GPU's dedicated size in bytes (0 without a GPU); the page scales the Video memory tile with it
+    if ($gpu) {
+        $gpuGb = $gpuMemTotal / 1GB
+        $msg = 'Video memory: {0} {1} {2:0.#} GB, watching for spill (95% full and 1 GB shared)' -f $gpu.Name, [char]0x00B7, $gpuGb
+        Write-Status $msg
+    }
+}
 
 # --- Per-process network ------------------------------------------------------
 Set-Step 'Preparing per-program network tracking (Windows network events)'
@@ -640,7 +649,7 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $readProcesses)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $readProcesses, $workstation, $gpuTotal)
     # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
     # it on "Starting..." with no reason.
     try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
@@ -651,7 +660,8 @@ $sampler = {
     $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
     $ctx = New-FastTickContext -Reader $reader -Processes $(if ($readProcesses) { { Get-Process } } else { { @() } }) -Tracer $tracer -Services $services `
         -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
-        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
+        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history `
+        -Workstation ([bool]$workstation) -GpuTotal ([double]$gpuTotal)
     $prev = $null
     while ($true) {
         $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
@@ -667,7 +677,7 @@ $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($rolePlan.Processes)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($rolePlan.Processes).AddArgument($rolePlan.Workstation).AddArgument($gpuMemTotal)
 [void]$worker.BeginInvoke()
 Write-Status $(if ($rolePlan.Processes) { 'Every second: CPU, memory, GPU, network and the Processes table' } else { 'Every second: CPU, memory, GPU and network' })
 

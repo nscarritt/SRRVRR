@@ -140,16 +140,42 @@ function Get-TracerLogEntry {
     $null
 }
 
+# The video memory spill rule (#91). One watch per fast sampler; a state flips only after its condition has held
+# for the hold time. A clock that goes back resets the hold; a total of 0 or less forces not spilling.
+function New-SpillWatch {
+    @{ Spilling = $false; SinceMs = $null; LastMs = $null }
+}
+
+function Update-SpillWatch {
+    param([hashtable]$Watch, [double]$Dedicated, [double]$Total, [double]$Shared, [long]$NowMs,
+          [double]$StartPercent = 95, [double]$StartShared = 1GB, [int]$StartMs = 10000,
+          [double]$EndPercent = 90, [double]$EndShared = 512MB, [int]$EndMs = 30000)
+    if ($null -ne $Watch.LastMs -and $NowMs -lt $Watch.LastMs) { $Watch.SinceMs = $null }
+    $Watch.LastMs = $NowMs
+    if ($Total -le 0) { $Watch.Spilling = $false; $Watch.SinceMs = $null; return [bool]$false }
+    if ($Watch.Spilling) {
+        $cond = ($Dedicated -lt $Total * $EndPercent / 100) -or ($Shared -lt $EndShared); $hold = $EndMs
+    } else {
+        $cond = ($Dedicated -ge $Total * $StartPercent / 100) -and ($Shared -ge $StartShared); $hold = $StartMs
+    }
+    if (-not $cond) { $Watch.SinceMs = $null; return [bool]$Watch.Spilling }
+    if ($null -eq $Watch.SinceMs) { $Watch.SinceMs = $NowMs }
+    if ($NowMs - $Watch.SinceMs -ge $hold) { $Watch.Spilling = -not $Watch.Spilling; $Watch.SinceMs = $null }
+    [bool]$Watch.Spilling
+}
+
 # Everything the fast tick needs that isn't the state itself. CpuTimes is kept here between ticks.
 function New-FastTickContext {
     param(
         [scriptblock]$Reader, [scriptblock]$Processes, [scriptblock]$Tracer, [object[]]$Services, [double]$TotalRam,
-        [string]$GpuLuid, [int]$Cores, [string[]]$CpuCounter, $TickStopwatch, $IntervalStopwatch, $History
+        [string]$GpuLuid, [int]$Cores, [string[]]$CpuCounter, $TickStopwatch, $IntervalStopwatch, $History,
+        [bool]$Workstation = $false, [double]$GpuTotal = 0
     )
     @{
         Reader = $Reader; Processes = $Processes; Tracer = $Tracer; Services = $Services; TotalRam = $TotalRam
         GpuLuid = $GpuLuid; Cores = $Cores; CpuCounter = $CpuCounter; TickStopwatch = $TickStopwatch
         IntervalStopwatch = $IntervalStopwatch; CpuTimes = @{}; History = $History
+        Workstation = $Workstation; GpuTotal = $GpuTotal; Spill = (New-SpillWatch)
     }
 }
 
@@ -177,6 +203,11 @@ function Invoke-FastTick {
             $State.gpu = [math]::Round([math]::Min(100.0, $gpu.Gpu), 1)
             $State.gpuEngine = $gpu.Engine
             $State.gpuMem = Get-GpuMemory -Values (Get-CounterDelta $Previous $cur 'GPU Adapter Memory' 'Dedicated Usage') -GpuLuid $Context.GpuLuid
+            if ($Context.Workstation) {   # video memory on the Workstation (#91): shared memory and the spill rule
+                $State.gpuShared = Get-GpuMemory -Values (Get-CounterDelta $Previous $cur 'GPU Adapter Memory' 'Shared Usage') -GpuLuid $Context.GpuLuid
+                $State.gpuSpill = [bool](Update-SpillWatch -Watch $Context.Spill -Dedicated $State.gpuMem -Total $Context.GpuTotal `
+                    -Shared $State.gpuShared -NowMs $Now.ToUnixTimeMilliseconds())
+            }
             $State.diskIO = Get-DiskIO -Reads (Get-CounterDelta $Previous $cur 'LogicalDisk' 'Disk Read Bytes/sec') `
                 -Writes (Get-CounterDelta $Previous $cur 'LogicalDisk' 'Disk Write Bytes/sec')
             $State.ts = $Now.ToUnixTimeMilliseconds()
@@ -189,6 +220,10 @@ function Invoke-FastTick {
                 $h.Append('cpu', $State.cpu, $ms); $h.Append('gpu', $State.gpu, $ms)
                 $h.Append('mem', $(if ($Context.TotalRam) { [math]::Round(100 * $State.memUsed / $Context.TotalRam, 1) }), $ms)
                 $h.Append('rx', $State.rx, $ms); $h.Append('tx', $State.tx, $ms)
+                if ($Context.Workstation) {
+                    $h.Append('vram', [math]::Round($State.gpuMem / 1GB, 2), $ms)
+                    $h.Append('vramShared', [math]::Round($State.gpuShared / 1GB, 2), $ms)
+                }
             }
         }
         return $cur
@@ -207,4 +242,4 @@ function Get-TickWait([DateTime]$Now) {
 }
 
 Export-ModuleMember -Function Get-TickWait, Get-CounterDelta, Get-CounterSum, Get-CpuTotal, Get-GpuUsage, Get-GpuMemory, Get-DiskIO,
-    Get-PrivateMemory, Get-ServiceRows, Get-TracerLogEntry, New-FastTickContext, Invoke-FastTick
+    Get-PrivateMemory, Get-ServiceRows, Get-TracerLogEntry, New-FastTickContext, Invoke-FastTick, New-SpillWatch, Update-SpillWatch
