@@ -93,7 +93,15 @@ function showVersion(v, el) {
   el.className = release ? '' : 'warn';
   el.title = release ? '' : 'Not a release build';
 }
+// The cards each role shows (any role but 'workstation', including none from an older SRRVRR, gets the server's).
+function cardsFor(role) {
+  return role === 'workstation' ? {proc: false, vram: true, ai: true, top: true} : {proc: true, vram: false, ai: false, top: false};
+}
+// The name in the header and the tab: the host name from /stats, or SRRVRR.
+function hostTitle(s) { return s.hostName || 'SRRVRR'; }
 function render(s) {
+  $('host').textContent = hostTitle(s);
+  document.title = hostTitle(s);
   if (s.uptime != null) $('uptime').textContent = 'Up ' + since(s.uptime);
   if (typeof s.version === 'string') showVersion(s.version);
   showTemp('cpuTemp', s.cpuTemp, 80, 90, s.tempError, s.cpuTemps);       // CPU package: amber at 80, red at 90
@@ -213,7 +221,7 @@ function renderProcs(s) {
       (s.hasGpu ? pct(p.gpu) : 'N/A') + '</td><td class="up">' + rate(p.tx) + '</td><td class="down">' + rate(p.rx) + '</td></tr>' +
       detail(p, (s.activity || {})[p.name])
     : '<tr><td>' + name(p) + '</td><td class="offline" colspan="5">Offline</td></tr>').join('');
-  $('procCard').hidden = !(s.services || []).length;   // every process turned off in the config
+  $('procCard').hidden = !cardsFor(s.role).proc || !(s.services || []).length;   // every process turned off in the config
   $('procNote').hidden = !s.netError;
   $('procNote').textContent = s.netError ? 'Per-process network unavailable: ' + s.netError + '.' : '';
 }
