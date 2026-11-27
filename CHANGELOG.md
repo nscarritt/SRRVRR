@@ -17,8 +17,8 @@ called out under **Changed** or **Removed** with upgrade notes.
 - (#91) **Video memory and GPU detail** (Workstation). A Video memory tile with its own graph: dedicated memory in use
   of the card's total, shared memory beside it, and **Spilling into RAM** when the card has been 95% full with 1 GB or
   more of shared memory in use for 10 seconds (it clears after 30 seconds below 90%, or below 0.5 GB shared). The GPU
-  line gains power, clock and fan, and a Hot, Power limit or Slowed badge, from 
-vidia-smi. Two new alerts, ram-spill`n  (banner) and ram-spill-ended (logged). /stats gains gpuMemTotal, gpuShared, gpuSpill and the GPU detail
+  line gains power, clock and fan, and a Hot, Power limit or Slowed badge, from `nvidia-smi`. Two new alerts,
+  `vram-spill` (banner) and `vram-spill-ended` (logged). `/stats` gains `gpuMemTotal`, `gpuShared`, `gpuSpill` and the GPU detail
   fields on a Workstation only. The Server is unchanged.
 - **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
   a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
