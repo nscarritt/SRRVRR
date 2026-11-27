@@ -1,5 +1,5 @@
 # Fake performance-counter snapshots shaped like PerformanceCounterCategory.ReadCategory():
-# category -> counter -> instance -> object with .Sample (a real CounterSample) and .RawValue.
+# category -> counter -> instance -> object with .Sample (a real CounterSample), .RawValue and .InstanceName.
 # Samples use the NumberOfItems64 type, for which CounterSample.Calculate returns the new raw value, so a test's
 # expected numbers are the values it put in.
 
@@ -16,7 +16,10 @@ function New-FakeSnapshot([hashtable]$Data, [long]$Time = 1) {
         $snap[$cat] = @{}
         foreach ($counter in $Data[$cat].Keys) {
             $snap[$cat][$counter] = @{}
-            foreach ($inst in $Data[$cat][$counter].Keys) { $snap[$cat][$counter][$inst] = New-FakeSample $Data[$cat][$counter][$inst] $Time }
+            foreach ($inst in $Data[$cat][$counter].Keys) {
+                # .InstanceName as the real InstanceData has it (Get-TopPrograms names programs by it).
+                $snap[$cat][$counter][$inst] = New-FakeSample $Data[$cat][$counter][$inst] $Time | Add-Member -NotePropertyName InstanceName -NotePropertyValue $inst -PassThru
+            }
         }
     }
     $snap

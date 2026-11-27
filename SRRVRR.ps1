@@ -244,6 +244,21 @@ Write-Status "History and logs go to $($data.Path)"
 $rolePlan = Get-RolePlan -Role $settings.Role
 $displayName = Resolve-DisplayName -Setting $settings.DisplayName -Role $rolePlan.Role -ComputerName $env:COMPUTERNAME
 foreach ($line in @(Format-RoleLines -Plan $rolePlan)) { Write-Status $line }   # Write-Status logs it too
+# The AI server (v0.10.0): only a Workstation reads it. On the Server the setting is ignored, with a line.
+if (-not $rolePlan.Workstation -and @($settings.ComfyUi).Count -gt 0) {
+    $line = 'ComfyUi is used only on a workstation; ignored.'
+    Write-Status $line
+}
+# On a Workstation, one startup probe per entry: GET /system_stats on 127.0.0.1 only (spec section 6), 1 s, kept version only.
+if ($rolePlan.Workstation) {
+    foreach ($entry in @($settings.ComfyUi)) {
+        $probe = Read-LocalHttp -Port $entry.Port -Path '/system_stats' -TimeoutMs 1000
+        $probeStats = if ($probe.Ok) { ConvertFrom-ComfyStats -Body $probe.Body } else { $null }
+        $answer = if ($probeStats) { "answering (ComfyUI $($probeStats.version))" } elseif ($probe.Ok) { 'answering (unexpected reply)' } else { 'not answering (off or starting)' }
+        $line = "AI server '$($entry.Name)': ComfyUI on 127.0.0.1:$($entry.Port), $answer"
+        Write-Status $line
+    }
+}
 
 # Events (modules\Events.psm1): any thread adds to the queue; the main loop drains it once a second, writing the
 # logged ones to logs\events-YYYY-MM-DD.jsonl and keeping the last 200 for /stats.
@@ -841,6 +856,8 @@ public static class SrrvrrSensorLoader {
                 Counters   = { $s = @{}; foreach ($n in $wsCats.Keys) { $s[$n] = $wsCats[$n].ReadCategory() }; $s }.GetNewClosure()
                 WslProcess = { Get-Process -Name vmmemWSL -ErrorAction SilentlyContinue | Select-Object -First 1 }
                 WslConfig  = { $f = Join-Path $env:USERPROFILE '.wslconfig'; if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f) } else { $null } }
+                # The AI server: GET on 127.0.0.1 only, through the one reader in modules\Workstation.psm1 (spec section 6).
+                Http       = { param($Port, $Path) Read-LocalHttp -Port $Port -Path $Path }
             }
             $wsCtx = New-WorkstationContext -ComfyEntries @($workstation.ComfyEntries) -GpuLuid $workstation.GpuLuid -Cores $workstation.Cores `
                 -TotalRam ([double]$workstation.TotalRam) -Readers $wsReaders
@@ -1050,7 +1067,7 @@ $valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $s
 # What the slow sampler needs to build the Workstation's readings (null on a Server: no reader, no counter read).
 $workstation = if ($rolePlan.Workstation) {
     @{ ModulePath = (Join-Path $PSScriptRoot 'modules\Workstation.psm1'); GpuLuid = $gpuLuid; Cores = [int]$env:NUMBER_OF_PROCESSORS
-       TotalRam = [double]$totalRam; ComfyEntries = @() }
+       TotalRam = [double]$totalRam; ComfyEntries = @($settings.ComfyUi) }
 } else { $null }
 $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
@@ -1203,6 +1220,8 @@ function Get-DetectionReading {
     if ($rolePlan.Workstation -and $state.ContainsKey('gpuSpill')) {
         $reading.gpuSpill = [bool]$state.gpuSpill; $reading.gpuMem = $state.gpuMem; $reading.gpuShared = $state.gpuShared
     }
+    # The AI server rows (the slow sampler publishes a new array each pass; Get-WorkstationEvents compares them).
+    if ($rolePlan.Workstation -and $state.ContainsKey('ai')) { $reading.ai = @($state.ai) }
     $reading
 }
 function Invoke-Watch {

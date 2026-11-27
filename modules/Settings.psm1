@@ -30,6 +30,7 @@ function Get-SrrDefaultSettings {
         DriveFullPercent     = 95
         Role                 = 'Server'
         DisplayName          = ''
+        ComfyUi              = @()
     }
 }
 
@@ -149,8 +150,39 @@ function Test-WorkstationSettings([hashtable]$Settings) {
     if ($name -isnot [string] -or ($name -ne '' -and ($name -cnotmatch '^[A-Za-z0-9 ._-]{1,32}\z' -or $name.Trim() -eq ''))) {
         throw (New-SettingsError 'DisplayName must be empty (SRRVRR, or the computer name on a Workstation) or 1 to 32 characters: letters, digits, spaces, -, _ and ., not only spaces.')
     }
+    Test-ComfyUiSetting $Settings
 }
 
+# ComfyUi (v0.10.0, the AI server card): up to 4 entries, each exactly @{ Name = '...'; Port = <1024-65535> }. The
+# host is always 127.0.0.1, so there is no key for it. Errors name the entry by its position, from 1.
+function Test-ComfyUiSetting([hashtable]$Settings) {
+    $list = $Settings.ComfyUi
+    if ($list -isnot [array]) {
+        throw (New-SettingsError 'ComfyUi must be a list of entries, each @{ Name = ''Main''; Port = 8188 } (default: none).')
+    }
+    if ($list.Count -gt 4) {
+        throw (New-SettingsError "ComfyUi can have at most 4 entries; it has $($list.Count).")
+    }
+    $names = @{}; $ports = @{}
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $n = $i + 1
+        $e = $list[$i]
+        if ($e -isnot [hashtable] -or $e.Count -ne 2 -or -not $e.ContainsKey('Name') -or -not $e.ContainsKey('Port')) {
+            throw (New-SettingsError "ComfyUi entry $n must be a table with exactly the keys Name and Port, like @{ Name = 'Main'; Port = 8188 }.")
+        }
+        if ($e.Name -isnot [string] -or $e.Name -cnotmatch '^[A-Za-z0-9 ._-]{1,20}\z') {
+            throw (New-SettingsError "ComfyUi entry $n has a bad Name: it must be 1 to 20 characters: letters, digits, spaces, -, _ and .")
+        }
+        if ($names.ContainsKey($e.Name.ToLowerInvariant())) { throw (New-SettingsError "ComfyUi entry $n repeats the Name '$($e.Name)'; each Name must be different.") }
+        $names[$e.Name.ToLowerInvariant()] = $true
+        if ($e.Port -isnot [int] -or $e.Port -lt 1024 -or $e.Port -gt 65535) {
+            throw (New-SettingsError "ComfyUi entry $n has a bad Port: it must be a whole number from 1024 to 65535.")
+        }
+        if ($e.Port -eq $Settings.Port) { throw (New-SettingsError "ComfyUi entry $n uses port $($e.Port), which is SRRVRR's own Port.") }
+        if ($ports.ContainsKey($e.Port)) { throw (New-SettingsError "ComfyUi entry $n repeats the Port $($e.Port); each Port must be different.") }
+        $ports[$e.Port] = $true
+    }
+}
 # The exit code for whatever stopped SRRVRR: 2 for a settings error, 3 for a refusal to start, 1 for anything else.
 # Looks through the exceptions PowerShell wraps around the real one.
 function Get-SrrExitCode([Exception]$Exception) {

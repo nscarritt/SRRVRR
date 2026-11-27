@@ -459,4 +459,583 @@ Describe '92 memory detail, the WSL VM and top programs' {
 #endregion 92
 
 #region 93 The AI server (#93)
+# Spec section 6 and Q9; plan Shared interfaces, region 93; test plan 6.13. The values below come from the fixtures
+# system_stats.json (ComfyUI 0.3.99, the first device) and prompt.json (queue 2).
+Describe 'T93-04 the reader refuses anything but the two GETs on a local port' {
+    It 'T93-04 Read-LocalHttp takes only Port, Path, TimeoutMs and MaxBytes: no host, URL, method, header or body' {
+        $cmd = Get-Command Read-LocalHttp -ErrorAction Stop
+        $common = @([Management.Automation.PSCmdlet]::CommonParameters) + @([Management.Automation.PSCmdlet]::OptionalCommonParameters)
+        @($cmd.Parameters.Keys | Where-Object { $common -notcontains $_ } | Sort-Object) | Should -Be @('MaxBytes', 'Path', 'Port', 'TimeoutMs')
+        $set = @($cmd.Parameters['Path'].Attributes | Where-Object { $_ -is [ValidateSet] })
+        $set.Count | Should -Be 1
+        @($set[0].ValidValues | Sort-Object) | Should -Be @('/prompt', '/system_stats')
+        $range = @($cmd.Parameters['Port'].Attributes | Where-Object { $_ -is [ValidateRange] })
+        $range.Count | Should -Be 1
+        $range[0].MinRange | Should -Be 1024
+        $range[0].MaxRange | Should -Be 65535
+    }
+    It 'T93-04 <what> is a parameter validation error, so no request is made' -ForEach @(
+        @{ what = "Path '/queue'"; params = @{ Port = 8188; Path = '/queue' } }
+        @{ what = "Path '/history'"; params = @{ Port = 8188; Path = '/history' } }
+        @{ what = "Path '/interrupt'"; params = @{ Port = 8188; Path = '/interrupt' } }
+        @{ what = "Path '/api/prompt'"; params = @{ Port = 8188; Path = '/api/prompt' } }
+        @{ what = "Path '/prompt?clear=true'"; params = @{ Port = 8188; Path = '/prompt?clear=true' } }
+        @{ what = "Path '/system_stats/../queue'"; params = @{ Port = 8188; Path = '/system_stats/../queue' } }
+        @{ what = "Path ''"; params = @{ Port = 8188; Path = '' } }
+        @{ what = 'Port 80'; params = @{ Port = 80; Path = '/system_stats' } }
+        @{ what = 'Port 1023'; params = @{ Port = 1023; Path = '/system_stats' } }
+        @{ what = 'Port 65536'; params = @{ Port = 65536; Path = '/system_stats' } }
+        @{ what = 'Port 0'; params = @{ Port = 0; Path = '/prompt' } }
+    ) {
+        $err = $null
+        try { Read-LocalHttp @params | Out-Null } catch { $err = $_ }
+        $err | Should -Not -BeNullOrEmpty
+        # Binding fails before the function body runs, so the body can't have opened a connection.
+        $err.FullyQualifiedErrorId | Should -BeExactly 'ParameterArgumentValidationError,Read-LocalHttp'
+    }
+}
+
+Describe 'T93-06 the kept fields of /system_stats' {
+    BeforeAll {
+        $script:StatsText = [IO.File]::ReadAllText((Join-Path $Fixtures 'system_stats.json'))
+        # The fixture changed by $Change (a scriptblock given the parsed reply), as JSON text.
+        function Get-ChangedStats([scriptblock]$Change) {
+            $o = $StatsText | ConvertFrom-Json
+            & $Change $o
+            ConvertTo-Json -InputObject $o -Depth 8
+        }
+    }
+    It 'T93-06 the fixture gives exactly version, vramTotal, vramFree, holds and torchFree, and nothing with CANARY' {
+        $r = ConvertFrom-ComfyStats -Body $StatsText
+        $r | Should -Not -BeNullOrEmpty
+        @($r.Keys | Sort-Object) | Should -Be @('holds', 'torchFree', 'version', 'vramFree', 'vramTotal')
+        $r.version | Should -BeExactly '0.3.99'
+        $r.vramTotal | Should -Be 25769803776
+        $r.vramFree | Should -Be 8589934592
+        $r.holds | Should -Be 16320875520
+        $r.torchFree | Should -Be 536870912
+        foreach ($k in 'vramTotal', 'vramFree', 'holds', 'torchFree') { $r[$k] | Should -Not -BeOfType [string] -Because "$k is a number" }
+        (ConvertTo-Json -InputObject $r -Compress -Depth 5) | Should -Not -Match 'CANARY'
+        foreach ($v in $r.Values) { [string]$v | Should -Not -Match 'CANARY|main\.py|--listen|posix|cuda|GCC|cu128' }
+    }
+    It 'T93-06 the numbers come from the first device when there are two' {
+        $body = Get-ChangedStats {
+            param($o)
+            $second = $o.devices[0].PSObject.Copy()
+            $second.name = 'cuda:1 Other GPU'; $second.index = 1
+            $second.vram_total = 1; $second.vram_free = 2; $second.torch_vram_total = 3; $second.torch_vram_free = 4
+            $o.devices = @($o.devices[0], $second)
+        }
+        $r = ConvertFrom-ComfyStats -Body $body
+        $r.vramTotal | Should -Be 25769803776
+        $r.vramFree | Should -Be 8589934592
+        $r.holds | Should -Be 16320875520
+        $r.torchFree | Should -Be 536870912
+    }
+    It 'T93-06 <what> gives $null, without an exception' -ForEach @(
+        @{ what = 'no devices'; change = { param($o) $o.devices = @() } }
+        @{ what = 'no devices key'; change = { param($o) $o.PSObject.Properties.Remove('devices') } }
+        @{ what = 'no system'; change = { param($o) $o.PSObject.Properties.Remove('system') } }
+        @{ what = 'numbers as strings'; change = { param($o) $d = $o.devices[0]; foreach ($k in 'vram_total', 'vram_free', 'torch_vram_total', 'torch_vram_free') { $d.$k = [string]$d.$k } } }
+        @{ what = 'vram_total alone as a string'; change = { param($o) $o.devices[0].vram_total = [string]$o.devices[0].vram_total } }
+        @{ what = 'torch_vram_total alone as a string'; change = { param($o) $o.devices[0].torch_vram_total = [string]$o.devices[0].torch_vram_total } }
+    ) {
+        $body = Get-ChangedStats $change
+        $r = ConvertFrom-ComfyStats -Body $body
+        $null -eq $r | Should -BeTrue -Because $what
+    }
+    It 'T93-06 a reply that is not JSON, or JSON of another shape, gives $null: <what>' -ForEach @(
+        @{ what = 'HTML'; body = '<html><body>This is not ComfyUI.</body></html>' }
+        @{ what = 'cut off'; body = '{"system": {"comfyui_version": "0.3.99", "argv": ["--CANARY-ARGV"' }
+        @{ what = 'empty'; body = '' }
+        @{ what = 'JSON null'; body = 'null' }
+        @{ what = 'a JSON array'; body = '[]' }
+        @{ what = 'a JSON number'; body = '42' }
+        @{ what = 'a JSON string'; body = '"ok"' }
+    ) {
+        $r = ConvertFrom-ComfyStats -Body $body
+        $null -eq $r | Should -BeTrue -Because $what
+    }
+}
+
+Describe 'T93-07 the queue from /prompt' {
+    It 'T93-07 the fixture gives 2, as an int' {
+        $r = ConvertFrom-ComfyQueue -Body ([IO.File]::ReadAllText((Join-Path $Fixtures 'prompt.json')))
+        $r | Should -Be 2
+        $r | Should -BeOfType [int]
+    }
+    It 'T93-07 {"exec_info":{"queue_remaining":<n>}} gives <n>' -ForEach @(@{ n = 2 }, @{ n = 0 }) {
+        $r = ConvertFrom-ComfyQueue -Body ('{"exec_info":{"queue_remaining":' + $n + '}}')
+        $null -eq $r | Should -BeFalse
+        $r | Should -Be $n
+        $r | Should -BeOfType [int]
+    }
+    It 'T93-07 <what> gives $null, without an exception' -ForEach @(
+        @{ what = 'a negative count'; body = '{"exec_info":{"queue_remaining":-1}}' }
+        @{ what = 'the count as a string'; body = '{"exec_info":{"queue_remaining":"2"}}' }
+        @{ what = 'a fractional count'; body = '{"exec_info":{"queue_remaining":2.5}}' }
+        @{ what = 'no queue_remaining'; body = '{"exec_info":{}}' }
+        @{ what = 'no exec_info'; body = '{}' }
+        @{ what = 'exec_info not an object'; body = '{"exec_info":2}' }
+        @{ what = 'junk'; body = '<html><body>This is not ComfyUI.</body></html>' }
+        @{ what = 'empty'; body = '' }
+        @{ what = 'JSON null'; body = 'null' }
+        @{ what = 'a JSON array'; body = '[]' }
+    ) {
+        $r = ConvertFrom-ComfyQueue -Body $body
+        $null -eq $r | Should -BeTrue -Because $what
+    }
+}
+
+Describe 'T93-08 to T93-10 the AI server states and the job timer' {
+    BeforeAll {
+        $script:T0 = 1795000000000   # a fixed time in ms since 1970; steps are seconds after it
+        $script:Kept = @{ version = '0.3.99'; vramTotal = 25769803776; vramFree = 8589934592; holds = 16320875520; torchFree = 536870912 }
+        $script:RowKeys = @('holds', 'lastDoneSec', 'lastDoneTs', 'name', 'queue', 'state', 'version', 'vramFree', 'vramTotal', 'workingSec') | Sort-Object
+        function New-MainWatch { New-AiWatch -Entries @(@{ Name = 'Main'; Port = 8188 }) }
+        function Get-Answer([int]$Queue) { @{ Ok = $true; Stats = $Kept.Clone(); Queue = $Queue } }
+        function Get-Miss { @{ Ok = $false; Stats = $null; Queue = $null } }
+        # One reading of entry Main, $Seconds after T0, with the VM running ($true), not running ($false) or unknown ($null).
+        function Invoke-AiStep($Watch, [hashtable]$Answer, $Vm, [double]$Seconds) {
+            Update-AiWatch -Watch $Watch -Name 'Main' -Answer $Answer -VmRunning $Vm -NowMs ([long]($T0 + $Seconds * 1000))
+        }
+    }
+
+    It 'T93-08 off, then starting once the VM runs and the entry has not answered in it' {
+        $w = New-MainWatch
+        $r = Invoke-AiStep $w (Get-Miss) $false 0
+        $r.name | Should -BeExactly 'Main'
+        $r.state | Should -BeExactly 'off'
+        (Invoke-AiStep $w (Get-Miss) $true 5).state | Should -BeExactly 'starting'
+    }
+    It 'T93-08 starting to idle: queue 0, holds, the card as ComfyUI sees it, the version, and exactly the row keys' {
+        $w = New-MainWatch
+        $null = Invoke-AiStep $w (Get-Miss) $true 0
+        $r = Invoke-AiStep $w (Get-Answer 0) $true 5
+        $r.state | Should -BeExactly 'idle'
+        $r.name | Should -BeExactly 'Main'
+        $r.queue | Should -Be 0
+        $r.holds | Should -Be 16320875520
+        $r.vramTotal | Should -Be 25769803776
+        $r.vramFree | Should -Be 8589934592
+        $r.version | Should -BeExactly '0.3.99'
+        @($r.Keys | Sort-Object) | Should -Be $RowKeys
+    }
+    It 'T93-08 idle to working: queue 2, workingSec 0 on the first working reading' {
+        $w = New-MainWatch
+        $null = Invoke-AiStep $w (Get-Answer 0) $true 0
+        $r = Invoke-AiStep $w (Get-Answer 2) $true 5
+        $r.state | Should -BeExactly 'working'
+        $r.queue | Should -Be 2
+        $r.workingSec | Should -Be 0
+    }
+    It 'T93-08 the 1st and 2nd misses hold the last row (<from>), the 3rd with the VM up is not-answering' -ForEach @(
+        @{ from = 'idle'; queue = 0 }, @{ from = 'working'; queue = 2 }
+    ) {
+        $w = New-MainWatch
+        $last = Invoke-AiStep $w (Get-Answer $queue) $true 0
+        $last.state | Should -BeExactly $from
+        foreach ($s in 5, 10) {
+            $r = Invoke-AiStep $w (Get-Miss) $true $s
+            $r.state | Should -BeExactly $from -Because "miss at $s s is held"
+            $r.queue | Should -Be $queue
+            $r.holds | Should -Be 16320875520
+            $r.version | Should -BeExactly '0.3.99'
+        }
+        (Invoke-AiStep $w (Get-Miss) $true 15).state | Should -BeExactly 'not-answering'
+    }
+    It 'T93-08 not-answering to idle when it answers again' {
+        $w = New-MainWatch
+        $null = Invoke-AiStep $w (Get-Answer 0) $true 0
+        foreach ($s in 5, 10, 15) { $r = Invoke-AiStep $w (Get-Miss) $true $s }
+        $r.state | Should -BeExactly 'not-answering'
+        (Invoke-AiStep $w (Get-Answer 0) $true 20).state | Should -BeExactly 'idle'
+    }
+    It 'T93-08 <from>, answered with the VM up, then the VM gone and no answer: off at once' -ForEach @(
+        @{ from = 'idle' }, @{ from = 'working' }, @{ from = 'unknown' }, @{ from = 'not-answering' }
+    ) {
+        $w = New-MainWatch
+        switch ($from) {
+            'idle' { $r = Invoke-AiStep $w (Get-Answer 0) $true 0 }
+            'working' { $r = Invoke-AiStep $w (Get-Answer 3) $true 0 }
+            'unknown' { $r = Invoke-AiStep $w @{ Ok = $true; Stats = $null; Queue = 0 } $true 0 }
+            'not-answering' {
+                $null = Invoke-AiStep $w (Get-Answer 0) $true 0
+                foreach ($s in 5, 10, 15) { $r = Invoke-AiStep $w (Get-Miss) $true $s }
+            }
+        }
+        $r.state | Should -BeExactly $from
+        (Invoke-AiStep $w (Get-Miss) $false 20).state | Should -BeExactly 'off' -Because 'the VM it ran in has gone, so no miss is held'
+    }
+    It 'T93-08 an answer with bad stats or no queue is unknown, and unknown counts as answering' {
+        $w = New-MainWatch
+        (Invoke-AiStep $w @{ Ok = $true; Stats = $null; Queue = 0 } $true 0).state | Should -BeExactly 'unknown'
+        (Invoke-AiStep $w (Get-Miss) $true 5).state | Should -BeExactly 'unknown' -Because 'the 1st miss after an unknown reply is held'
+        $w2 = New-MainWatch
+        (Invoke-AiStep $w2 @{ Ok = $true; Stats = $Kept.Clone(); Queue = $null } $true 0).state | Should -BeExactly 'unknown'
+    }
+    It 'T93-08 the VM unknown ($null): off until it has answered once (never starting), then the miss rule gives not-answering' {
+        $w = New-MainWatch
+        foreach ($s in 0, 5, 10, 15) { (Invoke-AiStep $w (Get-Miss) $null $s).state | Should -BeExactly 'off' -Because "no answer yet at $s s" }
+        (Invoke-AiStep $w (Get-Answer 0) $null 20).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $null 25).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $null 30).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $null 35).state | Should -BeExactly 'not-answering'
+    }
+    It 'T93-08 the VM down all along (ComfyUI on Windows): answered, then held twice, then not-answering' {
+        $w = New-MainWatch
+        (Invoke-AiStep $w (Get-Answer 0) $false 0).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $false 5).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $false 10).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $false 15).state | Should -BeExactly 'not-answering'
+    }
+
+    It 'T93-09 answered, the VM down, then up again with no answer: off, then starting, never not-answering' {
+        $w = New-MainWatch
+        (Invoke-AiStep $w (Get-Answer 0) $true 0).state | Should -BeExactly 'idle'
+        (Invoke-AiStep $w (Get-Miss) $false 5).state | Should -BeExactly 'off'
+        foreach ($s in 10, 15, 20, 25, 30) {
+            (Invoke-AiStep $w (Get-Miss) $true $s).state | Should -BeExactly 'starting' -Because "the new VM's entry has not answered yet at $s s"
+        }
+        (Invoke-AiStep $w (Get-Answer 0) $true 35).state | Should -BeExactly 'idle'
+    }
+
+    It 'T93-10 one batch: queue 5 at 0 s, 3 at 30 s, a held miss at 40 s, 3 at 50 s, 0 at 70 s: one lastDone at 70 s, 70 s long' {
+        $w = New-MainWatch
+        $r = Invoke-AiStep $w (Get-Answer 5) $true 0
+        $r.state | Should -BeExactly 'working'
+        $r.workingSec | Should -Be 0
+        $null -eq $r.lastDoneTs | Should -BeTrue
+        (Invoke-AiStep $w (Get-Answer 3) $true 30).workingSec | Should -Be 30
+        (Invoke-AiStep $w (Get-Miss) $true 40).state | Should -BeExactly 'working'
+        (Invoke-AiStep $w (Get-Answer 3) $true 50).workingSec | Should -Be 50 -Because 'WorkingSinceMs is kept across the held miss'
+        $r = Invoke-AiStep $w (Get-Answer 0) $true 70
+        $r.state | Should -BeExactly 'idle'
+        $r.lastDoneTs | Should -Be ($T0 + 70000)
+        $r.lastDoneSec | Should -Be 70
+        $r = Invoke-AiStep $w (Get-Answer 0) $true 75
+        $r.lastDoneTs | Should -Be ($T0 + 70000) -Because 'an idle reading after the batch is not a second batch'
+        $r.lastDoneSec | Should -Be 70
+        $r = Invoke-AiStep $w (Get-Answer 2) $true 80
+        $r.state | Should -BeExactly 'working'
+        $r.workingSec | Should -Be 0 -Because 'a new batch starts its own timer'
+        $r.lastDoneTs | Should -Be ($T0 + 70000) -Because 'the last batch stays on the row while the next one works'
+    }
+    It 'T93-10 a 59 s run sets no lastDone; a 60 s run does' {
+        $w = New-MainWatch
+        $null = Invoke-AiStep $w (Get-Answer 1) $true 0
+        $r = Invoke-AiStep $w (Get-Answer 0) $true 59
+        $r.state | Should -BeExactly 'idle'
+        $null -eq $r.lastDoneTs | Should -BeTrue
+        $null -eq $r.lastDoneSec | Should -BeTrue
+        $w = New-MainWatch
+        $null = Invoke-AiStep $w (Get-Answer 1) $true 0
+        $r = Invoke-AiStep $w (Get-Answer 0) $true 60
+        $r.lastDoneTs | Should -Be ($T0 + 60000)
+        $r.lastDoneSec | Should -Be 60
+    }
+    It 'T93-10 the clock 10,000 ms backwards while working: workingSec 0, never negative, and no lastDone' {
+        $w = New-MainWatch
+        $null = Invoke-AiStep $w (Get-Answer 2) $true 0
+        foreach ($s in -10, -5) {
+            $r = Invoke-AiStep $w (Get-Answer 2) $true $s
+            $r.state | Should -BeExactly 'working'
+            $r.workingSec | Should -Be 0 -Because "the clock is $(-$s) s behind the job's start"
+        }
+        $r = Invoke-AiStep $w (Get-Answer 0) $true -1
+        $r.state | Should -BeExactly 'idle'
+        $null -eq $r.lastDoneTs | Should -BeTrue -Because 'a job that seems to end before it started is not a 60 s job'
+        $null -eq $r.lastDoneSec | Should -BeTrue
+    }
+}
+
+Describe 'T93-11 the AI server events' {
+    BeforeAll {
+        function New-AiRow([string]$Name, [string]$State, $LastDoneTs = $null, $LastDoneSec = $null) {
+            @{ name = $Name; state = $State; queue = $(if ($State -eq 'working') { 2 } else { 0 }); workingSec = 0; holds = 16320875520
+               vramTotal = 25769803776; vramFree = 8589934592; version = '0.3.99'; lastDoneTs = $LastDoneTs; lastDoneSec = $LastDoneSec }
+        }
+        # The records for two readings that carry only ai rows (no gpuSpill, so #91's part adds nothing).
+        function Get-AiEvents($OldRows, $NewRows) {
+            $old = if ($null -eq $OldRows) { $null } else { @{ ai = @($OldRows) } }
+            , @(Get-WorkstationEvents -Old $old -New @{ ai = @($NewRows) })
+        }
+        $script:Ts = 1795000070000
+    }
+    It 'T93-11 working to not-answering gives one ai-stopped-answering, Data name only, Key ai-stopped-answering|Main' {
+        $e = Get-AiEvents (New-AiRow 'Main' 'working') (New-AiRow 'Main' 'not-answering')
+        $e.Count | Should -Be 1
+        $e[0].Type | Should -BeExactly 'ai-stopped-answering'
+        @($e[0].Data.Keys) | Should -Be @('name')
+        $e[0].Data.name | Should -BeExactly 'Main'
+        $e[0].Key | Should -BeExactly 'ai-stopped-answering|Main'
+    }
+    It 'T93-11 <from> to <to> gives nothing' -ForEach @(
+        @{ from = 'idle'; to = 'not-answering' }, @{ from = 'unknown'; to = 'not-answering' }, @{ from = 'starting'; to = 'not-answering' }
+        @{ from = 'working'; to = 'off' }, @{ from = 'working'; to = 'idle' }, @{ from = 'working'; to = 'working' }
+    ) {
+        (Get-AiEvents (New-AiRow 'Main' $from) (New-AiRow 'Main' $to)).Count | Should -Be 0
+    }
+    It 'T93-11 a new lastDoneTs with 840 s gives one ai-job-done: Data name Main and seconds 840, Key ai-job-done|Main|lastDoneTs' {
+        $e = Get-AiEvents (New-AiRow 'Main' 'working') (New-AiRow 'Main' 'idle' $Ts 840)
+        $e.Count | Should -Be 1
+        $e[0].Type | Should -BeExactly 'ai-job-done'
+        @($e[0].Data.Keys | Sort-Object) | Should -Be @('name', 'seconds')
+        $e[0].Data.name | Should -BeExactly 'Main'
+        $e[0].Data.seconds | Should -Be 840
+        $e[0].Key | Should -BeExactly "ai-job-done|Main|$Ts"
+    }
+    It 'T93-11 a second batch (a different lastDoneTs) gives its own ai-job-done with its own key' {
+        $e = Get-AiEvents (New-AiRow 'Main' 'working' ($Ts - 3600000) 300) (New-AiRow 'Main' 'idle' $Ts 120)
+        $e.Count | Should -Be 1
+        $e[0].Type | Should -BeExactly 'ai-job-done'
+        $e[0].Data.seconds | Should -Be 120
+        $e[0].Key | Should -BeExactly "ai-job-done|Main|$Ts"
+    }
+    It 'T93-11 the same lastDoneTs again gives nothing' {
+        (Get-AiEvents (New-AiRow 'Main' 'idle' $Ts 840) (New-AiRow 'Main' 'idle' $Ts 840)).Count | Should -Be 0
+        (Get-AiEvents (New-AiRow 'Main' 'idle' $Ts 840) (New-AiRow 'Main' 'working' $Ts 840)).Count | Should -Be 0
+    }
+    It 'T93-11 Old $null gives nothing, even with a new lastDoneTs or not-answering' {
+        (Get-AiEvents $null (New-AiRow 'Main' 'idle' $Ts 840)).Count | Should -Be 0
+        (Get-AiEvents $null (New-AiRow 'Main' 'not-answering')).Count | Should -Be 0
+    }
+    It 'T93-11 two entries are each compared by name, in any order' {
+        $old = @((New-AiRow 'Main' 'working'), (New-AiRow 'Second' 'working'))
+        $new = @((New-AiRow 'Second' 'idle' $Ts 840), (New-AiRow 'Main' 'not-answering'))
+        $e = Get-AiEvents $old $new
+        $e.Count | Should -Be 2
+        @($e | ForEach-Object { $_.Key } | Sort-Object) | Should -Be @("ai-job-done|Second|$Ts", 'ai-stopped-answering|Main')
+        ($e | Where-Object { $_.Type -eq 'ai-job-done' }).Data.name | Should -BeExactly 'Second'
+        ($e | Where-Object { $_.Type -eq 'ai-stopped-answering' }).Data.name | Should -BeExactly 'Main'
+    }
+}
+
+Describe 'T93-13 the AI part of the workstation tick' {
+    BeforeAll {
+        $script:StatsText = [IO.File]::ReadAllText((Join-Path $Fixtures 'system_stats.json'))
+        $script:PromptText = [IO.File]::ReadAllText((Join-Path $Fixtures 'prompt.json'))   # queue 2
+        $script:Entries = @(@{ Name = 'Main'; Port = 8188 }, @{ Name = 'Second'; Port = 8288 })
+        $script:Luid = '0x00000000_0x0000a1b2'
+        # A Counters snapshot the other parts can read: Memory, one Process and its video memory.
+        function Get-Snapshot {
+            New-FakeSnapshot @{
+                'Memory'             = @{ 'Committed Bytes' = @{ '' = 31GB }; 'Commit Limit' = @{ '' = 96GB }; 'Pages Input/sec' = @{ '' = 0 } }
+                'Process'            = @{ '% Processor Time' = @{ 'editor' = 0 }; 'Working Set - Private' = @{ 'editor' = 100MB }; 'ID Process' = @{ 'editor' = 4242 } }
+                'GPU Process Memory' = @{ 'Dedicated Usage' = @{ "pid_4242_luid_$($Luid)_phys_0" = 50MB } }
+            }
+        }
+        # A counting Http reader: records "<port> <path>" per call; a port in $FailStats fails /system_stats, and
+        # a port in $Throw throws.
+        function New-CountingHttp([System.Collections.Generic.List[string]]$Calls, [int[]]$FailStats = @(), [int[]]$Throw = @()) {
+            $stats = $StatsText; $prompt = $PromptText
+            {
+                param($Port, $Path)
+                $Calls.Add("$Port $Path")
+                if ($Throw -contains $Port) { throw 'fake reader failure' }
+                if ($Path -eq '/system_stats' -and $FailStats -contains $Port) { return @{ Ok = $false; Status = 0; Body = ''; Error = 'The operation has timed out' } }
+                $body = if ($Path -eq '/system_stats') { $stats } else { $prompt }
+                @{ Ok = $true; Status = 200; Body = $body; Error = '' }
+            }.GetNewClosure()
+        }
+        function New-Context([object[]]$ComfyEntries, [scriptblock]$Http) {
+            $snap = Get-Snapshot
+            $readers = @{
+                Counters   = { $snap }.GetNewClosure()
+                WslProcess = { [pscustomobject]@{ ProcessName = 'vmmemWSL'; Id = 4343; WorkingSet64 = 31GB } }
+                WslConfig  = { $null }
+                Http       = $Http
+            }
+            New-WorkstationContext -ComfyEntries $ComfyEntries -GpuLuid $Luid -Cores 4 -TotalRam 64GB -Readers $readers
+        }
+    }
+    It 'T93-13 both Ok: per entry /system_stats then /prompt, 2 calls each, and a row per entry from the replies' {
+        $calls = New-Object System.Collections.Generic.List[string]
+        $ctx = New-Context $Entries (New-CountingHttp $calls)
+        $state = @{}
+        Invoke-WorkstationTick -State $state -Context $ctx -NowMs 1795000000000
+        @($calls) | Should -Be @('8188 /system_stats', '8188 /prompt', '8288 /system_stats', '8288 /prompt')
+        $state.ai -is [array] | Should -BeTrue
+        @($state.ai).Count | Should -Be 2
+        @($state.ai | ForEach-Object { $_.name }) | Should -Be @('Main', 'Second')
+        foreach ($row in $state.ai) {
+            $row.state | Should -BeExactly 'working'
+            $row.queue | Should -Be 2
+            $row.holds | Should -Be 16320875520
+            $row.version | Should -BeExactly '0.3.99'
+        }
+    }
+    It 'T93-13 /system_stats failing: only /system_stats for that entry, the other entry still gets both' {
+        $calls = New-Object System.Collections.Generic.List[string]
+        $ctx = New-Context $Entries (New-CountingHttp $calls -FailStats @(8188))
+        Invoke-WorkstationTick -State @{} -Context $ctx -NowMs 1795000000000
+        @($calls) | Should -Be @('8188 /system_stats', '8288 /system_stats', '8288 /prompt')
+    }
+    It 'T93-13 at most 2 calls per entry per tick, and $State.ai a new array each tick' {
+        $calls = New-Object System.Collections.Generic.List[string]
+        $ctx = New-Context $Entries (New-CountingHttp $calls)
+        $state = @{}
+        $before = $null
+        foreach ($i in 0..2) {
+            $calls.Clear()
+            Invoke-WorkstationTick -State $state -Context $ctx -NowMs (1795000000000 + 5000 * $i)
+            foreach ($port in 8188, 8288) { @($calls | Where-Object { $_ -like "$port *" }).Count | Should -BeLessOrEqual 2 }
+            $state.ai -is [array] | Should -BeTrue
+            if ($null -ne $before) { [object]::ReferenceEquals($before, $state.ai) | Should -BeFalse -Because "tick $i publishes a new array" }
+            $before = $state.ai
+        }
+    }
+    It 'T93-13 one entry still gives an array of one row' {
+        $calls = New-Object System.Collections.Generic.List[string]
+        $ctx = New-Context @($Entries[0]) (New-CountingHttp $calls)
+        $state = @{}
+        Invoke-WorkstationTick -State $state -Context $ctx -NowMs 1795000000000
+        $state.ai -is [array] | Should -BeTrue
+        @($state.ai).Count | Should -Be 1
+    }
+    It 'T93-13 a reader that times out costs one call per entry, one that throws costs the ai part only: the other slow checks still run' {
+        $calls = New-Object System.Collections.Generic.List[string]
+        $ctx = New-Context $Entries (New-CountingHttp $calls -FailStats @(8188, 8288))
+        $state = @{}
+        Invoke-WorkstationTick -State $state -Context $ctx -NowMs 1795000000000
+        @($calls) | Should -Be @('8188 /system_stats', '8288 /system_stats') -Because 'a hung AI server costs one timeout per entry, never two'
+        $state.ContainsKey('memCommit') | Should -BeTrue
+        $state.ContainsKey('wsl') | Should -BeTrue
+        $state.ContainsKey('top') | Should -BeTrue
+        [string]$state.workstationError | Should -Not -Match '^ai server: ' -Because 'no reply is a miss, not an error of the tick'
+        $calls2 = New-Object System.Collections.Generic.List[string]
+        $ctx2 = New-Context $Entries (New-CountingHttp $calls2 -Throw @(8188))
+        $state2 = @{}
+        Invoke-WorkstationTick -State $state2 -Context $ctx2 -NowMs 1795000000000
+        $state2.workstationError | Should -Match '^ai server: '
+        $state2.ContainsKey('memCommit') | Should -BeTrue
+        $state2.ContainsKey('wsl') | Should -BeTrue
+        $state2.ContainsKey('top') | Should -BeTrue
+    }
+}
+
+Describe 'T93-03 the local reader against the fake AI server' -Tag 'Integration' {
+    BeforeAll {
+        Import-Module (Join-Path (Get-RepoRoot) 'tests\fakes\FakeComfyUi.psm1') -Force
+        $script:StatsText = [IO.File]::ReadAllText((Join-Path $Fixtures 'system_stats.json'))
+        function Measure-Read([scriptblock]$Call) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $r = & $Call
+            $sw.Stop()
+            @{ Result = $r; Ms = $sw.ElapsedMilliseconds }
+        }
+        # Every request the fake saw that isn't a plain GET of one of the two paths, with Host 127.0.0.1:<port> and
+        # no body, credentials or cookies.
+        function Get-OddRequests($Fake) {
+            @($Fake.Requests | Where-Object {
+                $_.Line -cnotmatch '^GET /(system_stats|prompt) HTTP/1\.1$' -or $_.Host -cne "127.0.0.1:$($Fake.Port)" -or
+                $_.ContentLength -or $_.TransferEncoding -or $_.BodyBytes -ne 0 -or
+                @($_.Headers | Where-Object { $_ -match '^(Authorization|Cookie|Proxy-Authorization):' }).Count
+            } | ForEach-Object { "$($_.Line) [Host $($_.Host)]" })
+        }
+    }
+    It 'T93-03 an answer: Ok, status 200 and the body; the fake saw GET /system_stats HTTP/1.1, Host 127.0.0.1 and its port, no body' {
+        $fake = Start-FakeComfyUi -Mode answer -Queue 3
+        try {
+            $r = Read-LocalHttp -Port $fake.Port -Path '/system_stats'
+            $r.Ok | Should -BeTrue
+            $r.Status | Should -Be 200
+            $r.Body | Should -BeExactly $StatsText
+            $q = Read-LocalHttp -Port $fake.Port -Path '/prompt'
+            $q.Ok | Should -BeTrue
+            ($q.Body | ConvertFrom-Json).exec_info.queue_remaining | Should -Be 3
+            $seen = @($fake.Requests)
+            $seen.Count | Should -Be 2
+            $seen[0].Line | Should -BeExactly 'GET /system_stats HTTP/1.1'
+            $seen[0].Host | Should -BeExactly "127.0.0.1:$($fake.Port)"
+            $seen[0].ContentLength | Should -BeNullOrEmpty
+            $seen[0].TransferEncoding | Should -BeNullOrEmpty
+            $seen[0].BodyBytes | Should -Be 0
+            $seen[1].Line | Should -BeExactly 'GET /prompt HTTP/1.1'
+            Get-OddRequests $fake | Should -BeNullOrEmpty
+        } finally { & $fake.Stop }
+    }
+    It 'T93-03 a closed port: Ok false in under 2,500 ms' {
+        $port = Get-FreePort
+        $t = Measure-Read { Read-LocalHttp -Port $port -Path '/system_stats' }
+        $t.Result.Ok | Should -BeFalse
+        $t.Result.Error | Should -Not -BeNullOrEmpty
+        $t.Ms | Should -BeLessThan 2500 -Because 'Windows retries a refused connection for about 2 s; the lead set this bound (2026-11-27)'
+    }
+    It 'T93-03 an AI server that accepts but sends nothing for 3 s: Ok false in under 2,500 ms, after the 2,000 ms timeout' {
+        $fake = Start-FakeComfyUi -Mode slow -DelayMs 3000
+        try {
+            $t = Measure-Read { Read-LocalHttp -Port $fake.Port -Path '/system_stats' }
+            $t.Result.Ok | Should -BeFalse
+            $t.Result.Error | Should -Not -BeNullOrEmpty
+            $t.Ms | Should -BeLessThan 2500
+            $t.Ms | Should -BeGreaterThan 1500 -Because 'the default timeout is 2,000 ms'
+            Get-OddRequests $fake | Should -BeNullOrEmpty
+        } finally { & $fake.Stop }
+    }
+    It 'T93-03 a reply 1 s late is still read (Ok), and -TimeoutMs 500 gives up on a 3 s one in under 1,000 ms' {
+        $late = Start-FakeComfyUi -Mode slow -DelayMs 1000
+        try { (Read-LocalHttp -Port $late.Port -Path '/system_stats').Ok | Should -BeTrue } finally { & $late.Stop }
+        $slow = Start-FakeComfyUi -Mode slow -DelayMs 3000
+        try {
+            $t = Measure-Read { Read-LocalHttp -Port $slow.Port -Path '/system_stats' -TimeoutMs 500 }
+            $t.Result.Ok | Should -BeFalse
+            $t.Ms | Should -BeLessThan 1000
+        } finally { & $slow.Stop }
+    }
+    It 'T93-03 a reply that sends its headers and then trickles bytes: Ok false within TimeoutMs plus a small margin (one deadline for the whole request)' {
+        $fake = Start-FakeComfyUi -Mode trickle -DelayMs 8000
+        try {
+            $t = Measure-Read { Read-LocalHttp -Port $fake.Port -Path '/system_stats' -TimeoutMs 1000 }
+            $t.Result.Ok | Should -BeFalse
+            $t.Result.Error | Should -Not -BeNullOrEmpty
+            $t.Ms | Should -BeLessThan 1600 -Because 'the timeout covers the whole request, not each Read'
+            $t.Ms | Should -BeGreaterThan 800
+        } finally { & $fake.Stop }
+    }
+    It 'T93-03 a 262,145-byte body: Ok false, Error "reply too large"' {
+        $fake = Start-FakeComfyUi -Mode huge -Bytes 262145
+        try {
+            $r = Read-LocalHttp -Port $fake.Port -Path '/system_stats'
+            $r.Ok | Should -BeFalse
+            $r.Error | Should -BeExactly 'reply too large'
+        } finally { & $fake.Stop }
+    }
+    It 'T93-03 a 262,144-byte body: Ok, all of it read' {
+        $fake = Start-FakeComfyUi -Mode huge -Bytes 262144
+        try {
+            $r = Read-LocalHttp -Port $fake.Port -Path '/system_stats'
+            $r.Ok | Should -BeTrue
+            $r.Status | Should -Be 200
+            $r.Body.Length | Should -Be 262144
+        } finally { & $fake.Stop }
+    }
+    It 'T93-03 status 500: Ok false' {
+        $fake = Start-FakeComfyUi -Mode status500
+        try {
+            $r = Read-LocalHttp -Port $fake.Port -Path '/system_stats'
+            $r.Ok | Should -BeFalse
+            $r.Error | Should -Not -BeNullOrEmpty
+            Get-OddRequests $fake | Should -BeNullOrEmpty
+        } finally { & $fake.Stop }
+    }
+    It 'T93-03 a 302: Ok false, and the redirect is not followed' {
+        $fake = Start-FakeComfyUi -Mode redirect
+        try {
+            $r = Read-LocalHttp -Port $fake.Port -Path '/system_stats'
+            $r.Ok | Should -BeFalse
+            @($fake.Requests).Count | Should -Be 1 -Because 'the 302 points at /history on the same fake'
+            @($fake.Requests)[0].Line | Should -BeExactly 'GET /system_stats HTTP/1.1'
+        } finally { & $fake.Stop }
+    }
+    It 'T93-04 a path outside the two never reaches a listening AI server' {
+        $fake = Start-FakeComfyUi -Mode answer
+        try {
+            foreach ($path in '/queue', '/history', '/interrupt', '/free', '/upload/image') {
+                { Read-LocalHttp -Port $fake.Port -Path $path } | Should -Throw -ErrorId 'ParameterArgumentValidationError,Read-LocalHttp'
+            }
+            @($fake.Requests).Count | Should -Be 0
+        } finally { & $fake.Stop }
+    }
+}
 #endregion 93

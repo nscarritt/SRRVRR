@@ -30,6 +30,7 @@ Current version: **0.8.0**. See the [changelog](CHANGELOG.md) for what changed i
 - [Administrator vs. not](#administrator-vs-not)
 - [Running SRRVRR at boot](#running-srrvrr-at-boot)
 - [Running on a workstation](#running-on-a-workstation)
+  - [The AI server card](#the-ai-server-card)
 - [Troubleshooting](#troubleshooting)
 - [How it works](#how-it-works)
 - [Checks and tests](#checks-and-tests)
@@ -188,6 +189,7 @@ replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.exam
 | `DriveFullPercent` | `95` | The percent used when the bar turns red and the drive is flagged as almost full, 50 to 99. A drive has to fall 2 points below a threshold before its level goes back down. |
 | `Role` | `'Server'` | What this copy is for: `'Server'` (a home server, as before) or `'Workstation'` (a PC; see [Running on a workstation](#running-on-a-workstation)). Not case-sensitive. |
 | `DisplayName` | `''` | The name in the page header and the browser tab. `''` = SRRVRR on a Server, or the computer's name on a Workstation; otherwise 1 to 32 characters: letters, digits, spaces, `-`, `_` and `.`. |
+| `ComfyUi` | `@()` | The ComfyUI servers the AI server card watches (Workstation only; a Server ignores it, with a line at startup). Up to 4 entries like `@{ Name = 'Main'; Port = 8188 }`: a name of 1 to 20 characters (letters, digits, spaces, `-`, `_` and `.`) and a port from 1024 to 65535, each different, and not SRRVRR's own `Port`. The host is always this PC (127.0.0.1). See [The AI server card](#the-ai-server-card). |
 
 Example:
 
@@ -447,7 +449,7 @@ A second SRRVRR can run on a PC, such as a gaming or AI PC, next to the one on y
   graph history.
 - **New:** the header and the browser tab show the PC's name (`DisplayName`, or the computer's name), so you can
   tell the two pages apart. A **Video memory** tile and the GPU's power, clock and fan are shown too (see
-  [What it shows](#what-it-shows)). An AI server card is added by a later change in this release.
+  [What it shows](#what-it-shows)), and an **AI server** card when `ComfyUi` is set (see [The AI server card](#the-ai-server-card)).
 - **Memory detail:** under the Memory tile, how much memory Windows has promised to programs (committed) against
   its limit, and how fast Windows is reading pages back in from the paging file. It turns amber at 90% committed.
 - **Top programs:** a card listing up to 8 programs: the 5 using the most video memory and the 5 using the most RAM
@@ -457,7 +459,8 @@ A second SRRVRR can run on a PC, such as a gaming or AI PC, next to the one on y
   only just started. Programs can share video memory, so the rows may add up to more than the card holds.
 - **The WSL VM:** `vmmemWSL` is the memory Windows gives to WSL 2. SRRVRR shows it as "WSL VM" in the list, and
   reads its cap from `memory=` under `[wsl2]` in `%USERPROFILE%\.wslconfig` (re-read every minute), or half of RAM
-  when that isn't set. The console prints the cap at startup. Hover the memory detail line to see it.
+  when that isn't set. The console prints the cap at startup. It is the last row of the AI server card, or, with no
+  AI server set, on the memory detail line's hover.
 
 A copy with no `Role` is a Server and behaves exactly as before.
 
@@ -470,7 +473,7 @@ A copy with no `Role` is a Server and behaves exactly as before.
    @{
        Role        = 'Workstation'
        DisplayName = 'My PC'        # optional; the computer's name is used when this is empty
-       # ComfyUi entries for the AI server card arrive with that card
+       ComfyUi     = @(@{ Name = 'Main'; Port = 8188 })   # optional; the AI server card, see below
    }
    ```
 
@@ -480,6 +483,42 @@ A copy with no `Role` is a Server and behaves exactly as before.
    and memory temperatures show "Temp n/a". No firewall rule is created.
 4. Update it as on the server (see [Settings](#settings)). Stop it with `Stop SRRVRR.bat`.
 
+### The AI server card
+
+If you run [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on the same PC (for example inside WSL), list it in
+`ComfyUi` and a Workstation shows an **AI server** card: one row per entry, with its state, and a row for the WSL
+virtual machine's memory against its cap. With no entries the card stays hidden.
+
+| State | Means |
+|---|---|
+| Off | No answer, and no WSL virtual machine running. |
+| Starting | No answer yet since the virtual machine started. |
+| Idle | Answers, nothing queued. Shows how much video memory it holds. |
+| Working | Something is queued: "2 queued, for 6 min", and what it holds. |
+| Not answering | It answered before, then missed 3 checks in a row (15 seconds). |
+| Unknown reply | It answers, but not with what SRRVRR expects (a ComfyUI update may have changed it). |
+
+A finished batch shows as "last done 7:42 PM, 14 min" (kept in memory only; a restart forgets it). Two alerts: **AI job
+finished** (a banner, once per batch of at least 60 seconds of work) and **AI server stopped answering during a job**
+(amber, logged). Stopping the AI server on purpose during a job raises the second one if the virtual machine stays up
+for 15 seconds afterwards; that is accepted.
+
+**What SRRVRR reads, and nothing else.** Every 5 seconds, for each entry, exactly two requests, both `GET`, both to
+`127.0.0.1` only (the setting holds a port, never a host):
+
+- `/system_stats`: SRRVRR keeps the ComfyUI version and, for the first graphics card, its total and free video memory
+  and how much PyTorch holds. Everything else in the reply (command line, paths, library versions) is thrown away
+  where it is read.
+- `/prompt`: SRRVRR keeps only the number of queued jobs.
+
+Each request waits at most 2 seconds, replies over 256 KB are refused, no proxy is used and redirects are not followed.
+SRRVRR never asks for the queue contents, the history, images or previews, never connects to ComfyUI's websocket, never
+sends anything else to it, never passes a request from the page on to it, and never runs `wsl.exe` (which would start
+the virtual machine and its memory). Prompts, model names and file names never reach SRRVRR, its page, its logs or its
+history. It cannot start, stop or change the AI server.
+
+A refused connection (the AI server off) takes Windows about 2 seconds to give up, so a pass with every entry off takes a
+couple of seconds per entry; this runs in the 5-second background check, never in the one-second loop.
 ## Troubleshooting
 
 - **Another PC gets "Bad Request - Invalid Hostname" (HTTP 400):** SRRVRR is running without

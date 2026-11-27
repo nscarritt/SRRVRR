@@ -168,6 +168,8 @@ Describe 'T50-16 the spec''s table' {
             'drive-space-ok' = 'info', $false, $true
             # The v0.10.0 workstation design, section 7: video memory spilling into RAM (#91).
             'vram-spill' = 'warn', $true, $true; 'vram-spill-ended' = 'info', $false, $true
+            # The same design, section 7: the AI server (#93).
+            'ai-job-done' = 'info', $true, $false; 'ai-stopped-answering' = 'warn', $true, $true
         }
         $types = Get-EventTypes
         @($types.Keys | Sort-Object) | Should -Be @($spec.Keys | Sort-Object)

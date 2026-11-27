@@ -209,3 +209,66 @@ Describe 'T90-10 server-only settings on a workstation' {
     }
 }
 #endregion 90
+#region 93 The AI server: the ComfyUi setting (#93, test plan 6.13; spec section 10)
+Describe 'T93-01 the ComfyUi setting' {
+    BeforeAll {
+        # What Test-SrrSettings says about one ComfyUi value (no Role set, so the Server: it is validated there too).
+        function Get-ComfyResult($Value, [hashtable]$Also = @{}) {
+            $values = @{ ComfyUi = $Value }
+            foreach ($k in $Also.Keys) { $values[$k] = $Also[$k] }
+            try { Test-SrrSettings (New-Config $values) | Out-Null; @{ Message = ''; Code = 0 } }
+            catch { @{ Message = $_.Exception.Message; Code = Get-SrrExitCode $_.Exception } }
+        }
+    }
+    It 'T93-01 the default is @(); two valid entries, four entries and the edges are accepted' {
+        $d = Get-SrrDefaultSettings
+        $d.ContainsKey('ComfyUi') | Should -BeTrue
+        $d.ComfyUi -is [array] | Should -BeTrue
+        @($d.ComfyUi).Count | Should -Be 0
+        { Test-SrrSettings (Get-SrrDefaultSettings) } | Should -Not -Throw
+        $twenty = 'Ab 1_.-' + ('x' * 13)
+        $twenty.Length | Should -Be 20
+        foreach ($ok in @(
+            , @(@{ Name = 'Main'; Port = 8188 }, @{ Name = 'Second'; Port = 8288 })
+            , @(@{ Name = $twenty; Port = 1024 }, @{ Name = 'x'; Port = 65535 })
+            , @(@{ Name = 'A'; Port = 2000 }, @{ Name = 'B'; Port = 2001 }, @{ Name = 'C'; Port = 2002 }, @{ Name = 'D'; Port = 2003 })
+        )) {
+            (Get-ComfyResult $ok).Message | Should -BeExactly '' -Because "$(@($ok | ForEach-Object { "$($_.Name):$($_.Port)" }) -join ', ') is valid"
+        }
+    }
+    It 'T93-01 <what>: one plain settings error (exit 2) naming ComfyUi and entry 3' -ForEach @(
+        @{ what = 'a name of '''''; bad = @{ Name = ''; Port = 8388 } }
+        @{ what = 'a name of 21 characters'; bad = @{ Name = ('x' * 21); Port = 8388 } }
+        @{ what = 'a name with <'; bad = @{ Name = 'a<b'; Port = 8388 } }
+        @{ what = 'a name that is a number'; bad = @{ Name = 5; Port = 8388 } }
+        @{ what = 'a duplicated name'; bad = @{ Name = 'Main'; Port = 8388 } }
+        @{ what = 'port 1023'; bad = @{ Name = 'Third'; Port = 1023 } }
+        @{ what = 'port 65536'; bad = @{ Name = 'Third'; Port = 65536 } }
+        @{ what = "port '8388' (text)"; bad = @{ Name = 'Third'; Port = '8388' } }
+        @{ what = 'a port equal to Port'; bad = @{ Name = 'Third'; Port = 8091 } }
+        @{ what = 'a duplicated port'; bad = @{ Name = 'Third'; Port = 8188 } }
+        @{ what = 'an entry that is not a hashtable'; bad = 'Third' }
+        @{ what = 'an extra key'; bad = @{ Name = 'Third'; Port = 8388; Host = '192.0.2.10' } }
+        @{ what = 'a missing Port'; bad = @{ Name = 'Third' } }
+    ) {
+        $r = Get-ComfyResult @(@{ Name = 'Main'; Port = 8188 }, @{ Name = 'Second'; Port = 8288 }, $bad) @{ Port = 8091 }
+        $r.Code | Should -Be 2 -Because 'a settings error stops SRRVRR with exit 2'
+        $r.Message | Should -Match 'ComfyUi'
+        $r.Message | Should -Match '(?<!\d)3(?!\d)' -Because 'the error names the entry by its position (1-based)'
+        $r.Message | Should -Not -Match "`n"
+    }
+    It 'T93-01 5 entries: one plain settings error (exit 2) naming ComfyUi and its limit of 4' {
+        $five = @(1..5 | ForEach-Object { @{ Name = "E$_"; Port = 2000 + $_ } })
+        $r = Get-ComfyResult $five
+        $r.Code | Should -Be 2
+        $r.Message | Should -Match 'ComfyUi'
+        $r.Message | Should -Match '(?<!\d)4(?!\d)'
+        $r.Message | Should -Not -Match "`n"
+    }
+    It 'T93-01 ComfyUi that is not a list of entries (a string) is a settings error naming ComfyUi' {
+        $r = Get-ComfyResult 'Main:8188'
+        $r.Code | Should -Be 2
+        $r.Message | Should -Match 'ComfyUi'
+    }
+}
+#endregion 93

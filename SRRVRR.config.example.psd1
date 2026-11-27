@@ -105,4 +105,13 @@
     # Server, or this computer's name on a Workstation. Otherwise 1 to 32 characters:
     # letters, digits, spaces, -, _ and .
     DisplayName = ''
+
+    # --- AI server (Workstation only) -------------------------------------------
+
+    # ComfyUI servers on this PC for the AI server card: up to 4 entries, each with a
+    # Name (1 to 20 characters: letters, digits, spaces, -, _ and .) and a Port (1024 to
+    # 65535; each different, and not SRRVRR's own Port). The host is always this PC
+    # (127.0.0.1). A Server ignores this. Example:
+    #   ComfyUi = @(@{ Name = 'Main'; Port = 8188 })
+    ComfyUi = @()
 }

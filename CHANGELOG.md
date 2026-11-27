@@ -25,6 +25,11 @@ called out under **Changed** or **Removed** with upgrade notes.
   memory and the 5 using the most RAM, at most 8 rows, with their CPU. The WSL VM (`vmmemWSL`) is one of the
   programs, against the cap from `.wslconfig` (or half of RAM). `/stats` gains `memCommit`, `memCommitLimit`,
   `memPageIn`, `wsl`, `top` and `workstationError`, all Workstation only; the Server is unchanged.
+- (#93) **The AI server card.** On a Workstation, a `ComfyUi` setting (up to 4 entries of a name and a port on this PC)
+  adds an AI server card: each ComfyUI's state (Off, Starting, Idle, Working, Not answering), the queue and how long
+  it has worked, what it holds in video memory, the last batch, and the WSL virtual machine's memory. Two new alerts, "AI
+  job finished" and "AI server stopped answering during a job". SRRVRR only ever sends two `GET` requests to
+  127.0.0.1 and keeps a handful of numbers from the replies. README: "The AI server card".
 - **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
   a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
   detail, a Top programs card and an AI server card in place of the server's Processes and Transfers cards, designed so
@@ -33,6 +38,9 @@ called out under **Changed** or **Removed** with upgrade notes.
   Design only; nothing changes yet.
 
 ### Fixed
+- `state\history.json` could now and then fail to save when another program,
+  such as a scanner or indexer, held the file for a few milliseconds while SRRVRR swapped in the new copy. The swap
+  now retries up to 4 times, 25 ms apart; a file that stays locked still reports a failed save as before.
 - The slow sampler's drive pass could stall for about 21 s, every few minutes, on a PC with disconnected mapped network drives: it asked WMI for every logical disk, and WMI waited on each unreachable share. Nothing else in the slow sampler (GPU temperature, the Workstation's readings) ran meanwhile. It now asks only for removable and fixed drives (DriveType=2 OR DriveType=3), which are all it ever shows.
 - (#81) CPU and GPU percentages were rounded to a whole number by the 100% cap: Windows PowerShell picks the integer
   overload of `[math]::Min(100, ...)`, so 79.9 became 80. The caps now use `100.0`; tests check that 79.9 stays 79.9
