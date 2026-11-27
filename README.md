@@ -518,7 +518,7 @@ the virtual machine and its memory). Prompts, model names and file names never r
 history. It cannot start, stop or change the AI server.
 
 A refused connection (the AI server off) takes Windows about 2 seconds to give up, so a pass with every entry off takes a
-couple of seconds a entry; this runs in the 5-second background check, never in the one-second loop.
+couple of seconds per entry; this runs in the 5-second background check, never in the one-second loop.
 ## Troubleshooting
 
 - **Another PC gets "Bad Request - Invalid Hostname" (HTTP 400):** SRRVRR is running without

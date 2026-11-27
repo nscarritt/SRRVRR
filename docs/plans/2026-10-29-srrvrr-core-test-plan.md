@@ -783,7 +783,7 @@ Files: `tests\Workstation.Tests.ps1` (region 90), `tests\Settings.Tests.ps1`, `t
 | T90-14 | RL1, RL3, AD1 | S | README settings table, `SRRVRR.config.example.psd1`, `Get-SrrDefaultSettings` | `Role` and `DisplayName` with the same default and values in all three; the README has "Running on a workstation" with `Role = 'Workstation'` and answering No | - |
 | T90-15 | B1, B3, B5, B6 | P | `Measure-SRRVRR.ps1` on a test build with no `Role` | Within v0.8.0's budgets; the tick median within 10% or 5 ms of v0.8.0's | MS |
 | T90-16 | WB1 | P | `Measure-SRRVRR.ps1 -Budgets tools\budgets.workstation.psd1` on a Workstation test build on the dev PC | The numbers recorded as the workstation baseline; CPU under 1% | MS |
-| T90-17 | B8, RL5 | A | `docs\uat\90-roles.md`, on the dev PC and on the server | The spec's story 1 row | - |
+| T90-17 | B8, RL5 | A | `docs\uat\v0.10.0-workstation.md` parts A (the dev PC) and B (the server) | The spec's story 1 row | - |
 
 ### 6.11 #91 Video memory and GPU detail (v0.10.0)
 
@@ -808,7 +808,7 @@ Files: `tests\Counters.Tests.ps1`, `tests\Workstation.Tests.ps1` (region 91), `t
 | T91-15 | VG1 | J | `fillFromHistory` with the two lines; `pushReading` with and without `gpuShared` | Both lines filled; GiB values pushed; `null` for both when `gpuShared` is missing | - |
 | T91-16 | VG1, VG3, AD1 | K | A Workstation test build | `/stats` has `gpuMemTotal`, `gpuShared`, `gpuSpill`; with nvidia-smi present, the detail fields and the log line `nvidia-smi detail fields:`; the `Video memory:` line when there is a GPU | NTB |
 | T91-17 | WB1 | P | `Measure-SRRVRR.ps1 -Budgets tools\budgets.workstation.psd1` | Within the workstation budgets; the tick median within tolerance of #90's | MS |
-| T91-18 | B8, VG4 | A | `docs\uat\91-video-memory.md` | The spec's story 2 row | - |
+| T91-18 | B8, VG4 | A | `docs\uat\v0.10.0-workstation.md` part A | The spec's story 2 row | - |
 
 ### 6.12 #92 Memory detail and top programs (v0.10.0)
 
@@ -829,7 +829,7 @@ Files: `tests\Workstation.Tests.ps1` (region 92), `tests\Static.Tests.ps1`, `tes
 | T92-11 | MM2 | J | `wslText` with 31.2 of 48 GiB; at 90%; running false; mem `null`; capSource default | `WSL VM 31.2 of 48 GB`; warn true; `WSL VM: not running`; `WSL VM: running`; title says default, half of RAM | - |
 | T92-12 | MM1, MM2, TP1, AD1 | K | A Workstation test build; a Server test build | `/stats` has memCommit, memCommitLimit, memPageIn, `wsl`, a non-empty `top`, and the log has a `WSL VM: memory cap` line; the Server has none of them | NTB |
 | T92-13 | WB1 | P | As T91-17 | As T91-17 | MS |
-| T92-14 | B8, TP1 | A | `docs\uat\92-memory-top.md` | The spec's story 3 row | - |
+| T92-14 | B8, TP1 | A | `docs\uat\v0.10.0-workstation.md` part A | The spec's story 3 row | - |
 
 ### 6.13 #93 The AI server card (v0.10.0)
 
@@ -855,7 +855,7 @@ Files: `tests\Settings.Tests.ps1`, `tests\Workstation.Tests.ps1` (region 93, and
 | T93-16 | AL3 | J | `bannerFor` for `ai-job-done` (840 s) and `ai-stopped-answering` | `AI job finished`, `Main, took 14 min`; `AI server stopped answering during a job`, `Main` | - |
 | T93-17 | AD1 | K | A Workstation test build with one entry on the fake and one on a closed port | The two startup lines, `answering (ComfyUI <version>)` and `not answering (off or starting)` | NTB, FCU |
 | T93-18 | WB1 | P | `Measure-SRRVRR.ps1 -Budgets tools\budgets.workstation.psd1` with the fake off, idle and slow | Within the workstation budgets; the slow sampler's worst pass for each, recorded | MS, FCU |
-| T93-19 | B8, AS6 | A | `docs\uat\93-ai-server.md` | The spec's story 4 row | - |
+| T93-19 | B8, AS6 | A | `docs\uat\v0.10.0-workstation.md` part A | The spec's story 4 row | - |
 
 ## 7. Traceability
 
