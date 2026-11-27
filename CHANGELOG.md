@@ -38,6 +38,9 @@ called out under **Changed** or **Removed** with upgrade notes.
   Design only; nothing changes yet.
 
 ### Fixed
+- `state\history.json` could now and then fail to save when another program,
+  such as a scanner or indexer, held the file for a few milliseconds while SRRVRR swapped in the new copy. The swap
+  now retries up to 4 times, 25 ms apart; a file that stays locked still reports a failed save as before.
 - The slow sampler's drive pass could stall for about 21 s, every few minutes, on a PC with disconnected mapped network drives: it asked WMI for every logical disk, and WMI waited on each unreachable share. Nothing else in the slow sampler (GPU temperature, the Workstation's readings) ran meanwhile. It now asks only for removable and fixed drives (DriveType=2 OR DriveType=3), which are all it ever shows.
 - (#81) CPU and GPU percentages were rounded to a whole number by the 100% cap: Windows PowerShell picks the integer
   overload of `[math]::Min(100, ...)`, so 79.9 became 80. The caps now use `100.0`; tests check that 79.9 stays 79.9
