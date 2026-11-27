@@ -28,6 +28,8 @@ function Get-SrrDefaultSettings {
         MaintenanceMaxHours  = 8
         DriveWarnPercent     = 85
         DriveFullPercent     = 95
+        Role                 = 'Server'
+        DisplayName          = ''
     }
 }
 
@@ -133,6 +135,19 @@ function Test-NewSettings([hashtable]$Settings) {
     }
     if ($Settings.DriveWarnPercent -ge $Settings.DriveFullPercent) {
         throw (New-SettingsError "DriveWarnPercent ($($Settings.DriveWarnPercent)) must be lower than DriveFullPercent ($($Settings.DriveFullPercent)).")
+    }
+    Test-WorkstationSettings $Settings
+}
+
+# The settings added in v0.10.0 (workstation spec): Role and DisplayName.
+function Test-WorkstationSettings([hashtable]$Settings) {
+    $roles = 'Server', 'Workstation'
+    if ($Settings.Role -isnot [string] -or $Settings.Role -notin $roles) {
+        throw (New-SettingsError "Role must be one of: $($roles -join ', ') (default Server).")
+    }
+    $name = $Settings.DisplayName
+    if ($name -isnot [string] -or ($name -ne '' -and ($name -cnotmatch '^[A-Za-z0-9 ._-]{1,32}\z' -or $name.Trim() -eq ''))) {
+        throw (New-SettingsError 'DisplayName must be empty (SRRVRR, or the computer name on a Workstation) or 1 to 32 characters: letters, digits, spaces, -, _ and ., not only spaces.')
     }
 }
 

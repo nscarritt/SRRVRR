@@ -261,8 +261,8 @@ Describe 'Test builds' -Tag 'Smoke' {
                 $pa = @(Get-JsonPaths ($a.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
                 $pb = @(Get-JsonPaths ($b.Body | ConvertFrom-Json) | Where-Object { $_ -notmatch '^diskIO\.' } | Sort-Object -Unique)
                 @($pa | Where-Object { $pb -notcontains $_ }) | Should -BeNullOrEmpty
-                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), and each drive's level (#65).
-                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'tickMs', 'version')
+                # Added on purpose: tickMs (#47), and the events, Maintenance and log retention (#50, T50-39), the version (#62), each drive's level (#65), and the host's name and role (#90).
+                @($pb | Where-Object { $pa -notcontains $_ }) | Should -Be @('drives[].level', 'events', 'hostName', 'lastEventId', 'logRetentionDays', 'maintenance', 'maintenance.on', 'maintenance.untilMs', 'role', 'tickMs', 'version')
                 foreach ($path in '/', '/stats') {
                     $x = Invoke-TestRequest -Url "http://localhost:$oldPort$path"; $y = Invoke-TestRequest -Url "http://localhost:$newPort$path"
                     $y.Headers['Content-Type'] | Should -Be $x.Headers['Content-Type']
@@ -296,3 +296,93 @@ Describe 'Test builds' -Tag 'Smoke' {
         } finally { Stop-Build $p }
     }
 }
+
+#region 90 Roles and the host name (#90)
+Describe 'T90-07 to T90-09 roles on a test build' -Tag 'Smoke' {
+    BeforeAll {
+        $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($elevated -and -not $env:GITHUB_ACTIONS) { throw 'Run the smoke tests without administrator: an elevated test copy would change the live SRRVRR''s firewall rule.' }
+        # A HEAD test build with these settings (Port is added).
+        function New-RoleBuild([int]$Port, [string]$Settings = '') {
+            $folder = New-Build 'HEAD' $Port
+            [IO.File]::WriteAllText((Join-Path $folder 'SRRVRR.config.psd1'), "@{ Port = $Port; $Settings }")
+            $folder
+        }
+        # Starts a copy with its console going to console.txt; waits until /stats says ready.
+        function Start-LoggedBuild([string]$Folder, [int]$Port) {
+            $p = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Folder\SRRVRR.ps1`"" -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $Folder 'console.txt') -RedirectStandardError (Join-Path $Folder 'console-err.txt')
+            $null = $p.Handle
+            $deadline = [DateTime]::UtcNow.AddSeconds(90)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 500
+                try { $s = Invoke-TestRequest -Url "http://localhost:$Port/stats"; if ($s.Status -eq 200 -and ($s.Body | ConvertFrom-Json).ready) { return $p } } catch { $null = $_ }
+                if ($p.HasExited) { throw "the copy exited early with code $($p.ExitCode)" }
+            }
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw 'the copy never became ready'
+        }
+        # /stats once the slow sampler has finished its first pass (the drives, then the restart check, then Valheim
+        # and Plex; the first drive health read can take over a minute unelevated).
+        function Get-SettledStats([int]$Port) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(180)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                $doc = (Invoke-TestRequest -Url "http://localhost:$Port/stats").Body | ConvertFrom-Json
+                if ($doc.PSObject.Properties.Name -contains 'restartPending') { Start-Sleep -Seconds 6; return (Invoke-TestRequest -Url "http://localhost:$Port/stats").Body | ConvertFrom-Json }
+                Start-Sleep -Seconds 2
+            }
+            throw 'the slow sampler never finished its first pass'
+        }
+        function Get-LogText([string]$Folder) { (Get-ChildItem (Join-Path $Folder 'logs') -Filter 'srrvrr-*.log' | Get-Content) -join "`n" }
+    }
+    It 'T90-07 a Workstation runs no Processes readers and no tracer: no services, no activity, no Valheim, Plex or tracker lines' {
+        $port = Get-FreePort
+        $folder = New-RoleBuild $port "Role = 'Workstation'; Processes = @{ Valheim = `$true; Plex = `$true }"
+        $p = Start-LoggedBuild $folder $port
+        try {
+            $doc = Get-SettledStats $port
+            $doc.PSObject.Properties.Name | Should -Contain 'services'
+            @($doc.services).Count | Should -Be 0
+            $doc.PSObject.Properties.Name | Should -Not -Contain 'activity'
+        } finally { Stop-Build $p; $null = $p.WaitForExit(10000) }
+        $console = [IO.File]::ReadAllText((Join-Path $folder 'console.txt'))
+        $log = Get-LogText $folder
+        foreach ($text in @(@{ Name = 'console'; Text = $console }, @{ Name = 'log'; Text = $log })) {
+            $lines = @($text.Text -split '\r?\n')
+            $text.Text | Should -Match 'Per-program network tracking: not used on a workstation' -Because "the $($text.Name) says the tracer isn't used"
+            $text.Text | Should -Match ([regex]::Escape('Role: Workstation. Off: Processes. On: video memory, top programs, AI server')) -Because "the $($text.Name) names the role"
+            $text.Text | Should -Match ([regex]::Escape('Not used on a workstation: Processes, ValheimPort')) -Because "the $($text.Name) says the server-only settings are ignored"
+            # The one line allowed to name them is the one saying they're not used.
+            @($lines | Where-Object { $_ -match 'Valheim|Plex' -and $_ -notmatch 'Not used on a workstation: Processes, ValheimPort' }) | Should -BeNullOrEmpty -Because "the $($text.Name) has no Valheim or Plex reader lines"
+            @($lines | Where-Object { $_ -match 'network tracking is (on|off)' }) | Should -BeNullOrEmpty -Because "the $($text.Name) shows the tracer never started"
+        }
+    }
+    It 'T90-08 with no Role, /stats has v0.8.0''s key paths plus hostName and role only; hostName SRRVRR, role server' {
+        $old = @((Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures\stats\v0.8.0-shape.json') | ConvertFrom-Json).paths)
+        # Keys that come and go with the machine, not the version (the fixture's source says which).
+        $varies = '^(diskIO\.|activity\.|services\[\]\.|memSticks\[\]\.|(cpu|mem)Temps?$|gpuTemp$)'
+        $port = Get-FreePort
+        $p = Start-Build (New-RoleBuild $port) $port
+        try {
+            $doc = Get-SettledStats $port
+            $new = @(Get-JsonPaths $doc | Sort-Object -Unique)
+            @($old | Where-Object { $_ -notmatch $varies -and $new -notcontains $_ }) | Should -BeNullOrEmpty -Because 'every v0.8.0 key path stays'
+            @($new | Where-Object { $_ -notmatch $varies -and $old -notcontains $_ }) | Should -Be @('hostName', 'role') -Because 'only hostName and role are new on the Server'
+            foreach ($k in 'activity', 'services', 'memSticks') { $new | Should -Contain $k }
+            $doc.hostName | Should -BeExactly 'SRRVRR'
+            $doc.role | Should -BeExactly 'server'
+        } finally { Stop-Build $p }
+    }
+    It 'T90-09 a Workstation named TEST-PC: hostName TEST-PC, role workstation, /history lines cpu to vramShared' {
+        $port = Get-FreePort
+        $p = Start-Build (New-RoleBuild $port "Role = 'Workstation'; DisplayName = 'TEST-PC'") $port
+        try {
+            $doc = (Invoke-TestRequest -Url "http://localhost:$port/stats").Body | ConvertFrom-Json
+            $doc.hostName | Should -BeExactly 'TEST-PC'
+            $doc.role | Should -BeExactly 'workstation'
+            $history = (Invoke-TestRequest -Url "http://localhost:$port/history").Body | ConvertFrom-Json
+            @($history.lines.PSObject.Properties.Name) | Should -BeExactly @('cpu', 'mem', 'gpu', 'rx', 'tx', 'vram', 'vramShared')
+        } finally { Stop-Build $p }
+    }
+}
+#endregion 90

@@ -28,6 +28,7 @@ main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-wid
 #gpuIcon[data-v=""] .v-generic,#gpuIcon[data-v="nvidia"] .v-nvidia,#gpuIcon[data-v="amd"] .v-amd,#gpuIcon[data-v="intel"] .v-intel{display:block}
 .value{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .temp{font-size:16px;color:var(--muted);margin-right:10px}
+.badge{font-size:13px;font-weight:600;color:var(--warn);margin-right:10px}
 .temp.warn{color:var(--warn)} .temp.hot{color:var(--bad)} .temp.none{font-size:13px;cursor:help}
 .sub{color:var(--muted);font-size:12.5px;min-height:18px;font-variant-numeric:tabular-nums}
 canvas{display:block;width:100%;height:120px;margin-top:8px}

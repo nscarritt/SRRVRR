@@ -151,3 +151,63 @@ Describe 'T51-09 the changelog' {
         $changelog | Should -Match ('(?m)^\[' + [regex]::Escape($newest) + '\]: https://github\.com/nscarritt/SRRVRR/')
     }
 }
+
+#region 90 Roles and the host name (#90)
+Describe 'T90-14 Role and DisplayName are documented' {
+    BeforeAll {
+        $script:Rows = @{}
+        foreach ($m in [regex]::Matches($Readme, '(?m)^\| `(\w+)` \| `([^`]*)` \| (.*)\|\s*$')) { $Rows[$m.Groups[1].Value] = @{ Default = $m.Groups[2].Value; Text = $m.Groups[3].Value } }
+        $examplePath = Join-Path $Root 'SRRVRR.config.example.psd1'
+        $script:Example = Import-PowerShellDataFile -LiteralPath $examplePath
+        $script:ExampleLines = @([IO.File]::ReadAllLines($examplePath))
+        # The comment lines right above "<Name> =" in the example config (empty when the setting isn't there).
+        function Get-ExampleComment([string]$Name) {
+            $at = -1
+            for ($i = 0; $i -lt $ExampleLines.Count; $i++) { if ($ExampleLines[$i] -match ('^\s*' + $Name + '\s*=')) { $at = $i; break } }
+            if ($at -lt 0) { return '' }
+            $comment = New-Object System.Collections.Generic.List[string]
+            for ($i = $at - 1; $i -ge 0 -and $ExampleLines[$i] -match '^\s*#'; $i--) { $comment.Insert(0, $ExampleLines[$i]) }
+            $comment -join "`n"
+        }
+        # The message Test-SrrSettings throws for one setting's value.
+        function Get-SettingError([string]$Name, $Value) {
+            $s = Get-SrrDefaultSettings; $s[$Name] = $Value
+            try { Test-SrrSettings $s | Out-Null; '' } catch { $_.Exception.Message }
+        }
+    }
+    It 'T90-14 Role: the default Server in the code, the README table and the example config, and the values Server and Workstation in all three' {
+        $defaults = Get-SrrDefaultSettings
+        $defaults.Role | Should -BeExactly 'Server'
+        $Rows.ContainsKey('Role') | Should -BeTrue -Because 'the README settings table has a Role row'
+        $Rows['Role'].Default | Should -BeExactly "'$($defaults.Role)'"
+        $Example.Role | Should -BeExactly $defaults.Role -Because 'the example config sets Role to its default'
+        $comment = Get-ExampleComment 'Role'
+        $message = Get-SettingError 'Role' 'Desktop'
+        foreach ($v in 'Server', 'Workstation') {
+            Get-SettingError 'Role' $v | Should -BeNullOrEmpty -Because "the code accepts $v"
+            $message | Should -Match $v -Because "the code's error names $v"
+            $Rows['Role'].Text | Should -Match "'$v'" -Because "the README names '$v'"
+            $comment | Should -Match "'$v'" -Because "the example config's comment names '$v'"
+        }
+    }
+    It 'T90-14 DisplayName: the default empty in the code, the README table and the example config, and its rule in all three' {
+        $defaults = Get-SrrDefaultSettings
+        $defaults.DisplayName | Should -BeExactly ''
+        $Rows.ContainsKey('DisplayName') | Should -BeTrue -Because 'the README settings table has a DisplayName row'
+        $Rows['DisplayName'].Default | Should -BeExactly "'$($defaults.DisplayName)'"
+        $Example.ContainsKey('DisplayName') | Should -BeTrue -Because 'the example config has DisplayName'
+        $Example.DisplayName | Should -BeExactly $defaults.DisplayName -Because 'the example config sets DisplayName to its default'
+        # The rule, as the code's own error message states it.
+        $range = [regex]::Match((Get-SettingError 'DisplayName' ('a' * 33)), '\d+ to \d+ characters').Value
+        $range | Should -Be '1 to 32 characters' -Because "DisplayName's error message names its length"
+        $Rows['DisplayName'].Text | Should -Match ([regex]::Escape($range)) -Because 'the README states the rule'
+        Get-ExampleComment 'DisplayName' | Should -Match ([regex]::Escape($range)) -Because "the example config's comment states the rule"
+    }
+    It 'T90-14 the README has "Running on a workstation", with Role = ''Workstation'' and answering No to the administrator prompt' {
+        $section = Get-Section $Readme 'Running on a workstation'
+        $section | Should -Match ([regex]::Escape("Role = 'Workstation'"))
+        $section | Should -Match '(?i)answer(ing)?\s+(\*\*)?No\b'
+        $section | Should -Match '(?i)administrator'
+    }
+}
+#endregion 90
