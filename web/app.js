@@ -121,6 +121,50 @@ function gpuBadge(limits) {
 }
 // The name in the header and the tab: the host name from /stats, or SRRVRR.
 function hostTitle(s) { return s.hostName || 'SRRVRR'; }
+// Memory detail under the Memory tile (Workstation): commit against its limit, and paging in. Amber at 90% committed.
+const trimNum = n => n.toFixed(1).replace(/\.0$/, '');
+const gbNum = b => trimNum(b / 1073741824);
+function memDetailText(s) {
+  if (s.memCommit == null || !s.memCommitLimit) return {text: '', warn: false};
+  const dot = ' ' + String.fromCharCode(183) + ' ';
+  let text = 'Committed ' + gbNum(s.memCommit) + ' of ' + gbNum(s.memCommitLimit) + ' GB';
+  if (s.memPageIn != null) text += dot + 'paging ' + trimNum(s.memPageIn / 1048576) + ' MB/s';
+  return {text, warn: s.memCommit / s.memCommitLimit >= 0.9};
+}
+// The WSL VM against its memory cap; amber at 90%. The title says where the cap came from.
+function wslText(wsl) {
+  if (!wsl) return {text: '', warn: false, title: ''};
+  if (!wsl.running) return {text: 'WSL VM: not running', warn: false, title: ''};
+  const where = wsl.capSource === 'default' ? 'default: half of RAM; set memory= in .wslconfig to change it' : 'from .wslconfig';
+  const title = wsl.cap ? 'Memory cap ' + gbNum(wsl.cap) + ' GB (' + where + ')' : '';
+  if (wsl.mem == null) return {text: 'WSL VM: running', warn: false, title};
+  if (!wsl.cap) return {text: 'WSL VM ' + gbNum(wsl.mem) + ' GB', warn: false, title};
+  return {text: 'WSL VM ' + gbNum(wsl.mem) + ' of ' + gbNum(wsl.cap) + ' GB', warn: wsl.mem / wsl.cap >= 0.9, title};
+}
+// Top programs (Workstation): rows in the order the server sent them. All text goes through esc.
+function topRowsHtml(top) {
+  const amount = b => !b ? '&ndash;' : b >= 1073741824 ? gbNum(b) + ' GB' : (b / 1048576).toFixed(0) + ' MB';
+  const cpu = v => v == null ? '&ndash;' : (v < 10 ? v.toFixed(1) : v.toFixed(0)) + '%';
+  const rows = (top || []).map(p => '<tr><td>' + esc(p.name) + (p.count > 1 ? ' (' + p.count + ')' : '') + '</td><td>' +
+    amount(p.vram) + '</td><td>' + amount(p.mem) + '</td><td>' + cpu(p.cpu) + '</td></tr>').join('');
+  return '<div class="label">Top programs</div><div class="scroll"><table>' +
+    '<colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>' +
+    '<thead><tr><th>Program</th><th>Video memory</th><th>Memory</th><th>CPU</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="sub">Programs share some video memory, so the rows can add up to more than the card holds.</div>';
+}
+function renderTopCard(el, s) {
+  const top = s && s.top;
+  el.innerHTML = top && top.length ? topRowsHtml(top) : '';
+  el.hidden = !(top && top.length);
+}
+function renderMemDetail(s) {
+  const d = memDetailText(s), w = wslText(s.wsl);
+  $('memD').textContent = d.text;
+  $('memD').hidden = !d.text;
+  $('memD').className = 'sub' + (d.warn || w.warn ? ' warn' : '');
+  // With no AI server card to show it, the WSL VM goes in the hover text.
+  $('memD').title = (s.ai && s.ai.length) || !w.text ? '' : w.text + (w.title ? ' (' + w.title + ')' : '');
+}
 function render(s) {
   $('host').textContent = hostTitle(s);
   document.title = hostTitle(s);
@@ -172,6 +216,8 @@ function render(s) {
   $('netS').innerHTML = '<span class="key"><i style="background:var(--rx)"></i>Receive ' + bits(s.rx) +
     '</span><span class="key"><i style="background:var(--tx)"></i>Send ' + bits(s.tx) + '</span>';
   drawGraphs();
+  renderMemDetail(s);
+  renderTopCard($('topCard'), s);
   renderProcs(s);
   renderDrives(s);
 }

@@ -111,14 +111,15 @@ function Get-WorkstationEvents {
 #region 92 Memory detail and top programs (#92)
 # Memory detail, the WSL VM and the top programs. Every reading comes through the $Readers the context holds, so
 # nothing here reads the machine itself. Snapshots are shaped like PerformanceCounterCategory.ReadCategory():
-# category -> counter -> instance -> object with .Sample and .RawValue.
+# category -> counter -> instance -> object with .Sample, .RawValue and .InstanceName (the real collections have
+# .Contains, not .ContainsKey, and lower-case keys).
 
 # The value of one counter of a single-instance category (Memory), or $null.
 function Get-SingleRaw {
     param($Snapshot, [string]$Category, [string]$Counter)
-    if (-not $Snapshot -or -not $Snapshot.ContainsKey($Category)) { return $null }
+    if (-not $Snapshot -or -not $Snapshot.Contains($Category)) { return $null }
     $c = $Snapshot[$Category]
-    if (-not $c.ContainsKey($Counter)) { return $null }
+    if (-not $c.Contains($Counter)) { return $null }
     foreach ($inst in $c[$Counter].Values) { return $inst }   # the first (only) instance
     $null
 }
@@ -181,36 +182,36 @@ function Get-WslReading {
 # CPU adds up only the instances that are in both readings with the same process id, and is $null with none.
 function Get-TopPrograms {
     param($Previous, $Current, [double]$ElapsedSeconds, [int]$Cores, [string]$GpuLuid, [int]$Count = 5, [int]$MaxRows = 8)
-    if (-not $Current -or -not $Current.ContainsKey('Process')) { return }
+    if (-not $Current -or -not $Current.Contains('Process')) { return }
     $proc = $Current['Process']
-    if (-not $proc.ContainsKey('ID Process') -or -not $proc.ContainsKey('Working Set - Private')) { return }
-    $oldProc = if ($Previous -and $Previous.ContainsKey('Process')) { $Previous['Process'] } else { $null }
+    if (-not $proc.Contains('ID Process') -or -not $proc.Contains('Working Set - Private')) { return }
+    $oldProc = if ($Previous -and $Previous.Contains('Process')) { $Previous['Process'] } else { $null }
     # Video memory on the chosen card, per process id.
     $vramOf = @{}
-    if ($Current.ContainsKey('GPU Process Memory') -and $Current['GPU Process Memory'].ContainsKey('Dedicated Usage')) {
+    if ($Current.Contains('GPU Process Memory') -and $Current['GPU Process Memory'].Contains('Dedicated Usage')) {
         $ded = $Current['GPU Process Memory']['Dedicated Usage']
         foreach ($k in $ded.Keys) {
             if ($k -notmatch '^pid_(\d+)_luid_(\w+?_\w+?)_phys_\d+') { continue }
             if ($GpuLuid -and $Matches[2] -ne $GpuLuid) { continue }
             $id = [int]$Matches[1]
-            if (-not $vramOf.ContainsKey($id)) { $vramOf[$id] = [long]0 }
+            if (-not $vramOf.Contains($id)) { $vramOf[$id] = [long]0 }
             $vramOf[$id] += [long]$ded[$k].RawValue
         }
     }
     $programs = @{}
     foreach ($inst in @($proc['ID Process'].Keys)) {
         if ($inst -eq '_Total' -or $inst -eq 'Idle') { continue }
-        $name = $inst -replace '#\d+$', ''
+        $name = ([string]$proc['ID Process'][$inst].InstanceName) -replace '#\d+$', ''   # the real collection's keys are lower-case; InstanceName keeps the case
         if ($name -eq 'vmmemWSL') { $name = 'WSL VM' }
-        if (-not $programs.ContainsKey($name)) { $programs[$name] = @{ name = $name; count = 0; vram = [long]0; mem = [long]0; cpu = $null } }
+        if (-not $programs.Contains($name)) { $programs[$name] = @{ name = $name; count = 0; vram = [long]0; mem = [long]0; cpu = $null } }
         $p = $programs[$name]
         $id = [int]$proc['ID Process'][$inst].RawValue
         $p.count++
-        if ($proc['Working Set - Private'].ContainsKey($inst)) { $p.mem += [long]$proc['Working Set - Private'][$inst].RawValue }
-        if ($vramOf.ContainsKey($id)) { $p.vram += $vramOf[$id] }
+        if ($proc['Working Set - Private'].Contains($inst)) { $p.mem += [long]$proc['Working Set - Private'][$inst].RawValue }
+        if ($vramOf.Contains($id)) { $p.vram += $vramOf[$id] }
         # CPU: the same instance, the same process, in both readings.
-        if ($oldProc -and $Cores -gt 0 -and $proc.ContainsKey('% Processor Time') -and $oldProc.ContainsKey('% Processor Time') -and $oldProc.ContainsKey('ID Process') -and
-            $oldProc['ID Process'].ContainsKey($inst) -and $oldProc['% Processor Time'].ContainsKey($inst) -and $proc['% Processor Time'].ContainsKey($inst) -and
+        if ($oldProc -and $Cores -gt 0 -and $proc.Contains('% Processor Time') -and $oldProc.Contains('% Processor Time') -and $oldProc.Contains('ID Process') -and
+            $oldProc['ID Process'].Contains($inst) -and $oldProc['% Processor Time'].Contains($inst) -and $proc['% Processor Time'].Contains($inst) -and
             [int]$oldProc['ID Process'][$inst].RawValue -eq $id) {
             try {
                 $v = [Diagnostics.CounterSample]::Calculate($oldProc['% Processor Time'][$inst].Sample, $proc['% Processor Time'][$inst].Sample) / $Cores

@@ -471,6 +471,15 @@ if ($rolePlan.Workstation -and $smiPath) {
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 # Windows' start time, read once; uptime is worked out from it on every request.
 $bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+# The WSL VM's memory cap (Workstation): read from .wslconfig once here for the startup line; the slow sampler re-reads it every minute.
+if ($rolePlan.Workstation) {
+    $wslConfigText = $null
+    try { $wslConfigPath = Join-Path $env:USERPROFILE '.wslconfig'; if (Test-Path -LiteralPath $wslConfigPath) { $wslConfigText = [IO.File]::ReadAllText($wslConfigPath) } } catch { $wslConfigText = $null }
+    $wslCap = ConvertFrom-WslConfig -Text $wslConfigText -TotalRam ([double]$totalRam)
+    $capGb = ([math]::Round($wslCap.Cap / 1GB, 1)).ToString([Globalization.CultureInfo]::InvariantCulture)
+    $msg = "WSL VM: memory cap $capGb GB " + $(if ($wslCap.Source -eq 'config') { '(from .wslconfig)' } else { '(default: half of RAM)' })
+    Write-Status $msg; Write-SrrLog 'INFO' 'startup' $msg
+}
 $state = [hashtable]::Synchronized(@{
     ready = $false
     version = $srrVersion.Version   # set once, here
@@ -704,7 +713,7 @@ Write-Status $(if ($rolePlan.Processes) { 'Every second: CPU, memory, GPU, netwo
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $smiPrefix, $workstationModulePath)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $smiPrefix, $workstationModulePath, $workstation)
     # Select-DrivesToShow; a failure shows as drivesError on the page.
     try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
     # Get-DriveLevel (DataFolder.psm1, loaded above) decides ok, filling or full; driveLevels remembers each letter's last level.
@@ -816,6 +825,27 @@ public static class SrrvrrSensorLoader {
         $pos.Value++
         $text
     }
+    # The Workstation's part (memory detail, the WSL VM, top programs): its context is built here, in this runspace, so
+    # its readers belong to this thread. Null on a Server.
+    $wsCtx = $null
+    $wsClock = [System.Diagnostics.Stopwatch]::StartNew()
+    if ($workstation) {
+        try {
+            $wsModulePath = $workstation.ModulePath
+            Import-Module -Name $wsModulePath -Force -ErrorAction Stop
+            $wsCats = @{}
+            foreach ($n in 'Memory', 'Process', 'GPU Process Memory') {
+                if ([System.Diagnostics.PerformanceCounterCategory]::Exists($n)) { $wsCats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
+            }
+            $wsReaders = @{
+                Counters   = { $s = @{}; foreach ($n in $wsCats.Keys) { $s[$n] = $wsCats[$n].ReadCategory() }; $s }.GetNewClosure()
+                WslProcess = { Get-Process -Name vmmemWSL -ErrorAction SilentlyContinue | Select-Object -First 1 }
+                WslConfig  = { $f = Join-Path $env:USERPROFILE '.wslconfig'; if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f) } else { $null } }
+            }
+            $wsCtx = New-WorkstationContext -ComfyEntries @($workstation.ComfyEntries) -GpuLuid $workstation.GpuLuid -Cores $workstation.Cores `
+                -TotalRam ([double]$workstation.TotalRam) -Readers $wsReaders
+        } catch { $state.workstationError = "Couldn't set up the workstation readings: $($_.Exception.Message)" }
+    }
     $activity = @{}   # process name -> what it's doing (players, streams); published as $state.activity
     $valheimAnswered = $false
     $plexToken = $null
@@ -841,6 +871,11 @@ public static class SrrvrrSensorLoader {
                 }
                 $state.gpuTemp = $temp
             } catch { $state.gpuTemp = $null }
+        }
+        # Memory detail, the WSL VM and the top programs, every 5 seconds (Workstation only).
+        if ($wsCtx) {
+            try { Invoke-WorkstationTick -State $state -Context $wsCtx -NowMs $wsClock.ElapsedMilliseconds }
+            catch { $state.workstationError = "workstation: $($_.Exception.Message)" }
         }
         # CPU and memory temperatures, every 5 seconds.
         if ($sensors) {
@@ -1012,6 +1047,11 @@ if ($services | Where-Object { $_.name -eq 'Plex' }) { $plexUrl = 'http://127.0.
 
 $valheimQueryPort = if ($services | Where-Object { $_.name -eq 'Valheim' }) { $settings.ValheimPort + 1 } else { $null }
 
+# What the slow sampler needs to build the Workstation's readings (null on a Server: no reader, no counter read).
+$workstation = if ($rolePlan.Workstation) {
+    @{ ModulePath = (Join-Path $PSScriptRoot 'modules\Workstation.psm1'); GpuLuid = $gpuLuid; Cores = [int]$env:NUMBER_OF_PROCESSORS
+       TotalRam = [double]$totalRam; ComfyEntries = @() }
+} else { $null }
 $slowRunspace = [runspacefactory]::CreateRunspace()
 $slowRunspace.Open()
 $slowWorker = [powershell]::Create()
@@ -1027,7 +1067,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($smiPrefix).AddArgument((Join-Path $PSScriptRoot 'modules\Workstation.psm1'))
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($smiPrefix).AddArgument((Join-Path $PSScriptRoot 'modules\Workstation.psm1')).AddArgument($workstation)
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
@@ -1168,7 +1208,7 @@ function Get-DetectionReading {
 function Invoke-Watch {
     # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
     # library would otherwise fill the log); errors that come and go are still held to once a minute.
-    foreach ($k in 'error', 'drivesError', 'tempError') {
+    foreach ($k in 'error', 'drivesError', 'tempError', 'workstationError') {
         $v = $state[$k]
         if ($v -and $v -ne $script:lastStateErrors[$k]) {
             $source = if ($k -eq 'error') { 'fast-sampler' } else { 'slow-sampler' }
