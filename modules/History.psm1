@@ -153,7 +153,14 @@ function Save-History {
         $tmp = "$target.tmp"
         [IO.File]::WriteAllText($tmp, (ConvertTo-HistoryJson $Store.Copy()), (New-Object Text.UTF8Encoding($false)))
         # [NullString]::Value: a plain $null would arrive as an empty backup path.
-        if ([IO.File]::Exists($target)) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }
+        if ([IO.File]::Exists($target)) {
+            # Replace sometimes fails for a moment ("Unable to remove the file to be replaced"): a virus scanner or
+            # indexer has the file open. A few quick retries get past it; a lasting lock still fails the save.
+            for ($try = 1; $true; $try++) {
+                try { [IO.File]::Replace($tmp, $target, [NullString]::Value); break }
+                catch [IO.IOException] { if ($try -ge 4) { throw }; [Threading.Thread]::Sleep(25) }
+            }
+        } else { [IO.File]::Move($tmp, $target) }
         @{ Ok = $true; Error = $null }
     } catch {
         try { if ($tmp -and [IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { }
