@@ -29,6 +29,7 @@ Current version: **0.8.0**. See the [changelog](CHANGELOG.md) for what changed i
 - [Alerts](#alerts)
 - [Administrator vs. not](#administrator-vs-not)
 - [Running SRRVRR at boot](#running-srrvrr-at-boot)
+- [Running on a workstation](#running-on-a-workstation)
 - [Troubleshooting](#troubleshooting)
 - [How it works](#how-it-works)
 - [Checks and tests](#checks-and-tests)
@@ -175,6 +176,8 @@ replace `SRRVRR.ps1`, `Start SRRVRR.bat`, `Stop SRRVRR.bat`, `SRRVRR.config.exam
 | `MaintenanceMaxHours` | `8` | The longest Maintenance can stay on, in hours (1 to 24). |
 | `DriveWarnPercent` | `85` | The percent of a drive that is used when its Storage bar turns amber and a "filling" banner shows, 50 to 99 (below `DriveFullPercent`). |
 | `DriveFullPercent` | `95` | The percent used when the bar turns red and the drive is flagged as almost full, 50 to 99. A drive has to fall 2 points below a threshold before its level goes back down. |
+| `Role` | `'Server'` | What this copy is for: `'Server'` (a home server, as before) or `'Workstation'` (a PC; see [Running on a workstation](#running-on-a-workstation)). Not case-sensitive. |
+| `DisplayName` | `''` | The name in the page header and the browser tab. `''` = SRRVRR on a Server, or the computer's name on a Workstation; otherwise 1 to 32 characters: letters, digits, spaces, `-`, `_` and `.`. |
 
 Example:
 
@@ -419,6 +422,40 @@ file. Closing SRRVRR's console window is a hard stop with no saving.
 **Where its data goes.** `state` and `logs` go under `DataPath` (see
 [Data folder and logs](#data-folder-and-logs)); `state\stop-requested` always stays in SRRVRR's own
 folder, where a launcher can find it. Updating means replacing the code only (see [Settings](#settings)).
+
+## Running on a workstation
+
+A second SRRVRR can run on a PC, such as a gaming or AI PC, next to the one on your server. Set
+`Role = 'Workstation'` and that copy changes what it runs and shows:
+
+- **Off:** the Processes table and per-program network tracking, which are about the services a server runs.
+  `Processes` and `ValheimPort` are still checked but ignored, and the console says so.
+- **Unchanged:** the CPU, Memory, GPU and Network tiles, Storage, alerts, Maintenance, the event log and the
+  graph history.
+- **New:** the header and the browser tab show the PC's name (`DisplayName`, or the computer's name), so you can
+  tell the two pages apart. Cards for video memory, top programs and an AI server are added by later changes in
+  this release.
+
+A copy with no `Role` is a Server and behaves exactly as before.
+
+**Install and run it.**
+
+1. Copy the release files into a folder of your own, for example `C:\Apps\SRRVRR`, as in [Quick start](#quick-start).
+2. Copy `SRRVRR.config.example.psd1` to `SRRVRR.config.psd1` in that folder and edit the copy:
+
+   ```powershell
+   @{
+       Role        = 'Workstation'
+       DisplayName = 'My PC'        # optional; the computer's name is used when this is empty
+       # ComfyUi entries for the AI server card arrive with that card
+   }
+   ```
+
+3. Start it with `Start SRRVRR.bat`. When Windows asks about administrator rights, answer **No**: nothing a
+   workstation shows needs them. Without administrator the page opens only on that PC, at
+   `http://localhost:<port>` (a different `Port` from the server's if the two share a network name), and the CPU
+   and memory temperatures show "Temp n/a". No firewall rule is created.
+4. Update it as on the server (see [Settings](#settings)). Stop it with `Stop SRRVRR.bat`.
 
 ## Troubleshooting
 

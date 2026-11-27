@@ -91,4 +91,18 @@
     # The percent used when the bar turns red and SRRVRR flags the drive as almost
     # full (50 to 99).
     DriveFullPercent = 95
+
+    # --- Role and name ----------------------------------------------------------
+
+    # What this copy of SRRVRR is for:
+    #   'Server'      a home server: the Processes table and per-program network (default)
+    #   'Workstation' a PC: no Processes table or per-program network; video memory,
+    #                 top programs and an AI server card instead
+    # See "Running on a workstation" in the README.
+    Role = 'Server'
+
+    # The name shown in the page header and the browser tab. '' = SRRVRR on a
+    # Server, or this computer's name on a Workstation. Otherwise 1 to 32 characters:
+    # letters, digits, spaces, -, _ and .
+    DisplayName = ''
 }
