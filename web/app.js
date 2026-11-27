@@ -1,6 +1,7 @@
 // The graphs keep 15 minutes (900 seconds) and show the last 60 s or all 15 min, as chosen (remembered per browser).
-const N = 900, LINES = ['cpu', 'mem', 'gpu', 'rx', 'tx'];
-let hist = {cpu: [], mem: [], gpu: [], rx: [], tx: []};
+const N = 900, LINES = ['cpu', 'mem', 'gpu', 'rx', 'tx', 'vram', 'vramShared'];
+let hist = {cpu: [], mem: [], gpu: [], rx: [], tx: [], vram: [], vramShared: []};
+let vramMax = 0;                    // the card's dedicated memory in GiB, kept from the last reading that had it
 let lastTs = 0, range = 60;
 const missing = v => v == null || Number.isNaN(v);
 function rangeFromStorage(storage) {
@@ -97,6 +98,27 @@ function showVersion(v, el) {
 function cardsFor(role) {
   return role === 'workstation' ? {proc: false, vram: true, ai: true, top: true} : {proc: true, vram: false, ai: false, top: false};
 }
+// The Video memory tile (Workstation): dedicated memory in use of the card's total, and the shared memory beside it.
+function vramTile(s) {
+  const GiB = 1073741824, total = s.gpuMemTotal > 0 ? s.gpuMemTotal : 0, spill = total > 0 && !!s.gpuSpill;
+  const shared = s.gpuShared != null ? 'shared ' + gb(s.gpuShared) + ' GB' : '';
+  if (!total) return {value: 'n/a', sub: shared, spill: false, title: 'No video memory size is known for this PC'};
+  return {value: gb(s.gpuMem || 0) + ' / ' + +(total / GiB).toFixed(1) + ' GB', sub: shared, spill: spill,
+    title: spill ? 'Video memory is full and Windows is using shared (system) memory instead' : 'Dedicated video memory in use, of the card\'s total'};
+}
+// The GPU line's detail on a Workstation: "312 of 450 W . 2,610 MHz . fan 48%", leaving out what nvidia-smi did not give.
+function gpuDetailText(s) {
+  const has = v => v != null && !Number.isNaN(v), parts = [];
+  if (has(s.gpuPower)) parts.push(s.gpuPower + (has(s.gpuPowerLimit) ? ' of ' + s.gpuPowerLimit : '') + ' W');
+  if (has(s.gpuClock)) parts.push(String(s.gpuClock).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' MHz');
+  if (has(s.gpuFan)) parts.push('fan ' + s.gpuFan + '%');
+  return parts.join(' ' + String.fromCharCode(183) + ' ');
+}
+// Why the card is held back: Hot first, then Power limit, then Slowed; nothing when it is not.
+function gpuBadge(limits) {
+  const l = Array.isArray(limits) ? limits : [];
+  return l.includes('thermal') ? 'Hot' : l.includes('power') ? 'Power limit' : l.includes('slowed') ? 'Slowed' : '';
+}
 // The name in the header and the tab: the host name from /stats, or SRRVRR.
 function hostTitle(s) { return s.hostName || 'SRRVRR'; }
 function render(s) {
@@ -121,6 +143,7 @@ function render(s) {
   // Hover: each stick's slot, maker, part number, size and the speed it runs at now.
   $('memS').title = (s.memSticks || []).map(m => m.slot + ': ' + [m.maker, m.part].filter(Boolean).join(' ') +
     ', ' + (m.size / 1073741824).toFixed(0) + ' GB' + (m.mts ? ', ' + m.mts + ' MT/s' : '')).join('\n');
+  const wk = cardsFor(s.role);
   $('gpuIcon').dataset.v = s.gpuVendor || '';
   const t = s.gpuTemp;                // degrees C from nvidia-smi; amber at 80, red at 90
   $('gpuTemp').textContent = t == null ? '' : t + String.fromCharCode(176) + 'C';
@@ -133,6 +156,17 @@ function render(s) {
   } else {
     $('gpuV').textContent = 'N/A';
     $('gpuS').textContent = 'No GPU counters on this machine';
+  }
+  // Workstation: power, clocks and fan on the GPU line (today's text on hover), and why the card is held back.
+  const detail = wk.vram ? gpuDetailText(s) : '', badge = wk.vram ? gpuBadge(s.gpuLimits) : '';
+  if (detail) { $('gpuS').title = $('gpuS').textContent; $('gpuS').textContent = detail; } else $('gpuS').title = '';
+  $('gpuBadge').textContent = badge; $('gpuBadge').hidden = !badge;
+  $('vramCard').hidden = !wk.vram;
+  if (wk.vram) {
+    const v = vramTile(s);
+    if (s.gpuMemTotal > 0) vramMax = s.gpuMemTotal / 1073741824;
+    $('vramV').textContent = v.value; $('vramS').textContent = v.sub || '\u00a0'; $('vramCard').title = v.title;
+    $('vramBadge').textContent = v.spill ? 'Spilling into RAM' : ''; $('vramBadge').hidden = !v.spill;
   }
   $('netV').textContent = bits(s.rx + s.tx);
   $('netS').innerHTML = '<span class="key"><i style="background:var(--rx)"></i>Receive ' + bits(s.rx) +
@@ -350,6 +384,8 @@ function bannerFor(e) {
     case 'drive-space-ok': return b('', drive + ' has space again', [d.freeGB + ' GB free']);
     case 'data-drive-missing': return b('', drive + ' is missing', ['Windows can no longer see it.', d.was && 'It was ' + d.was + ' before.']);
     case 'data-fallback': return b('', 'Saving to the local data folder', ['SRRVRR could not use its usual data folder.', d.reason]);
+    case 'vram-spill': return b('', 'Video memory full: spilling into RAM', ['Work on the GPU will be slow']);
+    case 'vram-spill-ended': return b('', 'Video memory no longer spilling', []);
     case 'share-found': return b('', 'The data folder is shared on the network', ['Other computers may be able to read or change its files.', d.reason]);
     case 'history-save-failed': return b('', 'Could not save the graph history', ['The live graphs still work.', d.error]);
     case 'restart-pending': return b('', 'Windows is waiting to restart', [d.reason]);
@@ -436,6 +472,7 @@ function drawGraphs() {
   draw('gpuC', [{data: v('gpu'), color: css('--gpu'), fill: true}], 100, '', range);
   const netMax = niceMax(Math.max(0, ...v('rx').concat(v('tx')).filter(x => !missing(x))));
   draw('netC', [{data: v('rx'), color: css('--rx'), fill: true}, {data: v('tx'), color: css('--tx'), dash: [4, 3]}], netMax, bits(netMax), range);
+  if (vramMax > 0) draw('vramC', [{data: v('vram'), color: css('--gpu'), fill: true}, {data: v('vramShared'), color: css('--warn'), dash: [4, 3]}], vramMax, '', range);
 }
 // --- The 60 s / 15 min buttons.
 function showRange() {
@@ -463,6 +500,8 @@ function pushReading(s) {
   for (let i = 0; i < skipped; i++) for (const n of LINES) push(hist[n], null);
   push(hist.cpu, s.cpu); push(hist.mem, 100 * s.memUsed / s.memTotal); push(hist.gpu, s.gpu || 0);
   push(hist.rx, s.rx); push(hist.tx, s.tx);
+  const wsMem = s.gpuShared != null;   // the Workstation sends gpuShared; the Server does not
+  push(hist.vram, wsMem ? s.gpuMem / 1073741824 : null); push(hist.vramShared, wsMem ? s.gpuShared / 1073741824 : null);
   lastSecMs = sec;
 }
 async function tick() {

@@ -450,6 +450,23 @@ if ($gpuVendor -eq 'nvidia') {
     if (-not $smiPath -and (Test-Path "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe")) { $smiPath = "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe" }
     Write-Status $(if ($smiPath) { "Temperature from $smiPath" } else { 'No nvidia-smi found, so no GPU temperature.' })
 }
+# The Workstation also reads power, clocks, fan and throttle reasons from nvidia-smi. Newer drivers name the reason
+# fields clocks_event_reasons, older ones clocks_throttle_reasons: ask once, here, and tell the slow sampler which.
+$smiPrefix = 'none'
+if ($rolePlan.Workstation -and $smiPath) {
+    $probe = {
+        param([string]$prefix)
+        $ErrorActionPreference = 'Continue'   # nvidia-smi's own error text (stderr) is the answer here, not a failure
+        try {
+            $out = @(& $smiPath @(Get-SmiArguments -Prefix $prefix) 2>&1 | ForEach-Object { "$_" })
+            @{ Lines = [string[]]$out; ExitCode = [int]$LASTEXITCODE }
+        } catch { $null }
+    }
+    $eventQuery = & $probe 'clocks_event_reasons'
+    $throttleQuery = if ($eventQuery -and $eventQuery.ExitCode -ne 0) { & $probe 'clocks_throttle_reasons' } else { $null }
+    $smiPrefix = Select-SmiPrefix -Event $eventQuery -Throttle $throttleQuery
+    Write-Status "nvidia-smi detail fields: $smiPrefix"
+}
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 # Windows' start time, read once; uptime is worked out from it on every request.
@@ -472,6 +489,15 @@ $state = [hashtable]::Synchronized(@{
     hostName = $displayName   # the name the page shows (DisplayName, the computer name on a Workstation, else SRRVRR)
     role = $rolePlan.Role   # 'server' or 'workstation'
 })
+$gpuMemTotal = if ($gpu) { [double]$gpu.Dedicated } else { 0.0 }
+if ($rolePlan.Workstation) {
+    $state.gpuMemTotal = $gpuMemTotal   # the picked GPU's dedicated size in bytes (0 without a GPU); the page scales the Video memory tile with it
+    if ($gpu) {
+        $gpuGb = $gpuMemTotal / 1GB
+        $msg = 'Video memory: {0} {1} {2:0.#} GB, watching for spill (95% full and 1 GB shared)' -f $gpu.Name, [char]0x00B7, $gpuGb
+        Write-Status $msg
+    }
+}
 
 # --- Per-process network ------------------------------------------------------
 Set-Step 'Preparing per-program network tracking (Windows network events)'
@@ -640,7 +666,7 @@ Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } els
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $readProcesses)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $readProcesses, $workstation, $gpuTotal)
     # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
     # it on "Starting..." with no reason.
     try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
@@ -651,7 +677,8 @@ $sampler = {
     $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
     $ctx = New-FastTickContext -Reader $reader -Processes $(if ($readProcesses) { { Get-Process } } else { { @() } }) -Tracer $tracer -Services $services `
         -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
-        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
+        -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history `
+        -Workstation ([bool]$workstation) -GpuTotal ([double]$gpuTotal)
     $prev = $null
     while ($true) {
         $prev = Invoke-FastTick -State $state -Context $ctx -Previous $prev -Now ([DateTimeOffset]::Now)
@@ -667,7 +694,7 @@ $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($rolePlan.Processes)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($rolePlan.Processes).AddArgument($rolePlan.Workstation).AddArgument($gpuMemTotal)
 [void]$worker.BeginInvoke()
 Write-Status $(if ($rolePlan.Processes) { 'Every second: CPU, memory, GPU, network and the Processes table' } else { 'Every second: CPU, memory, GPU and network' })
 
@@ -677,11 +704,15 @@ Write-Status $(if ($rolePlan.Processes) { 'Every second: CPU, memory, GPU, netwo
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $smiPrefix, $workstationModulePath)
     # Select-DrivesToShow; a failure shows as drivesError on the page.
     try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
     # Get-DriveLevel (DataFolder.psm1, loaded above) decides ok, filling or full; driveLevels remembers each letter's last level.
     $driveLevels = @{}
+    # The Workstation's nvidia-smi detail (ConvertFrom-SmiDetail); the Server never loads it.
+    if ($smiPrefix -and $smiPrefix -ne 'none') {
+        try { Import-Module -Name $workstationModulePath -Force -ErrorAction Stop } catch { $state.workstationError = "Couldn't load modules\Workstation.psm1: $($_.Exception.Message)"; $smiPrefix = 'none' }
+    }
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
     # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
@@ -792,7 +823,15 @@ public static class SrrvrrSensorLoader {
     $tick = 0
     while ($true) {
         # GPU temperature, every 5 seconds: one line per NVIDIA card, "name, degrees C".
-        if ($smiPath) {
+        if ($smiPath -and $smiPrefix -and $smiPrefix -ne 'none') {
+            # Workstation: temperature, power, clocks, fan and throttle reasons in one call.
+            try {
+                $lines = @(& $smiPath @(Get-SmiArguments -Prefix $smiPrefix) 2>$null)
+                $detail = ConvertFrom-SmiDetail -Lines ([string[]]$lines) -GpuName $gpuName
+                if ($detail) { foreach ($k in $detail.Keys) { $state[$k] = $detail[$k] } }
+                else { foreach ($k in 'gpuTemp', 'gpuPower', 'gpuPowerLimit', 'gpuClock', 'gpuClockMax', 'gpuFan', 'gpuPState', 'gpuLimits') { $state[$k] = $null } }
+            } catch { $state.gpuTemp = $null }
+        } elseif ($smiPath) {
             try {
                 $lines = @(& $smiPath --query-gpu=name,temperature.gpu --format=csv,noheader,nounits 2>$null)
                 $temp = $null
@@ -988,7 +1027,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($smiPrefix).AddArgument((Join-Path $PSScriptRoot 'modules\Workstation.psm1'))
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
@@ -1115,11 +1154,16 @@ $lastReading = $null; $refusalsLoggedAt = [DateTime]::UtcNow
 # so the Valheim and Plex entries (replaced whole on each reading) are copied out of it.
 function Get-DetectionReading {
     $activity = $state.activity
-    @{
+    $reading = @{
         activity = if ($activity) { @{ Valheim = $activity['Valheim']; Plex = $activity['Plex'] } } else { $null }
         services = $state.services; drives = $state.drives
         restartPending = $state.restartPending; restartReason = $state.restartReason
     }
+    # The Workstation's video memory spill (the fast sampler decides it; Get-WorkstationEvents compares it).
+    if ($rolePlan.Workstation -and $state.ContainsKey('gpuSpill')) {
+        $reading.gpuSpill = [bool]$state.gpuSpill; $reading.gpuMem = $state.gpuMem; $reading.gpuShared = $state.gpuShared
+    }
+    $reading
 }
 function Invoke-Watch {
     # A sampler message is logged when it appears or changes, not every second it stays the same (a missing sensor
@@ -1137,6 +1181,10 @@ function Invoke-Watch {
     $reading = Get-DetectionReading
     try { foreach ($e in Get-StateEvents -Old $script:lastReading -New $reading) { Add-SrrQueueItem -Queue $eventQueue -Item $e } }
     catch { Write-SrrError 'events' "couldn't compare the readings: $($_.Exception.Message)" }
+    if ($rolePlan.Workstation) {
+        try { foreach ($r in @(Get-WorkstationEvents -Old $script:lastReading -New $reading)) { Add-SrrEvent $r.Type $r.Data $r.Key } }
+        catch { Write-SrrError 'events' "couldn't compare the Workstation readings: $($_.Exception.Message)" }
+    }
     $script:lastReading = $reading
     # Maintenance that ran out switches itself off (once), and the rate limit's refusals make one line a minute.
     $expired = $maintenance.Poll()

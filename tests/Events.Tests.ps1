@@ -279,3 +279,22 @@ Describe 'T65 drive space' {
         $e[0].severity | Should -Be 'info'; $e[0].banner | Should -BeFalse; $e[0].logged | Should -BeTrue
     }
 }
+
+#region 91
+# The video memory spill events (test plan 6.11; spec section 7).
+Describe 'T91 the spill event types' {
+    It 'T91-10 vram-spill is warn, bannered and logged; vram-spill-ended is info, logged, with no banner' {
+        $t = Get-EventTypes
+        $t.ContainsKey('vram-spill') | Should -BeTrue
+        $t['vram-spill'].Severity | Should -Be 'warn'; $t['vram-spill'].Banner | Should -Be $true; $t['vram-spill'].Logged | Should -Be $true
+        $t.ContainsKey('vram-spill-ended') | Should -BeTrue
+        $t['vram-spill-ended'].Severity | Should -Be 'info'; $t['vram-spill-ended'].Banner | Should -Be $false; $t['vram-spill-ended'].Logged | Should -Be $true
+    }
+    It 'T91-10 New-TypedEvent makes both from the table, with the key given' {
+        $e = New-TypedEvent -Type 'vram-spill' -Data @{ dedicatedGb = 23.1; sharedGb = 2.0 } -Key 'vram-spill'
+        $e.severity | Should -Be 'warn'; $e.banner | Should -Be $true; $e.logged | Should -Be $true; $e.key | Should -Be 'vram-spill'
+        $e = New-TypedEvent -Type 'vram-spill-ended' -Key 'vram-spill-ended'
+        $e.severity | Should -Be 'info'; $e.banner | Should -Be $false; $e.logged | Should -Be $true
+    }
+}
+#endregion 91

@@ -14,6 +14,12 @@ called out under **Changed** or **Removed** with upgrade notes.
   The header and the browser tab show the host name, and `/stats` gains `hostName` and `role`. A Workstation runs no
   Processes rows and no per-program network tracking, and its graph history gains `vram` and `vramShared` lines (filled
   by later changes). The page picks its cards by role. The Server is unchanged. README: "Running on a workstation".
+- (#91) **Video memory and GPU detail** (Workstation). A Video memory tile with its own graph: dedicated memory in use
+  of the card's total, shared memory beside it, and **Spilling into RAM** when the card has been 95% full with 1 GB or
+  more of shared memory in use for 10 seconds (it clears after 30 seconds below 90%, or below 0.5 GB shared). The GPU
+  line gains power, clock and fan, and a Hot, Power limit or Slowed badge, from `nvidia-smi`. Two new alerts,
+  `vram-spill` (banner) and `vram-spill-ended` (logged). `/stats` gains `gpuMemTotal`, `gpuShared`, `gpuSpill` and the GPU detail
+  fields on a Workstation only. The Server is unchanged.
 - **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
   a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
   detail, a Top programs card and an AI server card in place of the server's Processes and Transfers cards, designed so
