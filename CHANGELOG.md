@@ -13,7 +13,9 @@ called out under **Changed** or **Removed** with upgrade notes.
 - **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
   a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
   detail, a Top programs card and an AI server card in place of the server's Processes and Transfers cards, designed so
-  the two can later sit side by side. Design only; nothing changes yet.
+  the two can later sit side by side. With its implementation plan and test cases
+  ([docs/plans/2026-11-26-srrvrr-v0.10.0-implementation-plan.md](docs/plans/2026-11-26-srrvrr-v0.10.0-implementation-plan.md)).
+  Design only; nothing changes yet.
 
 ### Fixed
 - (#81) CPU and GPU percentages were rounded to a whole number by the 100% cap: Windows PowerShell picks the integer
