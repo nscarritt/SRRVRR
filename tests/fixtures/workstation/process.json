@@ -1,0 +1,68 @@
+{
+  "category": "Process",
+  "notes": [
+    "Hand-made, shaped like PerformanceCounterCategory('Process').ReadCategory(), with made-up program names. Counter",
+    "types and frequencies are the ones Windows reports. Two readings 5 s apart; % Processor Time is in 100 ns units.",
+    "Working Set - Private values are whole MiB: browser#1 to #3 800 + 400 + 200 = 1400 MiB, my#app and my#app#1",
+    "150 + 100 = 250 MiB. CPU over the 5 s on 24 cores (T92-05): editor +10 s = 8.3, gameapp +30 s = 25.0,",
+    "browser +2 + 1 + 0.5 s = 2.9, my#app +0.6 + 0.6 s = 1.0, vmmemWSL +12 s = 10.0, charlie +1.2 s = 1.0,",
+    "delta +2.4 s = 2.0, alpha and echo 0.0. foxtrot restarted (ID Process 6600 then 6601), bravo is new in the",
+    "current reading, and gameapp#1 exited after the previous one: those have no CPU number.",
+    "_Total and Idle carry ID Process 0, as on Windows, and are never rows."
+  ],
+  "systemFrequency": 10000000,
+  "counterFrequency": 10000000,
+  "counters": {
+    "ID Process": "NumberOfItems32",
+    "Working Set - Private": "NumberOfItems64",
+    "% Processor Time": "Timer100Ns"
+  },
+  "snapshots": [
+    {
+      "label": "previous",
+      "timeStamp": 2819000100000,
+      "timeStamp100nSec": 134402317000100000,
+      "instances": {
+        "_Total":    { "ID Process": 0,    "Working Set - Private": 41943040000, "% Processor Time": 10000000000000 },
+        "Idle":      { "ID Process": 0,    "Working Set - Private": 8192,        "% Processor Time": 9000000000000 },
+        "gameapp":   { "ID Process": 1200, "Working Set - Private": 1782579200,  "% Processor Time": 12000000000 },
+        "gameapp#1": { "ID Process": 1201, "Working Set - Private": 943718400,   "% Processor Time": 500000000 },
+        "browser#1": { "ID Process": 2101, "Working Set - Private": 734003200,   "% Processor Time": 1000000000 },
+        "browser#2": { "ID Process": 2102, "Working Set - Private": 419430400,   "% Processor Time": 2000000000 },
+        "browser#3": { "ID Process": 2103, "Working Set - Private": 209715200,   "% Processor Time": 3000000000 },
+        "editor":    { "ID Process": 3300, "Working Set - Private": 524288000,   "% Processor Time": 4000000000 },
+        "my#app":    { "ID Process": 4400, "Working Set - Private": 157286400,   "% Processor Time": 600000000 },
+        "my#app#1":  { "ID Process": 4401, "Working Set - Private": 104857600,   "% Processor Time": 700000000 },
+        "vmmemWSL":  { "ID Process": 5500, "Working Set - Private": 9437184000,  "% Processor Time": 50000000000 },
+        "alpha":     { "ID Process": 6100, "Working Set - Private": 10485760,    "% Processor Time": 10000000 },
+        "charlie":   { "ID Process": 6300, "Working Set - Private": 2621440000,  "% Processor Time": 800000000 },
+        "delta":     { "ID Process": 6400, "Working Set - Private": 2097152000,  "% Processor Time": 900000000 },
+        "echo":      { "ID Process": 6500, "Working Set - Private": 1992294400,  "% Processor Time": 300000000 },
+        "foxtrot":   { "ID Process": 6600, "Working Set - Private": 1572864000,  "% Processor Time": 7000000000 }
+      }
+    },
+    {
+      "label": "current",
+      "timeStamp": 2819050100000,
+      "timeStamp100nSec": 134402317050100000,
+      "instances": {
+        "_Total":    { "ID Process": 0,    "Working Set - Private": 41943040000, "% Processor Time": 10001200000000 },
+        "Idle":      { "ID Process": 0,    "Working Set - Private": 8192,        "% Processor Time": 9001000000000 },
+        "gameapp":   { "ID Process": 1200, "Working Set - Private": 1887436800,  "% Processor Time": 12300000000 },
+        "browser#1": { "ID Process": 2101, "Working Set - Private": 838860800,   "% Processor Time": 1020000000 },
+        "browser#2": { "ID Process": 2102, "Working Set - Private": 419430400,   "% Processor Time": 2010000000 },
+        "browser#3": { "ID Process": 2103, "Working Set - Private": 209715200,   "% Processor Time": 3005000000 },
+        "editor":    { "ID Process": 3300, "Working Set - Private": 524288000,   "% Processor Time": 4100000000 },
+        "my#app":    { "ID Process": 4400, "Working Set - Private": 157286400,   "% Processor Time": 606000000 },
+        "my#app#1":  { "ID Process": 4401, "Working Set - Private": 104857600,   "% Processor Time": 706000000 },
+        "vmmemWSL":  { "ID Process": 5500, "Working Set - Private": 9437184000,  "% Processor Time": 50120000000 },
+        "alpha":     { "ID Process": 6100, "Working Set - Private": 10485760,    "% Processor Time": 10000000 },
+        "bravo":     { "ID Process": 6200, "Working Set - Private": 5242880,     "% Processor Time": 2000000 },
+        "charlie":   { "ID Process": 6300, "Working Set - Private": 2621440000,  "% Processor Time": 812000000 },
+        "delta":     { "ID Process": 6400, "Working Set - Private": 2097152000,  "% Processor Time": 924000000 },
+        "echo":      { "ID Process": 6500, "Working Set - Private": 1992294400,  "% Processor Time": 300000000 },
+        "foxtrot":   { "ID Process": 6601, "Working Set - Private": 1153433600,  "% Processor Time": 30000000 }
+      }
+    }
+  ]
+}

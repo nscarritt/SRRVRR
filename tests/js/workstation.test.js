@@ -175,6 +175,71 @@ test('T90-12 hostTitle is the host name from /stats, or SRRVRR when there is non
 // #endregion 91
 
 // #region 92 Memory detail and top programs (#92)
+{
+  // Block-scoped, so these names can't clash with the other regions'.
+  const GiB = 2 ** 30;
+  const dot = ' ' + String.fromCharCode(183) + ' ';
+  const isFunction = name => assert.strictEqual(typeof page[name], 'function', 'app.js has a top-level function ' + name);
+
+  test('T92-09 memDetailText: committed of the limit, paging, and amber at 90% committed', () => {
+    isFunction('memDetailText');
+    const r = page.memDetailText({ memCommit: 31 * GiB, memCommitLimit: 96 * GiB, memPageIn: 0 });
+    assert.strictEqual(r.text, 'Committed 31 of 96 GB' + dot + 'paging 0 MB/s');
+    assert.strictEqual(r.warn, false);
+    assert.strictEqual(page.memDetailText({ memCommit: 90 * GiB, memCommitLimit: 100 * GiB, memPageIn: 0 }).warn, true);
+    // No paging number yet (the first reading after a start): the commit part alone.
+    assert.strictEqual(page.memDetailText({ memCommit: 31 * GiB, memCommitLimit: 96 * GiB, memPageIn: null }).text,
+      'Committed 31 of 96 GB');
+  });
+
+  test('T92-10 topRowsHtml escapes program names and keeps the order; renderTopCard renders only into the element given', () => {
+    isFunction('topRowsHtml');
+    isFunction('renderTopCard');
+    const evil = '<img src=x onerror=alert(1)>';
+    const top = [
+      { name: 'gameapp', count: 1, vram: 6 * GiB, mem: 1.8 * GiB, cpu: 25 },
+      { name: evil, count: 1, vram: 1 * GiB, mem: 0.5 * GiB, cpu: null },   // cpu null: a program new since the last reading
+      { name: 'browser', count: 3, vram: 0.6 * GiB, mem: 1.4 * GiB, cpu: 2.9 },
+    ];
+    const html = page.topRowsHtml(top);
+    assert.strictEqual(typeof html, 'string');
+    // The name shows as text, never as markup (Review Focus 2).
+    assert.ok(!/<img/i.test(html), 'no <img element in ' + html);
+    assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'), 'the name escaped by esc');
+    // Rows in the order given (the server sorts them).
+    const at = [html.indexOf('gameapp'), html.indexOf('&lt;img'), html.indexOf('browser')];
+    assert.ok(at[0] >= 0 && at[0] < at[1] && at[1] < at[2], 'rows in order: ' + at.join(', '));
+    // A grouped program shows its count in brackets; a single process shows none (spec section 1's sketch).
+    assert.ok(html.includes('(3)'), 'browser (3)');
+    assert.ok(!html.split('&lt;img src=x onerror=alert(1)&gt;').join('').includes('(1)'), 'no count for a single process');
+    // The overlap line, and no total (spec section 5).
+    assert.match(html, /share some video memory/);
+    assert.ok(!/null|undefined|NaN/.test(html), 'a missing CPU number shows as nothing wrong: ' + html);
+
+    // Render from the data passed in (spec section 8): only innerHTML and hidden on the element given.
+    const set = [];
+    const el = new Proxy(fakeElement(), { set: (t, k, v) => { set.push(k); t[k] = v; return true; } });
+    page.renderTopCard(el, { top });
+    assert.strictEqual(el.hidden, false);
+    assert.strictEqual(el.innerHTML, page.topRowsHtml(top));
+    page.renderTopCard(el, {});
+    assert.strictEqual(el.hidden, true, 'hidden again without top');
+    assert.ok(set.every(k => k === 'innerHTML' || k === 'hidden'), 'set only innerHTML and hidden: ' + set.join(', '));
+  });
+
+  test('T92-11 wslText: the WSL VM of its cap, amber at 90%, not running, running with no number, and a default cap', () => {
+    isFunction('wslText');
+    const w = page.wslText({ running: true, mem: 31.2 * GiB, cap: 48 * GiB, capSource: 'config' });
+    assert.strictEqual(w.text, 'WSL VM 31.2 of 48 GB');
+    assert.strictEqual(w.warn, false);
+    assert.strictEqual(page.wslText({ running: true, mem: 9 * GiB, cap: 10 * GiB, capSource: 'config' }).warn, true);
+    assert.strictEqual(page.wslText({ running: false, mem: null, cap: 48 * GiB, capSource: 'config' }).text, 'WSL VM: not running');
+    assert.strictEqual(page.wslText({ running: true, mem: null, cap: 48 * GiB, capSource: 'config' }).text, 'WSL VM: running');
+    const d = page.wslText({ running: true, mem: 12 * GiB, cap: 32 * GiB, capSource: 'default' });
+    assert.match(d.title, /default/);
+    assert.match(d.title, /half of RAM/);
+  });
+}
 // #endregion 92
 
 // #region 93 The AI server (#93)

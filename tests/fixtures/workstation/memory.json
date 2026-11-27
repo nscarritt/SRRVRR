@@ -1,0 +1,46 @@
+{
+  "category": "Memory",
+  "notes": [
+    "Hand-made, shaped like PerformanceCounterCategory('Memory').ReadCategory(): counter types, frequencies and the",
+    "single-instance name are the ones Windows reports. Two readings 5 s apart (timeStamp at 10 MHz, timeStamp100nSec).",
+    "Expected (T92-01): memCommit 33412345856 and memCommitLimit 103079219200 (the current raw values; 96 GiB + 4 KiB",
+    "is not exact in a float, so a value read through CounterSample.Calculate shows). memPageIn: Pages Input/sec went",
+    "from 1234000 to 1234600, 600 pages in 5 s = 120 pages/s, times 4096 = 491520 bytes per second."
+  ],
+  "systemFrequency": 10000000,
+  "counterFrequency": 0,
+  "counters": {
+    "Committed Bytes": "NumberOfItems64",
+    "Commit Limit": "NumberOfItems64",
+    "Pages Input/sec": "RateOfCountsPerSecond32",
+    "Available Bytes": "NumberOfItems64"
+  },
+  "snapshots": [
+    {
+      "label": "previous",
+      "timeStamp": 2819000000000,
+      "timeStamp100nSec": 134402317000000000,
+      "instances": {
+        "systemdiagnosticsperfcounterlibsingleinstance": {
+          "Committed Bytes": 32212254720,
+          "Commit Limit": 98784247808,
+          "Pages Input/sec": 1234000,
+          "Available Bytes": 34359738368
+        }
+      }
+    },
+    {
+      "label": "current",
+      "timeStamp": 2819050000000,
+      "timeStamp100nSec": 134402317050000000,
+      "instances": {
+        "systemdiagnosticsperfcounterlibsingleinstance": {
+          "Committed Bytes": 33412345856,
+          "Commit Limit": 103079219200,
+          "Pages Input/sec": 1234600,
+          "Available Bytes": 33285996544
+        }
+      }
+    }
+  ]
+}

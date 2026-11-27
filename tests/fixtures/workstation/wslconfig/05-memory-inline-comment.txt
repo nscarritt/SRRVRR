@@ -1,0 +1,4 @@
+# A made-up .wslconfig for SRRVRR's tests (T92-02).
+[wsl2]
+memory=48GB # note
+swap=0
