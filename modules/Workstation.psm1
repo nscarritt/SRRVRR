@@ -491,9 +491,8 @@ function Update-AiWatch {
 function Update-WorkstationAi {
     param([hashtable]$State, [hashtable]$Context, [long]$NowMs)
     $vm = $null
-    # The key of the WSL reading is spelled in two parts: the boundary test (T93-05) flags any bare string that is wsl.
-    $readingKey = 'ws' + 'l'
-    if ($State.ContainsKey($readingKey) -and $State[$readingKey] -is [System.Collections.IDictionary] -and $State[$readingKey].Contains('running')) { $vm = $State[$readingKey]['running'] }
+    $wslReading = $State['wsl']   # an index, not .wsl: under strict mode a missing key would throw
+    if ($wslReading -is [System.Collections.IDictionary] -and $wslReading.Contains('running')) { $vm = $wslReading['running'] }
     $rows = New-Object System.Collections.Generic.List[object]
     $failure = $null
     foreach ($entry in @($Context.ComfyEntries)) {

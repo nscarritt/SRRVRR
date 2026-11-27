@@ -115,8 +115,10 @@ Describe 'T93-05 the AI server boundary in the code' {
             for ($i = $Extent.StartOffset; $i -lt $Extent.EndOffset; $i++) { if ($chars[$i] -ne "`n") { $chars[$i] = ' ' } }
             -join $chars
         }
-        # Every way of running wsl outside comments: a wsl or wsl.exe command, a string naming wsl.exe, a bare 'wsl'
-        # argument (Start-Process wsl), or a 'wsl -...' command line. 'WSL VM', vmmemWSL, .wslconfig and [wsl2] are fine.
+        # Every way of starting wsl outside comments: a wsl or wsl.exe command, a string naming wsl.exe, a bare 'wsl'
+        # argument (Start-Process wsl), a 'wsl ...' or 'wsl -...' command line, or a path to it ('\wsl', \\wsl$).
+        # 'WSL VM', vmmemWSL, .wslconfig and [wsl2] are fine, and so is a member or key named wsl ($State.wsl,
+        # $State['wsl'], @{ wsl = ... }): reading the WSL VM's numbers starts nothing.
         function Find-WslUse($View) {
             $found = New-Object System.Collections.Generic.List[string]
             foreach ($c in $View.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true)) {
@@ -126,7 +128,14 @@ Describe 'T93-05 the AI server boundary in the code' {
             $strings = $View.Ast.FindAll({ param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst] -or $n -is [Management.Automation.Language.ExpandableStringExpressionAst] }, $true)
             foreach ($s in $strings) {
                 $v = [string]$s.Value
-                if ($v -match '(?i)^wsl(\.exe)?$' -or $v -match '(?i)wsl\.exe' -or $v -match '(?i)(^|[\s\\/"''])wsl\s+-') { $found.Add("line $($s.Extent.StartLineNumber): '$v'") }
+                $p = $s.Parent
+                $isMember = $p -is [Management.Automation.Language.MemberExpressionAst] -and [object]::ReferenceEquals($p.Member, $s)
+                $isKey = ($p -is [Management.Automation.Language.HashtableAst] -and @($p.KeyValuePairs | Where-Object { [object]::ReferenceEquals($_.Item1, $s) }).Count -gt 0) -or
+                    ($p -is [Management.Automation.Language.IndexExpressionAst] -and [object]::ReferenceEquals($p.Index, $s))
+                if (($v -match '(?i)^wsl(\.exe)?$' -and -not $isMember -and -not $isKey) -or $v -match '(?i)wsl\.exe' -or
+                    $v -match '(?i)(^|[\s\\/"''])wsl\s+-' -or $v -cmatch '(^|[\s"''&;|(])wsl\s' -or $v -match '(?i)\\wsl') {
+                    $found.Add("line $($s.Extent.StartLineNumber): '$v'")
+                }
             }
             $found.ToArray()   # unrolled: nothing when there is no wsl
         }
