@@ -1220,6 +1220,8 @@ function Get-DetectionReading {
     if ($rolePlan.Workstation -and $state.ContainsKey('gpuSpill')) {
         $reading.gpuSpill = [bool]$state.gpuSpill; $reading.gpuMem = $state.gpuMem; $reading.gpuShared = $state.gpuShared
     }
+    # The AI server rows (the slow sampler publishes a new array each pass; Get-WorkstationEvents compares them).
+    if ($rolePlan.Workstation -and $state.ContainsKey('ai')) { $reading.ai = @($state.ai) }
     $reading
 }
 function Invoke-Watch {

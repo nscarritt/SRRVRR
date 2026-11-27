@@ -89,7 +89,8 @@ function ConvertFrom-SmiDetail {
        gpuFan = (& $int 6); gpuPState = $(if ($state) { $state } else { $null }); gpuLimits = [string[]]$limits.ToArray() }
 }
 
-# Events from two detection readings (SRRVRR.ps1 adds each with Add-SrrEvent). The spill: gpuSpill changing.
+# Events from two detection readings (SRRVRR.ps1 adds each with Add-SrrEvent). The spill: gpuSpill changing; the AI
+# server: Get-AiWatchEvents (region 93).
 function Get-WorkstationEvents {
     param([object]$Old, [object]$New)
     $out = New-Object System.Collections.Generic.List[hashtable]
@@ -104,6 +105,7 @@ function Get-WorkstationEvents {
             $out.Add(@{ Type = 'vram-spill-ended'; Key = 'vram-spill-ended'; Data = @{} })
         }
     }
+    foreach ($e in @(Get-AiWatchEvents -Old $Old -New $New)) { $out.Add($e) }
     $out.ToArray()
 }
 #endregion 91
@@ -536,12 +538,5 @@ function Get-AiWatchEvents {
         }
     }
     $found.ToArray()
-}
-
-# STACKING NOTE: story #91 defines Get-WorkstationEvents in region 91 (the spill part). This stand-in exists only so
-# #93 builds on its own; when the stack is joined, delete it and add `Get-AiWatchEvents -Old $Old -New $New` to #91's.
-function Get-WorkstationEvents {
-    param([object]$Old, [object]$New)
-    Get-AiWatchEvents -Old $Old -New $New
 }
 #endregion 93
