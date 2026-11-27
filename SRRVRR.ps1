@@ -478,7 +478,7 @@ if ($rolePlan.Workstation) {
     $wslCap = ConvertFrom-WslConfig -Text $wslConfigText -TotalRam ([double]$totalRam)
     $capGb = ([math]::Round($wslCap.Cap / 1GB, 1)).ToString([Globalization.CultureInfo]::InvariantCulture)
     $msg = "WSL VM: memory cap $capGb GB " + $(if ($wslCap.Source -eq 'config') { '(from .wslconfig)' } else { '(default: half of RAM)' })
-    Write-Status $msg; Write-SrrLog 'INFO' 'startup' $msg
+    Write-Status $msg   # Write-Status logs it too
 }
 $state = [hashtable]::Synchronized(@{
     ready = $false
