@@ -240,6 +240,11 @@ foreach ($n in $data.Notes) { if ($n.Level -eq 'Warning') { Write-Status -Warnin
 if ($data.IsFallback) { Write-SrrLog 'FLAG' 'data' "DataPath $($settings.DataPath) is $($data.Reason); using $($data.Path)" -Always }
 Write-Status "History and logs go to $($data.Path)"
 
+# The role (modules\Workstation.psm1): what runs, and the name the page shows. The Server runs what v0.8.0 ran.
+$rolePlan = Get-RolePlan -Role $settings.Role
+$displayName = Resolve-DisplayName -Setting $settings.DisplayName -Role $rolePlan.Role -ComputerName $env:COMPUTERNAME
+foreach ($line in @(Format-RoleLines -Plan $rolePlan)) { Write-Status $line; Write-SrrLog 'INFO' 'startup' $line }
+
 # Events (modules\Events.psm1): any thread adds to the queue; the main loop drains it once a second, writing the
 # logged ones to logs\events-YYYY-MM-DD.jsonl and keeping the last 200 for /stats.
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\Events.psm1') -Force
@@ -284,7 +289,7 @@ function Invoke-MaintenanceRequest($Headers, [string]$Body, [string]$Address) {
 # 15 minutes of graph history (modules\History.psm1): the fast sampler adds a reading a second; it's saved every
 # 5 minutes and on a clean stop, and loaded at the start when its newest reading is under 15 minutes old.
 Import-Module -Name (Join-Path $PSScriptRoot 'modules\History.psm1') -Force
-$history = New-HistoryStore
+$history = New-HistoryStore -Lines $rolePlan.HistoryLines
 $historyLoad = Import-History -StatePath (Join-Path $data.Path 'state') -Store $history -Now ([DateTimeOffset]::Now)
 if ($historyLoad.Loaded) { Write-Status 'Graph history from before the restart loaded' }
 elseif ($historyLoad.Reason -in 'stale', 'future') { Write-SrrLog 'INFO' 'history' "history.json not used: it's $($historyLoad.Reason)" }
@@ -323,7 +328,7 @@ if ($copyKind -eq 'test') { Write-Status 'This is a test copy: it uses its own f
 $services = @(
     @{ name = 'Valheim'; main = 'valheim_server';    match = 'valheim_server'; icon = 'valheim' }
     @{ name = 'Plex';    main = 'Plex Media Server'; match = 'Plex*';          icon = 'plex' }   # includes Plex Transcoder etc.
-) | Where-Object { $settings.Processes[$_.name] -ne $false }
+) | Where-Object { $rolePlan.Processes -and $settings.Processes[$_.name] -ne $false }   # a Workstation shows no Processes rows
 $services = @($services)
 
 # --- Which counters exist on this machine ------------------------------------
@@ -339,7 +344,7 @@ $hasGpu = $cat::Exists('GPU Engine')
 if ($hasGpu) { $categories += 'GPU Engine' }
 if ($cat::Exists('GPU Adapter Memory')) { $categories += 'GPU Adapter Memory' }
 if ($cat::CounterExists('Disk Read Bytes/sec', 'LogicalDisk')) { $categories += 'LogicalDisk' }   # per-drive read/write speed
-if ($cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
+if ($rolePlan.Processes -and $cat::CounterExists('Working Set - Private', 'Process')) { $categories += 'Process' }   # per-process memory, as Task Manager counts it
 
 Set-Step 'Finding the processor, memory and graphics card'
 # Processor: the name Windows reports, without the trademark marks and clock speed
@@ -464,6 +469,8 @@ $state = [hashtable]::Synchronized(@{
     memVendor = $memVendor
     memSticks = $memSticks
     tickMs = $null   # the fast sampler's own time per reading, once it has one
+    hostName = $displayName   # the name the page shows (DisplayName, the computer name on a Workstation, else SRRVRR)
+    role = $rolePlan.Role   # 'server' or 'workstation'
 })
 
 # --- Per-process network ------------------------------------------------------
@@ -471,6 +478,7 @@ Set-Step 'Preparing per-program network tracking (Windows network events)'
 # Windows has no per-process network counter, so this listens to the kernel's
 # network events (the same source Resource Monitor uses) and adds up bytes per
 # process ID. Needs administrator.
+if ($rolePlan.Tracer) {
 Write-Status 'Compiling the network event reader (C# code built into this script)'
 Add-Type -TypeDefinition @'
 using System;
@@ -620,13 +628,19 @@ public static class ProcessNetTrace {
 $netPerProcess = [ProcessNetTrace]::Start()
 $state.netError = [ProcessNetTrace]::Error
 Write-Status $(if ($netPerProcess) { 'Per-program network tracking is on.' } else { "Per-program network tracking is off ($([ProcessNetTrace]::Error))." })
+} else {
+    # A Workstation shows no Processes table, so nothing is compiled or started (the Set-Step above still counts).
+    $netPerProcess = $null
+    $msg = 'Per-program network tracking: not used on a workstation'
+    Write-Status $msg; Write-SrrLog 'INFO' 'startup' $msg
+}
 
 # --- Background sampler: one reading per second -------------------------------
 # Reads whole counter categories at once (much faster than Get-Counter when there
 # are hundreds of GPU engine instances) and works out each value from the change
 # since the previous read. The math is in modules\Counters.psm1.
 $sampler = {
-    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history)
+    param($state, $categories, $cpuCounter, $totalRam, $services, $netPerProcess, $gpuLuid, $modulePath, $history, $readProcesses)
     # The module is loaded here, by full path, so a missing or broken file shows on the page instead of leaving
     # it on "Starting..." with no reason.
     try { Import-Module -Name $modulePath -Force -ErrorAction Stop }
@@ -635,7 +649,7 @@ $sampler = {
     foreach ($n in $categories) { $cats[$n] = New-Object System.Diagnostics.PerformanceCounterCategory $n }
     $reader = { $s = @{}; foreach ($n in $cats.Keys) { $s[$n] = $cats[$n].ReadCategory() }; $s }.GetNewClosure()
     $tracer = { if ($netPerProcess) { [ProcessNetTrace]::Drain() } else { $null } }.GetNewClosure()
-    $ctx = New-FastTickContext -Reader $reader -Processes { Get-Process } -Tracer $tracer -Services $services `
+    $ctx = New-FastTickContext -Reader $reader -Processes $(if ($readProcesses) { { Get-Process } } else { { @() } }) -Tracer $tracer -Services $services `
         -TotalRam $totalRam -GpuLuid $gpuLuid -Cores ([Environment]::ProcessorCount) -CpuCounter $cpuCounter `
         -TickStopwatch (New-Object System.Diagnostics.Stopwatch) -IntervalStopwatch ([System.Diagnostics.Stopwatch]::StartNew()) -History $history
     $prev = $null
@@ -653,9 +667,9 @@ $runspace = [runspacefactory]::CreateRunspace($samplerSession)
 $runspace.Open()
 $worker = [powershell]::Create()
 $worker.Runspace = $runspace
-[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history)
+[void]$worker.AddScript($sampler).AddArgument($state).AddArgument($categories).AddArgument($cpuCounter).AddArgument($totalRam).AddArgument($services).AddArgument($netPerProcess).AddArgument($gpuLuid).AddArgument((Join-Path $PSScriptRoot 'modules\Counters.psm1')).AddArgument($history).AddArgument($rolePlan.Processes)
 [void]$worker.BeginInvoke()
-Write-Status 'Every second: CPU, memory, GPU, network and the Processes table'
+Write-Status $(if ($rolePlan.Processes) { 'Every second: CPU, memory, GPU, network and the Processes table' } else { 'Every second: CPU, memory, GPU and network' })
 
 # --- Slow checks --------------------------------------------------------------
 # Things that change slowly and take a few hundred milliseconds to read (like
