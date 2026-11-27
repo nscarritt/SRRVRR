@@ -539,7 +539,7 @@ Describe 'T93 the AI server on test builds' -Tag 'Smoke' {
             $log | Should -Match ('(?m) (INFO|WARN) startup: ' + [regex]::Escape("AI server 'Second': ComfyUI on 127.0.0.1:$ClosedPort, not answering (off or starting)") + '$')
         }
 
-        It 'T93-14 idle, working at queue 1, idle at 0, not-answering within 20 s of the fake stopping; only the two GETs; no CANARY anywhere' {
+        It 'T93-14 idle, working at queue 1, idle at 0, not-answering within 30 s of the fake stopping; only the two GETs; no CANARY anywhere' {
             $row = Wait-AiState $WsPort 'Main' 'idle' 30
             $row.queue | Should -Be 0
             $row.holds | Should -Be $ComfyHolds
@@ -551,8 +551,8 @@ Describe 'T93 the AI server on test builds' -Tag 'Smoke' {
             $null = Wait-AiState $WsPort 'Main' 'idle' 20
             $sw = [Diagnostics.Stopwatch]::StartNew()
             & $Fake.Stop
-            $null = Wait-AiState $WsPort 'Main' 'not-answering' 30
-            $sw.Elapsed.TotalSeconds | Should -BeLessOrEqual 20 -Because 'three missed passes, 5 s apart (no VM on the runner, so the miss rule)'
+            $null = Wait-AiState $WsPort 'Main' 'not-answering' 40
+            $sw.Elapsed.TotalSeconds | Should -BeLessOrEqual 30 -Because 'three missed passes, 5 s apart, each up to about 2 s for Windows to give up on the closed port (no VM on the runner, so the miss rule)'
             # The boundary, end to end: every request the fake saw was a plain GET of one of the two paths.
             $seen = @($Fake.Requests)
             @($seen | Where-Object { $_.Line -ceq 'GET /prompt HTTP/1.1' }).Count | Should -BeGreaterThan 0

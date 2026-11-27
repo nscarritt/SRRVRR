@@ -955,12 +955,12 @@ Describe 'T93-03 the local reader against the fake AI server' -Tag 'Integration'
             Get-OddRequests $fake | Should -BeNullOrEmpty
         } finally { & $fake.Stop }
     }
-    It 'T93-03 a closed port: Ok false in under 500 ms' {
+    It 'T93-03 a closed port: Ok false in under 2,500 ms' {
         $port = Get-FreePort
         $t = Measure-Read { Read-LocalHttp -Port $port -Path '/system_stats' }
         $t.Result.Ok | Should -BeFalse
         $t.Result.Error | Should -Not -BeNullOrEmpty
-        $t.Ms | Should -BeLessThan 500 -Because 'a refused connection on 127.0.0.1 returns at once (spec section 9)'
+        $t.Ms | Should -BeLessThan 2500 -Because 'Windows retries a refused connection for about 2 s; the lead set this bound (2026-11-27)'
     }
     It 'T93-03 an AI server that accepts but sends nothing for 3 s: Ok false in under 2,500 ms, after the 2,000 ms timeout' {
         $fake = Start-FakeComfyUi -Mode slow -DelayMs 3000
