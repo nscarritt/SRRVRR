@@ -495,7 +495,7 @@ function Update-AiWatch {
 function Update-WorkstationAi {
     param([hashtable]$State, [hashtable]$Context, [long]$NowMs)
     $vm = $null
-    $wslReading = $State['wsl']   # an index, not .wsl: under strict mode a missing key would throw
+    $wslReading = $State['wsl']   # the index form; a missing key gives $null (dot access would too, even under strict mode)
     if ($wslReading -is [System.Collections.IDictionary] -and $wslReading.Contains('running')) { $vm = $wslReading['running'] }
     $rows = New-Object System.Collections.Generic.List[object]
     $failure = $null
