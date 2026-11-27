@@ -183,17 +183,6 @@ function aiTitle(r) {
   if (r.vramTotal == null || r.vramFree == null) return '';
   return 'The card as ComfyUI sees it: ' + gb(r.vramTotal) + ' GB total, ' + gb(r.vramFree) + ' GB free' + (r.version ? '. ComfyUI ' + r.version : '');
 }
-// The WSL VM row: its memory against its cap, amber at 90%.
-function aiWslRowHtml(wsl) {
-  if (!wsl) return '';
-  const name = '<span class="ainame">WSL VM</span>';
-  if (!wsl.running) return '<div class="airow">' + name + '<span class="aistate off">not running</span></div>';
-  if (wsl.mem == null || !wsl.cap) return '<div class="airow">' + name + '<span class="aistate idle">running</span></div>';
-  const pct = Math.min(100, 100 * wsl.mem / wsl.cap);
-  const title = 'Cap ' + gb(wsl.cap) + ' GB' + (wsl.capSource === 'config' ? ' (from .wslconfig)' : ' (default: half of RAM)');
-  return '<div class="airow" title="' + esc(title) + '">' + name + '<span class="aidetail">' + gb(wsl.mem) + ' of ' + gb(wsl.cap) + ' GB</span>' +
-    '<div class="bar' + (pct >= 90 ? ' warn' : '') + '"><i style="width:' + pct.toFixed(0) + '%"></i></div></div>';
-}
 function aiRowsHtml(ai, wsl, timeZone) {
   const rows = (ai || []).map(r => {
     const title = aiTitle(r);
@@ -201,7 +190,15 @@ function aiRowsHtml(ai, wsl, timeZone) {
       '<span class="aistate ' + esc(r.state) + '">' + esc(AI_STATES[r.state] || AI_STATES.unknown) + '</span>' +
       '<span class="aidetail">' + aiDetail(r, timeZone).map(esc).join(' &middot; ') + '</span></div>';
   });
-  return rows.join('') + aiWslRowHtml(wsl);
+  // The WSL VM row (spec section 4): wslText's words, amber and hover, with a bar when its memory and cap are known.
+  const w = wslText(wsl);
+  if (w.text) {
+    const pct = wsl.running && wsl.mem != null && wsl.cap ? Math.min(100, 100 * wsl.mem / wsl.cap) : null;
+    rows.push('<div class="airow"' + (w.title ? ' title="' + esc(w.title) + '"' : '') + '><span class="ainame">WSL VM</span>' +
+      (wsl.running ? '<span class="aidetail">' + esc(w.text.replace(/^WSL VM:? /, '')) + '</span>' : '<span class="aistate off">not running</span>') +
+      (pct == null ? '' : '<div class="bar' + (w.warn ? ' warn' : '') + '"><i style="width:' + pct.toFixed(0) + '%"></i></div>') + '</div>');
+  }
+  return rows.join('');
 }
 // Sets only el.innerHTML and el.hidden, from the reading passed in. Hidden when no entry is configured.
 function renderAiCard(el, s) {
