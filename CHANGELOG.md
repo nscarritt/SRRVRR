@@ -9,6 +9,12 @@ called out under **Changed** or **Removed** with upgrade notes.
 
 ## [Unreleased]
 
+### Added
+- **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
+  a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
+  detail, a Top programs card and an AI server card in place of the server's Processes and Transfers cards, designed so
+  the two can later sit side by side. Design only; nothing changes yet.
+
 ### Fixed
 - (#81) CPU and GPU percentages were rounded to a whole number by the 100% cap: Windows PowerShell picks the integer
   overload of `[math]::Min(100, ...)`, so 79.9 became 80. The caps now use `100.0`; tests check that 79.9 stays 79.9
