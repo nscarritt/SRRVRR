@@ -570,5 +570,47 @@ Describe 'T93 the AI server on test builds' -Tag 'Smoke' {
             @($files | Where-Object { [IO.File]::ReadAllText($_.FullName) -match 'CANARY' } | ForEach-Object { $_.FullName }) | Should -BeNullOrEmpty
         }
     }
+
+    Context 'a Workstation test build whose AI server stops answering during a job' {
+        BeforeAll {
+            $script:JobFake = Start-FakeComfyUi -Mode answer -Queue 1
+            $script:JobPort = Get-FreePort
+            $script:JobData = Join-Path (New-TestDataPath) 'data'
+            New-Item -ItemType Directory $JobData | Out-Null
+            $script:JobFolder = Join-Path (New-TestDataPath) 'copy'
+            $r = Invoke-InChildPowerShell -File (Join-Path $Root 'tools\New-TestBuild.ps1') -Arguments @('-Ref', 'HEAD', '-Destination', $JobFolder, '-Port', "$JobPort", '-DataPath', $JobData)
+            if ($r.ExitCode -ne 0) { throw "New-TestBuild failed: $($r.Output)" }
+            Write-BuildConfig $JobFolder @("Port = $JobPort", "DataPath = '$($JobData.Replace("'", "''"))'", "Role = 'Workstation'",
+                "ComfyUi = @(@{ Name = 'Main'; Port = $($JobFake.Port) })")
+            $script:JobProcess = Start-Build $JobFolder $JobPort
+        }
+        AfterAll {
+            Stop-Build $JobProcess
+            if ($JobFake) { & $JobFake.Stop }
+        }
+
+        It 'T93-11 working, then the fake stops: not-answering, and one ai-stopped-answering event reaches /stats events and the event log' {
+            $null = Wait-AiState $JobPort 'Main' 'working' 30
+            # A page asks for events with ?since=<the last id it has seen>; the first request gets none.
+            $since = (Get-Stats $JobPort).lastEventId
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            & $JobFake.Stop
+            $null = Wait-AiState $JobPort 'Main' 'not-answering' 40
+            $rowSeconds = $sw.Elapsed.TotalSeconds
+            $event = $null
+            while (-not $event -and $sw.Elapsed.TotalSeconds -lt 60) {
+                $event = @((Invoke-TestRequest -Url "http://localhost:$JobPort/stats?since=$since").Body | ConvertFrom-Json | ForEach-Object events) | Where-Object { $_ -and $_.type -eq 'ai-stopped-answering' } | Select-Object -First 1
+                if (-not $event) { Start-Sleep -Milliseconds 250 }
+            }
+            Write-Host ("not-answering row after {0:N1} s; event in /stats after {1:N1} s" -f $rowSeconds, $sw.Elapsed.TotalSeconds)
+            $event | Should -Not -BeNullOrEmpty -Because 'working to not-answering raises ai-stopped-answering'
+            $event.data.name | Should -BeExactly 'Main'
+            $event.banner | Should -BeTrue
+            $event.logged | Should -BeTrue
+            @(((Invoke-TestRequest -Url "http://localhost:$JobPort/stats?since=$since").Body | ConvertFrom-Json).events | Where-Object { $_.type -eq 'ai-stopped-answering' }).Count | Should -Be 1
+            $logged = @(Get-ChildItem (Join-Path $JobData 'logs') -Filter 'events-*.jsonl' | Get-Content | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object type -eq 'ai-stopped-answering')
+            $logged.Count | Should -Be 1
+        }
+    }
 }
 #endregion 93
