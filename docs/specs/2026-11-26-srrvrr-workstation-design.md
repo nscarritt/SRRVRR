@@ -2,9 +2,9 @@
 
 Status: approved by the owner on 2026-11-26 (written the same day). The owner asked for the calls to be made for
 them ("you make the calls to start"), so every row under [Decisions](#decisions) is a call made in this design, and
-the owner approved them all, Q1's release order included. Builds on the v0.7.0 core design (`docs/specs/2026-10-28-srrvrr-core-design.md`), v0.8.0
-(`docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`) and v0.9.0 (`docs/specs/2026-11-07-srrvrr-v0.9.0-design.md`);
-anything not said here is as those say. Install-specific details (the PC's name, its AI server's ports, the install
+the owner approved them all, Q1's release order included. Builds on the v0.7.0 core design (`docs/specs/2026-10-28-srrvrr-core-design.md`) and v0.8.0
+(`docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`); anything not said here is as those say. **Rebased on v0.8.0 the
+same day:** the owner shelved v0.9.0 (the transfer monitor) unreleased, so nothing here builds on it or waits for it. Install-specific details (the PC's name, its AI server's ports, the install
 folder) are in the owner's private records, never in this repo.
 
 ## Contents
@@ -73,9 +73,9 @@ the cross-repo items (D15 to D19) under [Dependencies](#dependencies). Each says
 
 | # | Question | Call |
 |---|---|---|
-| Q1 | **When it ships.** It was planned with the phone in v0.11.0, after 24-hour history (v0.10.0). | **Next, right after v0.9.0's four PRs merge, as v0.10.0.** The owner called it a key feature, it doesn't depend on history, and it is the PC half of the phone-and-PC release. 24-hour history moves to v0.11.0, and the phone with side by side to v0.12.0. The owner confirms the milestones. |
+| Q1 | **When it ships.** It was planned with the phone in v0.11.0, after 24-hour history (v0.10.0). | **Next, as v0.10.0.** The owner called it a key feature, it doesn't depend on history, and it is the PC half of the phone-and-PC release. 24-hour history moves to v0.11.0, and the phone with side by side to v0.12.0 (milestones moved 2026-11-26). v0.9.0, the transfer monitor, was shelved unreleased the same day, so the changelog goes from 0.8.0 to 0.10.0 with a line saying why. |
 | Q2 | **How a copy knows it's on a workstation.** | **A `Role` setting: `'Server'` (the default, today's page exactly) or `'Workstation'`.** *Rejected:* a switch per card (more settings, and a later page showing two hosts needs to know each host's kind), and guessing from what's installed (breaks the day Plex is installed on a PC). |
-| Q3 | **What the Workstation role turns off.** | **The Processes card and its readers (Valheim, Plex, the per-process network tracer), the Transfers card and its SMB readers, and their events.** Kept: the CPU, Memory, GPU and Network tiles, Storage and its alerts, Restart pending, Flagged, Maintenance, history and sound. *Rejected:* the backlog's "Processes rows only for what's installed": the owner asked for GPU and memory instead. |
+| Q3 | **What the Workstation role turns off.** | **The Processes card and its readers (Valheim, Plex, the per-process network tracer), and their events.** Kept: the CPU, Memory, GPU and Network tiles, Storage and its alerts, Restart pending, Flagged, Maintenance, history and sound. *Rejected:* the backlog's "Processes rows only for what's installed": the owner asked for GPU and memory instead. |
 | Q4 | **The name on the page.** | **The header and the tab title show `DisplayName`. Its default is `SRRVRR` on the Server role, so the server's page is unchanged by construction, and the computer's name on the Workstation.** This narrows the 2026-10-22 decision (header hardcoded): the Server keeps it; with two copies, the Workstation's name is how they're told apart. *Rejected:* the computer's name on both roles, which would change the header of any server not named SRRVRR. |
 | Q5 | **Video memory.** | **A new Video memory tile on the Workstation: dedicated memory in use of the card's total, with a graph, shared memory as a second line, and a "Spilling into RAM" badge.** Spill rule in section 3. The thresholds are fixed values, not settings. |
 | Q6 | **GPU detail.** | **Power, power limit, clock, fan and throttle reasons, added to the `nvidia-smi` call SRRVRR already makes every 5 seconds for temperature.** NVIDIA only, as the temperature is (decision 2026-10-22). |
@@ -124,11 +124,10 @@ DEV-PC   Up 2 days, 3 hours   v0.10.0          Connected  [60 s][15 min]  [Sound
 ## 2. Roles and the host name
 
 - `Role` is read once at startup. The startup log says which, and what that turns off, e.g. "Role: Workstation.
-  Off: Processes, Transfers. On: video memory, top programs, AI server".
-- **Turned off means not run,** not just hidden: on the Workstation the Valheim and Plex readers, the per-process
-  network tracer and the SMB readers never start, so they cost nothing and don't need administrator. Their settings
-  (`Processes`, `ValheimPort`, the v0.9.0 transfer settings) are still validated, then ignored, with one startup line
-  saying so.
+  Off: Processes. On: video memory, top programs, AI server".
+- **Turned off means not run,** not just hidden: on the Workstation the Valheim and Plex readers and the per-process
+  network tracer never start, so they cost nothing and don't need administrator. Their settings (`Processes`,
+  `ValheimPort`) are still validated, then ignored, with one startup line saying so.
 - **The Workstation-only readers** (sections 3 to 6) don't run on the Server role either.
 - `/stats` always carries `hostName` (the `DisplayName`) and `role` (`'server'` or `'workstation'`). The page uses
   `role` to pick its cards and `hostName` for the header and the tab title.
@@ -308,10 +307,10 @@ code, documented in the README, not settings.
   - `wsl`: `{ running, mem, cap, capSource }`, where `capSource` is `'config'` or `'default'`
   - `top[]`: `{ name, count, vram, mem, cpu }`
   - `ai[]`: `{ name, state, queue, workingSec, holds, vramTotal, vramFree, version, lastDoneTs, lastDoneSec }`
-- **The Server role's `/stats`** is v0.9.0's plus only `hostName` and `role`. A shape test proves it, against a new
-  shape fixture taken from v0.9.0.
+- **The Server role's `/stats`** is v0.8.0's plus only `hostName` and `role`. A shape test proves it, against a new
+  shape fixture taken from v0.8.0.
 - **`/history`:** on the Workstation, two more lines (dedicated and shared video memory). An older version loading
-  the file ignores lines it doesn't know, as v0.9.0's section 8 requires. 24-hour history (Q1: now v0.11.0) inherits
+  the file ignores lines it doesn't know (v0.8.0's loader reads only the lines it registers). 24-hour history (Q1: now v0.11.0) inherits
   these lines.
 - **Events:** the four types in section 7. An older version shows an unknown type by its name.
 - **Settings:** an older version warns about the three new settings and ignores them. A Workstation config run on an
@@ -323,7 +322,7 @@ code, documented in the README, not settings.
 What the owner can do with no AI session open:
 - **Configure:** `Role`, `DisplayName` and `ComfyUi` in `SRRVRR.config.psd1`; restart SRRVRR after changing it.
 - **Read the startup log,** which gains:
-  - `Role: Workstation. Off: Processes, Transfers. On: video memory, top programs, AI server`
+  - `Role: Workstation. Off: Processes. On: video memory, top programs, AI server`
   - `Video memory: NVIDIA GeForce ... 24 GB, watching for spill (95% full and 1 GB shared)`
   - `nvidia-smi detail fields: clocks_event_reasons` (or `clocks_throttle_reasons`, or `none`)
   - `WSL VM: memory cap 48 GB (from .wslconfig)` or `(default: half of RAM)`
@@ -362,7 +361,7 @@ What the owner can do with no AI session open:
 unelevated, on the dev PC (and for story 1 also on the server). Steps per story are under
 [Proposed stories](#proposed-stories).
 
-**Budgets.** The Server role, against v0.9.0's baseline (`tools\budgets.psd1`): no change beyond the existing
+**Budgets.** The Server role, against v0.8.0's baseline (`tools\budgets.psd1`): no change beyond the existing
 tolerances, measured on a server test build in story 1 and at release. The Workstation, measured on the dev PC with
 `tools\Measure-SRRVRR.ps1`, recorded in `budgets.psd1` as a separate workstation baseline in story 1, and held by the
 later stories: CPU at most 1% of the machine on average; private memory at most 25 MB above story 1's workstation
@@ -396,11 +395,9 @@ the dev PC, stop it and copy the previous release's files back (section 11 is wh
 ## Dependencies
 
 Shown to the owner when work starts and before each merge.
-- **D15 (ordering): v0.9.0 first.** Its design was approved on 2026-11-11 (on its spec branch, with every Q decided;
-  older copies on the plan branch still say "pending"). Its four stacked PRs (#76 to #79) change the slow sampler,
-  `/stats`, the page, the settings and the events. The implementation plan names the readers and settings to gate
-  from the top of that stack, `feature/79-named-maintenance`. The implementer branches from `main` after the four
-  merge, re-checks those names there, and takes the Server role's `/stats` shape fixture from that `main`.
+- **D15 (settled): no wait for v0.9.0.** The owner shelved the transfer monitor on 2026-11-26, unmerged. This
+  release builds on v0.8.0 as it is on `main`, and takes the Server role's `/stats` shape fixture from there. If the
+  transfer monitor comes back, it rebases onto this release and adds its card to the Server role.
 - **D16 (the AI server project): two read-only endpoints.** SRRVRR reads `GET /system_stats` and `GET /prompt` from
   its UI on `127.0.0.1`. That project needs no change; its UI stays local-only. If it changes its ports, the owner
   updates `ComfyUi`. If a ComfyUI update changes those replies, the card shows "Unknown reply" until SRRVRR is
@@ -423,7 +420,8 @@ Shown to the owner when work starts and before each merge.
 - Starting SRRVRR at sign-in on the dev PC, or a starter that doesn't ask for administrator.
 - Other AI apps (a local chat model is the AI server's own phase 2): the card is named "AI server" so a second
   reader can add rows later.
-- GPU detail, video memory or top programs on the Server role; Transfers on the Workstation.
+- GPU detail, video memory or top programs on the Server role.
+- The transfer monitor (v0.9.0, shelved 2026-11-26).
 - Per-program GPU %, AMD and Intel detail.
 
 ## Proposed stories
@@ -433,7 +431,7 @@ implementation plan lists the tasks and test ids.
 
 | # | Story | UAT (on the dev PC unless said) |
 |---|---|---|
-| 1 | **Roles and the host name:** `Role`, `DisplayName`, `hostName` and `role` in `/stats`, the role table, the Workstation's readers off, the header and tab title, the page's cards picked by role, the render-from-data pattern for new cards, the workstation budget baseline, the README section | The test build shows the PC's name, no Processes or Transfers card, and the tiles, Storage and Flagged working; the console has no Valheim, Plex or tracer lines. **On the server,** a test build with no `Role` looks and behaves exactly like the live one. |
+| 1 | **Roles and the host name:** `Role`, `DisplayName`, `hostName` and `role` in `/stats`, the role table, the Workstation's readers off, the header and tab title, the page's cards picked by role, the render-from-data pattern for new cards, the workstation budget baseline, the README section | The test build shows the PC's name, no Processes card, and the tiles, Storage and Flagged working; the console has no Valheim, Plex or tracer lines. **On the server,** a test build with no `Role` looks and behaves exactly like the live one. |
 | 2 | **Video memory and GPU detail:** the Video memory tile and its history lines, the spill rule and its events, the `nvidia-smi` fields and the GPU tile's line and badge | During a game, the Video memory tile and the GPU line move, and the power and clock look like the game's own overlay or Task Manager. Optionally, with the AI server running, load the largest model and watch for the badge (section 3). |
 | 3 | **Memory detail and top programs:** committed, paging, the WSL VM and its cap, the Top programs card | The Top programs rows match Task Manager's Details tab (Dedicated GPU memory, Memory (private working set)) to within about 10%. With the AI server running (owner starts it), the WSL VM row shows its memory and cap. |
 | 4 | **The AI server card:** `ComfyUi`, the reader, the states, the job timer, `ai-job-done` and `ai-stopped-answering`, the boundary tests | With the AI server stopped, its rows say Off. Start it: Starting, then Idle within its usual start time, then "holds" after the first image. Queue a video job: Working, the count and the timer; when it ends, one "AI job finished" banner with the ding. Stop it: Off, and the Video memory tile drops back. |
