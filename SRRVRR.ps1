@@ -450,6 +450,23 @@ if ($gpuVendor -eq 'nvidia') {
     if (-not $smiPath -and (Test-Path "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe")) { $smiPath = "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe" }
     Write-Status $(if ($smiPath) { "Temperature from $smiPath" } else { 'No nvidia-smi found, so no GPU temperature.' })
 }
+# The Workstation also reads power, clocks, fan and throttle reasons from nvidia-smi. Newer drivers name the reason
+# fields clocks_event_reasons, older ones clocks_throttle_reasons: ask once, here, and tell the slow sampler which.
+$smiPrefix = 'none'
+if ($rolePlan.Workstation -and $smiPath) {
+    $probe = {
+        param([string]$prefix)
+        $ErrorActionPreference = 'Continue'   # nvidia-smi's own error text (stderr) is the answer here, not a failure
+        try {
+            $out = @(& $smiPath @(Get-SmiArguments -Prefix $prefix) 2>&1 | ForEach-Object { "$_" })
+            @{ Lines = [string[]]$out; ExitCode = [int]$LASTEXITCODE }
+        } catch { $null }
+    }
+    $eventQuery = & $probe 'clocks_event_reasons'
+    $throttleQuery = if ($eventQuery -and $eventQuery.ExitCode -ne 0) { & $probe 'clocks_throttle_reasons' } else { $null }
+    $smiPrefix = Select-SmiPrefix -Event $eventQuery -Throttle $throttleQuery
+    Write-Status "nvidia-smi detail fields: $smiPrefix"
+}
 
 $totalRam = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
 # Windows' start time, read once; uptime is worked out from it on every request.
@@ -687,11 +704,15 @@ Write-Status $(if ($rolePlan.Processes) { 'Every second: CPU, memory, GPU, netwo
 # never stall the once-a-second graphs. The loop ticks every 5 seconds; each
 # check runs on its own multiple of that.
 $slowChecks = {
-    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull)
+    param($state, $smiPath, $gpuName, $plexUrl, $valheimQueryPort, $sensorDir, $dataDrives, $dataModulePath, $driveWarn, $driveFull, $smiPrefix, $workstationModulePath)
     # Select-DrivesToShow; a failure shows as drivesError on the page.
     try { Import-Module -Name $dataModulePath -Force -ErrorAction Stop } catch { $state.drivesError = "Couldn't load modules\DataFolder.psm1: $($_.Exception.Message)" }
     # Get-DriveLevel (DataFolder.psm1, loaded above) decides ok, filling or full; driveLevels remembers each letter's last level.
     $driveLevels = @{}
+    # The Workstation's nvidia-smi detail (ConvertFrom-SmiDetail); the Server never loads it.
+    if ($smiPrefix -and $smiPrefix -ne 'none') {
+        try { Import-Module -Name $workstationModulePath -Force -ErrorAction Stop } catch { $state.workstationError = "Couldn't load modules\Workstation.psm1: $($_.Exception.Message)"; $smiPrefix = 'none' }
+    }
 
     # CPU and memory temperatures come from LibreHardwareMonitor's sensor library (set up by
     # Install-TemperatureSensors.ps1). CPU: the package temperature the processor reports for
@@ -802,7 +823,15 @@ public static class SrrvrrSensorLoader {
     $tick = 0
     while ($true) {
         # GPU temperature, every 5 seconds: one line per NVIDIA card, "name, degrees C".
-        if ($smiPath) {
+        if ($smiPath -and $smiPrefix -and $smiPrefix -ne 'none') {
+            # Workstation: temperature, power, clocks, fan and throttle reasons in one call.
+            try {
+                $lines = @(& $smiPath @(Get-SmiArguments -Prefix $smiPrefix) 2>$null)
+                $detail = ConvertFrom-SmiDetail -Lines ([string[]]$lines) -GpuName $gpuName
+                if ($detail) { foreach ($k in $detail.Keys) { $state[$k] = $detail[$k] } }
+                else { foreach ($k in 'gpuTemp', 'gpuPower', 'gpuPowerLimit', 'gpuClock', 'gpuClockMax', 'gpuFan', 'gpuPState', 'gpuLimits') { $state[$k] = $null } }
+            } catch { $state.gpuTemp = $null }
+        } elseif ($smiPath) {
             try {
                 $lines = @(& $smiPath --query-gpu=name,temperature.gpu --format=csv,noheader,nounits 2>$null)
                 $temp = $null
@@ -998,7 +1027,7 @@ elseif (-not (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninsta
 elseif (-not $elevated) { $tempError = 'needs administrator' }
 if ($tempError) { $sensorDir = $null; $state.tempError = $tempError }
 
-[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent)
+[void]$slowWorker.AddScript($slowChecks).AddArgument($state).AddArgument($smiPath).AddArgument($gpuLabel).AddArgument($plexUrl).AddArgument($valheimQueryPort).AddArgument($sensorDir).AddArgument($dataDrives).AddArgument((Join-Path $PSScriptRoot 'modules\DataFolder.psm1')).AddArgument($settings.DriveWarnPercent).AddArgument($settings.DriveFullPercent).AddArgument($smiPrefix).AddArgument((Join-Path $PSScriptRoot 'modules\Workstation.psm1'))
 if ($smiPath) { Write-Status 'Every 5 seconds: GPU temperature' }
 Write-Status $(if ($sensorDir) { 'Every 5 seconds: CPU and memory temperatures (LibreHardwareMonitor)' } else { "No CPU or memory temperature: $tempError" })
 if ($plexUrl) { Write-Status "Every 10 seconds: Plex streams and transcodes (using the token from Plex's own settings; until it's found, checked every minute)" }
