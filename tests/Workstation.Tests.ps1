@@ -983,6 +983,16 @@ Describe 'T93-03 the local reader against the fake AI server' -Tag 'Integration'
             $t.Ms | Should -BeLessThan 1000
         } finally { & $slow.Stop }
     }
+    It 'T93-03 a reply that sends its headers and then trickles bytes: Ok false within TimeoutMs plus a small margin (one deadline for the whole request)' {
+        $fake = Start-FakeComfyUi -Mode trickle -DelayMs 8000
+        try {
+            $t = Measure-Read { Read-LocalHttp -Port $fake.Port -Path '/system_stats' -TimeoutMs 1000 }
+            $t.Result.Ok | Should -BeFalse
+            $t.Result.Error | Should -Not -BeNullOrEmpty
+            $t.Ms | Should -BeLessThan 1600 -Because 'the timeout covers the whole request, not each Read'
+            $t.Ms | Should -BeGreaterThan 800
+        } finally { & $fake.Stop }
+    }
     It 'T93-03 a 262,145-byte body: Ok false, Error "reply too large"' {
         $fake = Start-FakeComfyUi -Mode huge -Bytes 262145
         try {

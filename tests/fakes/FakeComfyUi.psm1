@@ -15,12 +15,14 @@
 #   junk       200 with an HTML page, not JSON
 #   huge       200 with a JSON body of exactly Bytes bytes (default 262145, one over the reader's cap), no
 #              Content-Length, so a reader has to count what it reads
+#   trickle    200 with the headers at once and no Content-Length, then one byte every 100 ms for DelayMs (default
+#              3000), so a reader's per-Read timeout never fires but its whole-request deadline should
 #   status500  500 with a small JSON body
 #   redirect   302 to /history on this same fake, so a reader that followed it would show a second request
 
 function Start-FakeComfyUi {
     param(
-        [ValidateSet('answer', 'slow', 'junk', 'huge', 'status500', 'redirect')][string]$Mode = 'answer',
+        [ValidateSet('answer', 'slow', 'trickle', 'junk', 'huge', 'status500', 'redirect')][string]$Mode = 'answer',
         [int]$Queue = 0,
         [int]$DelayMs = 3000,
         [ValidateRange(10, 16777216)][int]$Bytes = 262145
@@ -88,6 +90,7 @@ function Start-FakeComfyUi {
                 $extra = @()
                 switch ($Mode) {
                     'junk' { $type = 'text/html; charset=utf-8'; $body = '<html><body>This is not ComfyUI.</body></html>' }
+                    'trickle' { $withLength = $false }
                     'huge' { $body = '{"pad":"' + ('x' * ($Bytes - 10)) + '"}'; $withLength = $false }
                     'status500' { $status = '500 Internal Server Error'; $body = '{"error":"fake failure"}' }
                     'redirect' { $status = '302 Found'; $extra = @("Location: http://127.0.0.1:$Port/history") }
@@ -103,6 +106,12 @@ function Start-FakeComfyUi {
                 if ($withLength) { $head += "Content-Length: $($bodyBytes.Length)" }
                 $headBytes = $ascii.GetBytes(($head -join "`r`n") + "`r`n`r`n")
                 $stream.Write($headBytes, 0, $headBytes.Length)
+                if ($Mode -eq 'trickle') {
+                    $stream.Flush()
+                    $until = [DateTime]::UtcNow.AddMilliseconds($DelayMs)
+                    while ([DateTime]::UtcNow -lt $until -and -not $Shared.Stopping) { $stream.WriteByte(32); $stream.Flush(); Start-Sleep -Milliseconds 100 }
+                    continue
+                }
                 if ($bodyBytes.Length) { $stream.Write($bodyBytes, 0, $bodyBytes.Length) }
                 $stream.Flush()
             } catch {

@@ -286,13 +286,15 @@ function Invoke-WorkstationTick {
 
 # The one network call in this module. Port and Path are validated before the body runs, so no other host, port
 # range or path can be asked for. Replies are capped at MaxBytes, counted as they are read (a reply may have no
-# Content-Length). Never throws: a refusal, a timeout, a status other than 200 or a reply that is too large is
-# Ok = $false with the reason in Error.
+# Content-Length). TimeoutMs is one deadline for the whole request (connect, headers and body), so a server that
+# trickles its reply cannot hold the caller longer. Never throws: a refusal, a timeout, a status other than 200
+# or a reply that is too large is Ok = $false with the reason in Error.
 function Read-LocalHttp {
     param([ValidateRange(1024, 65535)][int]$Port, [ValidateSet('/system_stats', '/prompt')][string]$Path,
           [int]$TimeoutMs = 2000, [int]$MaxBytes = 262144)
     $result = @{ Ok = $false; Status = 0; Body = ''; Error = '' }
     $response = $null
+    $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         $request = [Net.HttpWebRequest]::Create('http://127.0.0.1:' + $Port + $Path)
         $request.Method = 'GET'
@@ -317,15 +319,17 @@ function Read-LocalHttp {
         $result.Status = [int]$response.StatusCode
         if ($result.Status -ne 200) { $result.Error = "HTTP $($result.Status)"; return $result }
         $stream = $response.GetResponseStream()
-        $stream.ReadTimeout = $TimeoutMs
         $held = New-Object IO.MemoryStream
         $buffer = New-Object byte[] 8192
         $limit = [long]$MaxBytes + 1
-        $timer = [Diagnostics.Stopwatch]::StartNew()
         while ($held.Length -lt $limit) {
-            if ($timer.ElapsedMilliseconds -gt (2 * $TimeoutMs)) { $result.Error = 'reply too slow'; return $result }
+            # Each Read may wait only for what is left of the one deadline.
+            $left = $TimeoutMs - [int]$timer.ElapsedMilliseconds
+            if ($left -le 0) { $result.Error = 'reply too slow'; return $result }
+            $stream.ReadTimeout = $left
             $want = [int][Math]::Min([long]$buffer.Length, $limit - $held.Length)
-            $got = $stream.Read($buffer, 0, $want)
+            try { $got = $stream.Read($buffer, 0, $want) }
+            catch [IO.IOException] { $result.Error = 'reply too slow'; return $result }
             if ($got -le 0) { break }
             $held.Write($buffer, 0, $got)
         }
