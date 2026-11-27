@@ -10,11 +10,6 @@ called out under **Changed** or **Removed** with upgrade notes.
 ## [Unreleased]
 
 ### Added
-- (#93) **The AI server card.** On a Workstation, a `ComfyUi` setting (up to 4 entries of a name and a port on this PC)
-  adds an AI server card: each ComfyUI's state (Off, Starting, Idle, Working, Not answering), the queue and how long
-  it has worked, what it holds in video memory, the last batch, and the WSL virtual machine's memory. Two new alerts, "AI
-  job finished" and "AI server stopped answering during a job". SRRVRR only ever sends two `GET` requests to
-  127.0.0.1 and keeps a handful of numbers from the replies. README: "The AI server card".
 - (#90) **Roles and the host name.** A `Role` setting (`'Server'` by default, or `'Workstation'`) and a `DisplayName`.
   The header and the browser tab show the host name, and `/stats` gains `hostName` and `role`. A Workstation runs no
   Processes rows and no per-program network tracking, and its graph history gains `vram` and `vramShared` lines (filled
@@ -30,6 +25,11 @@ called out under **Changed** or **Removed** with upgrade notes.
   memory and the 5 using the most RAM, at most 8 rows, with their CPU. The WSL VM (`vmmemWSL`) is one of the
   programs, against the cap from `.wslconfig` (or half of RAM). `/stats` gains `memCommit`, `memCommitLimit`,
   `memPageIn`, `wsl`, `top` and `workstationError`, all Workstation only; the Server is unchanged.
+- (#93) **The AI server card.** On a Workstation, a `ComfyUi` setting (up to 4 entries of a name and a port on this PC)
+  adds an AI server card: each ComfyUI's state (Off, Starting, Idle, Working, Not answering), the queue and how long
+  it has worked, what it holds in video memory, the last batch, and the WSL virtual machine's memory. Two new alerts, "AI
+  job finished" and "AI server stopped answering during a job". SRRVRR only ever sends two `GET` requests to
+  127.0.0.1 and keeps a handful of numbers from the replies. README: "The AI server card".
 - **Design for SRRVRR on a workstation** ([docs/specs/2026-11-26-srrvrr-workstation-design.md](docs/specs/2026-11-26-srrvrr-workstation-design.md)):
   a `Role` setting so a second copy can run on a PC, with video memory (and spilling into system RAM), GPU and memory
   detail, a Top programs card and an AI server card in place of the server's Processes and Transfers cards, designed so
