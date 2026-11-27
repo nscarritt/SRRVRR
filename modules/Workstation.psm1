@@ -7,6 +7,34 @@
 Set-StrictMode -Version 2
 
 #region 90 Roles and the host name (#90)
+# What runs for a role (validated before this is called; any case).
+function Get-RolePlan {
+    param([string]$Role)
+    if ($Role -eq 'Workstation') {
+        return @{ Role = 'workstation'; Processes = $false; Tracer = $false; Workstation = $true
+                  HistoryLines = [string[]]@('cpu', 'mem', 'gpu', 'rx', 'tx', 'vram', 'vramShared') }
+    }
+    @{ Role = 'server'; Processes = $true; Tracer = $true; Workstation = $false
+       HistoryLines = [string[]]@('cpu', 'mem', 'gpu', 'rx', 'tx') }
+}
+
+# The name on the page: the setting, else the computer name on a Workstation, else SRRVRR.
+function Resolve-DisplayName {
+    param([string]$Setting, [string]$Role, [string]$ComputerName)
+    if ($Setting) { return [string]$Setting }
+    if ($Role -eq 'workstation' -and $ComputerName) { return [string]$ComputerName }
+    'SRRVRR'
+}
+
+# The startup lines for a plan, printed with Write-Status and logged.
+function Format-RoleLines {
+    param([hashtable]$Plan)
+    if ($Plan.Workstation) {
+        return [string[]]@('Role: Workstation. Off: Processes. On: video memory, top programs, AI server',
+                           'Not used on a workstation: Processes, ValheimPort')
+    }
+    [string[]]@('Role: Server')
+}
 #endregion 90
 
 #region 91 Video memory and GPU detail (#91)
