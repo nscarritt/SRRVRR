@@ -1,8 +1,8 @@
 # SRRVRR on a workstation: GPU, memory and the AI server: design
 
-Status: draft for the owner, written 2026-11-26. Not approved. The owner asked for the calls to be made for them
-("you make the calls to start"), so every row under [Decisions](#decisions) is a call made in this design, open to
-the owner's change. Builds on the v0.7.0 core design (`docs/specs/2026-10-28-srrvrr-core-design.md`), v0.8.0
+Status: approved by the owner on 2026-11-26 (written the same day). The owner asked for the calls to be made for
+them ("you make the calls to start"), so every row under [Decisions](#decisions) is a call made in this design, and
+the owner approved them all, Q1's release order included. Builds on the v0.7.0 core design (`docs/specs/2026-10-28-srrvrr-core-design.md`), v0.8.0
 (`docs/specs/2026-11-06-srrvrr-v0.8.0-design.md`) and v0.9.0 (`docs/specs/2026-11-07-srrvrr-v0.9.0-design.md`);
 anything not said here is as those say. Install-specific details (the PC's name, its AI server's ports, the install
 folder) are in the owner's private records, never in this repo.
